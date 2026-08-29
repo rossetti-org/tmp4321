@@ -133,6 +133,31 @@ class GuidedPathNetwork private constructor(
     override val namedLocations: List<LocationIfc>
         get() = myIntersections.toList()
 
+    private var myAttachedSystemName: String? = null
+
+    /**
+     * The runtime operating this network, or null when none has attached.
+     *
+     * A network holds the zones whose occupancy a runtime owns, so two runtimes on one network
+     * would share that state and corrupt each other. The name is recorded so the refusal can say
+     * which system got there first.
+     */
+    val attachedSystemName: String?
+        get() = myAttachedSystemName
+
+    /**
+     * Records that a runtime has taken this network, refusing a second one.
+     *
+     * @throws GuidedPathNetworkException when another system is already attached
+     */
+    internal fun attachTo(systemName: String) {
+        val existing = myAttachedSystemName
+        if (existing != null) {
+            throw GuidedPathNetworkException.networkAlreadyAttached(name, existing)
+        }
+        myAttachedSystemName = systemName
+    }
+
     // ---- lookup -------------------------------------------------------------------------------
 
     /** The intersection with this name, or null. Station aliases are not consulted. */
