@@ -27,7 +27,9 @@ import ksl.modeling.guidedpath.internal.ZoneInvariantChecker
 import ksl.modeling.spatial.LocationIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
+import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
+import ksl.modeling.queue.QueueCIfc
 import ksl.simulation.KSLEvent
 import io.github.oshai.kotlinlogging.KLogger
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -114,11 +116,55 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     val zoneUtilization: TWResponseCIfc
         get() = myZoneUtilization
 
+    private val myMovementHoldQ = HoldQueue(this, "${this.name}:MovementHoldQ")
+
+    /**
+     * Entities suspended while a transporter carries them, or fetches them.
+     *
+     * A journey spans many events, so an entity cannot simply be delayed for it: it is held here
+     * for the whole journey and woken when the transporter announces that it has arrived.
+     */
+    val movementHoldQ: QueueCIfc<ProcessModel.Entity>
+        get() = myMovementHoldQ
+
     internal fun addTransporter(transporter: GuidedTransporter) {
         require(model.isNotRunning) {
             "A transporter cannot be added while the model is running."
         }
         myTransporters.add(transporter)
+    }
+
+    /**
+     * Wakes whoever was waiting on a transporter's journey.
+     *
+     * Called by the transporter itself when it arrives, rather than through a listener registered
+     * from here. Registering one during `addTransporter` would mean reaching back into a
+     * transporter that is still running its own constructor, whose properties are not all in place
+     * yet -- an initialisation order that happens to work only while the declarations stay in the
+     * order they are in today.
+     */
+    internal fun transporterArrived(transporter: GuidedTransporter) {
+        val waiting = transporter.waitingEntity ?: return
+        transporter.waitingEntity = null
+        myMovementHoldQ.removeAndResume(waiting)
+    }
+
+    /**
+     * Sets a transporter travelling and returns whether it actually has to go anywhere.
+     *
+     * @return true when a journey began, false when the transporter was already there
+     */
+    internal fun beginJourney(
+        transporter: GuidedTransporter,
+        destinationName: String,
+        movingState: TransporterState,
+        entity: ProcessModel.Entity
+    ): Boolean {
+        val moving = startMove(transporter, destinationName, movingState)
+        if (moving) {
+            transporter.waitingEntity = entity
+        }
+        return moving
     }
 
     /**

@@ -219,6 +219,18 @@ class GuidedPathNetwork private constructor(
     // ---- routing ------------------------------------------------------------------------------
 
     /**
+     * The junction a zone belongs to, for measuring how far a transporter standing there has to go.
+     *
+     * A junction's own zone is that junction. A zone on a link belongs to the junction that link
+     * leads to, because that is where a transporter standing on it will next be able to turn: on a
+     * one-way path there is nowhere else it can go.
+     */
+    fun intersectionOf(zone: Zone): Intersection = when (zone) {
+        is IntersectionZone -> zone.intersection
+        is LinkZone -> zone.link.endIntersection
+    }
+
+    /**
      * The zones of the shortest path, ignoring the route selection rule.
      *
      * This is what the default rule returns, and it is public so that a rule of the modeler's own

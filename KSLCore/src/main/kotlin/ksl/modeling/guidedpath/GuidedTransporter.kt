@@ -17,6 +17,7 @@
  */
 package ksl.modeling.guidedpath
 
+import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.Resource
 import ksl.modeling.guidedpath.exceptions.GuidedPathNetworkException
 import ksl.modeling.guidedpath.routing.Route
@@ -267,6 +268,15 @@ class GuidedTransporter @JvmOverloads constructor(
     internal var pendingMovingState: TransporterState = TransporterState.RETURNING_HOME
 
     /**
+     * The entity suspended until this transporter finishes its current movement, or null.
+     *
+     * A transporter travels over many events, so an entity riding it -- or waiting for it to come
+     * and collect it -- has to be held for the whole journey rather than for a single delay. This
+     * is who to wake when the journey ends.
+     */
+    internal var waitingEntity: ProcessModel.Entity? = null
+
+    /**
      * The spur this transporter has taken over, or null.
      *
      * Held separately from the zones it covers, because a transporter parked at the dead end of a
@@ -333,6 +343,9 @@ class GuidedTransporter @JvmOverloads constructor(
     }
 
     internal fun notifyArrival() {
+        // The system first, so that an entity being carried is released before anything a modeler
+        // has attached runs and possibly sends this transporter somewhere else.
+        system.transporterArrived(this)
         // Copied, so that a listener may detach itself, or attach another, while being told.
         for (listener in myArrivalListeners.toList()) {
             listener.arrived(this)
@@ -392,6 +405,7 @@ class GuidedTransporter @JvmOverloads constructor(
         awaitedZone = null
         awaitedLink = null
         reservedSpur = null
+        waitingEntity = null
         travellingForward = true
         transporterState = TransporterState.IDLE
         stateBeforeBlocking = TransporterState.IDLE
