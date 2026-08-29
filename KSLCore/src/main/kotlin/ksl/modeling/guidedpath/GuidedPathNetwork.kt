@@ -23,6 +23,10 @@ import ksl.modeling.guidedpath.exceptions.GuidedPathNetworkException
 import ksl.modeling.guidedpath.exceptions.GuidedPathRoutingException
 import ksl.modeling.guidedpath.spec.GuidedPathNetworkData
 import ksl.modeling.guidedpath.spec.IntersectionData
+import ksl.modeling.guidedpath.routing.Route
+import ksl.modeling.guidedpath.routing.RoutePlanner
+import ksl.modeling.guidedpath.rules.RouteSelectionRuleIfc
+import ksl.modeling.guidedpath.rules.ShortestPathRouteRule
 import ksl.modeling.guidedpath.spec.LinkData
 import ksl.modeling.spatial.LocationIfc
 import ksl.modeling.spatial.SpatialModel
@@ -76,11 +80,15 @@ class GuidedPathNetwork private constructor(
     private var myZoneCount: Int = 0
     private var myIsBuilt: Boolean = false
 
-    /**
-     * Shortest-path distances between intersections, indexed by declaration order. Infinite where
-     * no path exists.
-     */
-    private lateinit var myDistances: Array<DoubleArray>
+    /** Shortest paths, computed once when the network is built. */
+    private lateinit var myPlanner: RoutePlanner
+
+    /** Chooses which way a transporter goes. Replaceable through the builder. */
+    private var myRouteSelectionRule: RouteSelectionRuleIfc = ShortestPathRouteRule()
+
+    /** The rule that decides which way transporters go on this network. */
+    val routeSelectionRule: RouteSelectionRuleIfc
+        get() = myRouteSelectionRule
 
     /** The intersections, in declaration order, which is the index order of the distance matrix. */
     val intersections: List<Intersection>
@@ -172,7 +180,7 @@ class GuidedPathNetwork private constructor(
     override fun distance(fromLocation: LocationIfc, toLocation: LocationIfc): Double {
         val from = asIntersection(fromLocation)
         val to = asIntersection(toLocation)
-        val d = myDistances[from.index][to.index]
+        val d = myPlanner.distance(from, to)
         if (d == Double.POSITIVE_INFINITY) {
             throw GuidedPathRoutingException.unreachable(from.name, to.name)
         }
@@ -181,8 +189,179 @@ class GuidedPathNetwork private constructor(
 
     /** True when some path runs from one intersection to the other. */
     fun isReachable(fromLocation: LocationIfc, toLocation: LocationIfc): Boolean =
-        myDistances[asIntersection(fromLocation).index][asIntersection(toLocation).index] !=
-                Double.POSITIVE_INFINITY
+        myPlanner.isReachable(asIntersection(fromLocation), asIntersection(toLocation))
+
+    // ---- routing ------------------------------------------------------------------------------
+
+    /**
+     * The zones of the shortest path, ignoring the route selection rule.
+     *
+     * This is what the default rule returns, and it is public so that a rule of the modeler's own
+     * can build on it -- taking the shortest path except where it is congested, for instance,
+     * rather than reimplementing path finding.
+     *
+     * @param fromZone the zone the transporter holds now, which is not part of the result
+     * @param travellingForward the direction it faces on a link zone, ignored at an intersection
+     * @param toIntersection where it is going
+     * @throws GuidedPathRoutingException when the destination cannot be reached
+     */
+    fun shortestPathZones(
+        fromZone: Zone,
+        travellingForward: Boolean,
+        toIntersection: Intersection
+    ): List<Zone> = myPlanner.shortestPathZones(fromZone, travellingForward, toIntersection)
+
+    /**
+     * Plans a route from one intersection to another.
+     *
+     * @throws IllegalArgumentException when either location belongs to another network
+     * @throws GuidedPathRoutingException when the destination cannot be reached, or when the route
+     *   selection rule returns a sequence a transporter could not follow
+     */
+    fun route(fromLocation: LocationIfc, toLocation: LocationIfc): Route {
+        val from = asIntersection(fromLocation)
+        return routeFrom(from.zone, asIntersection(toLocation), true)
+    }
+
+    /**
+     * Plans a route from wherever a transporter currently stands, which may be part way along a
+     * link.
+     *
+     * A transporter on a link cannot turn round inside it, so a route planned from a link zone
+     * finishes that link before going anywhere else.
+     *
+     * @param fromZone the zone the transporter holds now
+     * @param toIntersection where it is going
+     * @param travellingForward the direction it faces on a link zone, ignored at an intersection
+     * @throws GuidedPathRoutingException when the destination cannot be reached, or when the route
+     *   selection rule returns a sequence a transporter could not follow
+     */
+    @JvmOverloads
+    fun routeFrom(
+        fromZone: Zone,
+        toIntersection: Intersection,
+        travellingForward: Boolean = true
+    ): Route {
+        require(myZones.getOrNull(fromZone.id) === fromZone) {
+            "Zone (${fromZone.name}) does not belong to network ${this.name}."
+        }
+        require(isValid(toIntersection)) {
+            "Intersection (${toIntersection.name}) does not belong to network ${this.name}."
+        }
+        val zones = myRouteSelectionRule.selectRoute(this, fromZone, travellingForward, toIntersection)
+        validateRoute(fromZone, travellingForward, toIntersection, zones)
+        return Route(fromZone, toIntersection, zones)
+    }
+
+    /**
+     * The zones a transporter could enter in one step from this one, given the direction it faces.
+     *
+     * From a link zone that is the direction of travel along the link, and from the last zone of a
+     * link the junction it leads to. From an intersection zone it is the first zone of every link
+     * that may be traversed away from that junction, including a bidirectional link approached from
+     * its far end.
+     *
+     * @param zone the zone the transporter holds
+     * @param travellingForward the direction it faces on a link zone, ignored at an intersection
+     */
+    fun successorsOf(zone: Zone, travellingForward: Boolean = true): List<Zone> = when (zone) {
+        is LinkZone -> {
+            val link = zone.link
+            if (travellingForward) {
+                if (zone.positionOnLink < link.numZones) listOf(link.zones[zone.positionOnLink])
+                else listOf(link.endIntersection.zone)
+            } else if (!link.isTraversableInReverse) {
+                emptyList()
+            } else {
+                if (zone.positionOnLink > 1) listOf(link.zones[zone.positionOnLink - 2])
+                else listOf(link.beginIntersection.zone)
+            }
+        }
+
+        is IntersectionZone -> {
+            val here = zone.intersection
+            val out = mutableListOf<Zone>()
+            for (link in here.incidentLinks) {
+                if (link.beginIntersection === here) {
+                    out.add(link.zones.first())
+                } else if (link.isTraversableInReverse && link.endIntersection === here) {
+                    out.add(link.zones.last())
+                }
+            }
+            out
+        }
+    }
+
+    /**
+     * Checks that a proposed route is one a transporter could follow, and names the rule that
+     * produced it when it is not.
+     *
+     * A rule is user code, so a sequence that skips a zone, jumps between links, or stops short of
+     * the destination is a defect in the extension rather than in the subsystem. Catching it here,
+     * before the transporter starts moving, is what turns it into a message naming the rule and the
+     * offending pair instead of a transporter stranded mid-network with no explanation.
+     */
+    private fun validateRoute(
+        fromZone: Zone,
+        travellingForward: Boolean,
+        toIntersection: Intersection,
+        zones: List<Zone>
+    ) {
+        val ruleName = myRouteSelectionRule::class.simpleName ?: "route selection rule"
+        if (zones.isEmpty()) {
+            if (fromZone === toIntersection.zone) return
+            throw GuidedPathRoutingException(
+                "Route selection rule ($ruleName) returned an empty sequence, but the transporter " +
+                        "at (${fromZone.name}) is not at its destination (${toIntersection.name})."
+            )
+        }
+        val firstSteps = successorsOf(fromZone, travellingForward)
+        if (zones.first() !in firstSteps) {
+            throw GuidedPathRoutingException.routeDoesNotStartAtOrigin(
+                ruleName,
+                firstSteps.joinToString(prefix = "one of ") { it.name },
+                zones.first().name
+            )
+        }
+        for (i in 0 until zones.size - 1) {
+            val here = zones[i]
+            val next = zones[i + 1]
+            if (next !in successorsOf(here, travellingForwardAfter(fromZone, zones, i))) {
+                throw GuidedPathRoutingException.nonAdjacentRoute(ruleName, here.name, next.name)
+            }
+        }
+        if (zones.last() !== toIntersection.zone) {
+            throw GuidedPathRoutingException.routeDoesNotReachDestination(
+                ruleName, toIntersection.name, zones.last().name
+            )
+        }
+    }
+
+    /**
+     * The direction of travel on the link zone at the given index of a proposed route.
+     *
+     * Once a route leaves the transporter's starting link, direction is implied by the sequence
+     * itself: a link is entered at one end, so the zone that follows the junction says which way
+     * the transporter is going. Only the starting link inherits the caller's direction.
+     */
+    private fun travellingForwardAfter(fromZone: Zone, zones: List<Zone>, index: Int): Boolean {
+        val here = zones[index]
+        if (here !is LinkZone) return true
+        val previous = if (index == 0) fromZone else zones[index - 1]
+        if (previous is LinkZone && previous.link === here.link) {
+            // Still on the same link: the positions say which way.
+            return here.positionOnLink > previous.positionOnLink
+        }
+        if (previous is IntersectionZone) {
+            // Just entered from a junction: the direction is decided by which end of the link that
+            // junction is, never by the position of the zone entered. A link of a single zone has
+            // its first and last zone in the same place, so position cannot tell them apart.
+            return here.link.beginIntersection === previous.intersection
+        }
+        // Adjacent zones on different links with no junction between them are not adjacent at all,
+        // which the caller's successor check reports. Direction is immaterial here.
+        return true
+    }
 
     /**
      * For this model, two locations are the same only when they are the same intersection.
@@ -392,7 +571,7 @@ class GuidedPathNetwork private constructor(
                 throw GuidedPathNetworkException.duplicateName("zone", z.name)
             }
         }
-        computeDistances()
+        myPlanner = RoutePlanner(this)
         defaultLocation = myIntersections.first()
         myIsBuilt = true
         warnAboutDeadlockRisks()
@@ -402,43 +581,6 @@ class GuidedPathNetwork private constructor(
                     "${myLinks.count { it.type == LinkType.SPUR }} spurs, " +
                     "${myLinks.count { it.type == LinkType.BIDIRECTIONAL }} bidirectional links."
         }
-    }
-
-    /**
-     * All-pairs shortest paths by the Floyd-Warshall algorithm, computed once and never recomputed.
-     *
-     * Cost is cubic in intersections and quadratic in memory, which is comfortable at the network
-     * sizes this subsystem targets and is paid once at construction rather than on every dispatch.
-     * The alternative, searching on demand, buys nothing while the weights are static and would put
-     * a search on the hot path.
-     */
-    private fun computeDistances() {
-        val n = myIntersections.size
-        val d = Array(n) { DoubleArray(n) { Double.POSITIVE_INFINITY } }
-        for (i in 0 until n) d[i][i] = 0.0
-        for (link in myLinks) {
-            val b = link.beginIntersection.index
-            val e = link.endIntersection.index
-            val forward = link.length + link.endIntersection.length
-            if (forward < d[b][e]) d[b][e] = forward
-            if (link.isTraversableInReverse) {
-                val reverse = link.length + link.beginIntersection.length
-                if (reverse < d[e][b]) d[e][b] = reverse
-            }
-        }
-        for (k in 0 until n) {
-            for (i in 0 until n) {
-                val dik = d[i][k]
-                if (dik == Double.POSITIVE_INFINITY) continue
-                for (j in 0 until n) {
-                    val dkj = d[k][j]
-                    if (dkj == Double.POSITIVE_INFINITY) continue
-                    val through = dik + dkj
-                    if (through < d[i][j]) d[i][j] = through
-                }
-            }
-        }
-        myDistances = d
     }
 
     /**
@@ -459,7 +601,7 @@ class GuidedPathNetwork private constructor(
         val unreachable = mutableListOf<String>()
         for (i in myIntersections.indices) {
             for (j in myIntersections.indices) {
-                if (myDistances[i][j] == Double.POSITIVE_INFINITY) {
+                if (!myPlanner.isReachable(myIntersections[i], myIntersections[j])) {
                     unreachable.add("${myIntersections[i].name} -> ${myIntersections[j].name}")
                 }
             }
@@ -546,6 +688,16 @@ class GuidedPathNetwork private constructor(
         /** Adds a fully specified link. */
         fun link(data: LinkData): Builder {
             myNetwork.addLink(data)
+            return this
+        }
+
+        /**
+         * Replaces the rule that decides which way transporters go. The default sends every
+         * transporter along the shortest path.
+         */
+        fun routeSelectionRule(rule: RouteSelectionRuleIfc): Builder {
+            myNetwork.requireNotBuilt()
+            myNetwork.myRouteSelectionRule = rule
             return this
         }
 
