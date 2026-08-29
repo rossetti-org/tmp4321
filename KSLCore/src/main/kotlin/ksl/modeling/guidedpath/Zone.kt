@@ -17,6 +17,8 @@
  */
 package ksl.modeling.guidedpath
 
+import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
+
 /**
  * Whether a zone is free, spoken for, or covered.
  *
@@ -126,14 +128,77 @@ sealed class Zone {
         state = ZoneState.OCCUPIED
     }
 
-    /** Gives up a zone the transporter occupies. */
-    internal fun release(transporter: GuidedTransporter) {
+    private val myWaiters = mutableListOf<GuidedTransporter>()
+
+    /**
+     * The transporters waiting for this zone, in the order they began waiting.
+     *
+     * Ordered, and deliberately so. Which of several waiting transporters gets a zone changes the
+     * whole course of a run, so the choice has to be made by a stated rule over a stated order. A
+     * set would leave it to whatever order the collection happened to iterate in, which can differ
+     * between platforms and would cost the model its reproducibility.
+     */
+    val waiters: List<GuidedTransporter>
+        get() = myWaiters
+
+    /** How many transporters are waiting for this zone. */
+    val numWaiting: Int
+        get() = myWaiters.size
+
+    /**
+     * Records that a transporter is waiting for this zone.
+     *
+     * Waiting is not something a zone infers from a failed claim: placing transporters at the start
+     * of a replication also claims zones, and a clash there is a specification error rather than a
+     * queue to join. The engine says which it is.
+     */
+    internal fun addWaiter(transporter: GuidedTransporter) {
+        check(transporter !in myWaiters) {
+            "Transporter (${transporter.name}) is already waiting for zone ($name)."
+        }
+        check(holder !== transporter) {
+            "Transporter (${transporter.name}) holds zone ($name) and cannot wait for it."
+        }
+        myWaiters.add(transporter)
+    }
+
+    /** Stops a transporter waiting for this zone, whether or not it was. */
+    internal fun removeWaiter(transporter: GuidedTransporter) {
+        myWaiters.remove(transporter)
+    }
+
+    /**
+     * Gives up a zone the transporter occupies, and hands it to at most one waiter.
+     *
+     * The waiter is chosen by the supplied rule rather than by anything the zone decides for
+     * itself, and it is handed the zone by being *woken*, not by being given the claim: the zone
+     * genuinely becomes free in between. That matters because it is the only arrangement in which
+     * the state is sound at every moment the clock could be observed -- a direct hand-off would
+     * leave a window where the zone belonged to two transporters at once, and the invariants could
+     * then only be checked at some moments rather than all of them.
+     *
+     * @param rule chooses among the waiting transporters
+     * @return the transporter to wake, or null when none was waiting
+     */
+    internal fun release(
+        transporter: GuidedTransporter,
+        rule: ZoneContentionRuleIfc? = null
+    ): GuidedTransporter? {
         check(holder === transporter) {
             "Zone ($name) cannot be released by transporter (${transporter.name}): it is held by " +
                     "${holder?.name ?: "no one"}."
         }
         state = ZoneState.FREE
         holder = null
+        if (myWaiters.isEmpty() || rule == null) return null
+        val chosen = rule.selectWaiter(this, myWaiters)
+            ?: return null
+        check(chosen in myWaiters) {
+            "Zone contention rule ($rule) chose transporter (${chosen.name}), which is not waiting " +
+                    "for zone ($name). A rule must choose from the transporters it is given."
+        }
+        myWaiters.remove(chosen)
+        return chosen
     }
 
     /**
@@ -154,6 +219,7 @@ sealed class Zone {
     internal fun resetZone() {
         state = ZoneState.FREE
         holder = null
+        myWaiters.clear()
     }
 
     /**

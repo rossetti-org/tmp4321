@@ -126,6 +126,91 @@ class Link internal constructor(
     val isTraversableInReverse: Boolean
         get() = type != LinkType.UNIDIRECTIONAL
 
+    /**
+     * The transporter that has reserved this spur so that it can get back out, or null.
+     *
+     * A dead end has to be entered and left by the same way. A transporter sent to the far end of a
+     * spur therefore keeps the whole spur to itself for as long as it is down there: another
+     * transporter sent to the same place would have nowhere to pass, and the two would face each
+     * other with neither able to move. Traffic merely passing *through* the mouth of the spur is
+     * unaffected, which is the distinction that lets a spur keep a stopped transporter out of the
+     * way without also stopping everyone else.
+     */
+    var spurReservation: GuidedTransporter? = null
+        internal set
+
+    private val myWaiters = mutableListOf<GuidedTransporter>()
+
+    /**
+     * Transporters waiting to enter this link, in the order they began waiting.
+     *
+     * A transporter can be held up by a link rather than by any particular zone: the zone it wants
+     * may be free while the link as a whole is running the other way, or is a spur someone else is
+     * down. What frees it is a change to the link, so it waits on the link.
+     */
+    val waiters: List<GuidedTransporter>
+        get() = myWaiters
+
+    /** How many transporters are waiting to enter this link. */
+    val numWaiting: Int
+        get() = myWaiters.size
+
+    internal fun addWaiter(transporter: GuidedTransporter) {
+        if (transporter !in myWaiters) myWaiters.add(transporter)
+    }
+
+    internal fun removeWaiter(transporter: GuidedTransporter) {
+        myWaiters.remove(transporter)
+    }
+
+    /**
+     * Whether a transporter may travel this link in the given direction.
+     *
+     * A one-way link admits only its own direction. A two-way link admits whichever direction is
+     * already running on it, so that two transporters can never meet head on with no way past each
+     * other. An empty two-way link admits either.
+     */
+    internal fun admitsDirection(forward: Boolean): Boolean {
+        if (type == LinkType.UNIDIRECTIONAL) return forward
+        val lock = directionLock ?: return true
+        return lock.forward == forward
+    }
+
+    /** Takes or extends the hold on the direction of travel. */
+    internal fun acquireDirection(forward: Boolean) {
+        if (type == LinkType.UNIDIRECTIONAL) return
+        val lock = directionLock
+        directionLock = if (lock == null) {
+            DirectionLock(forward, 1)
+        } else {
+            check(lock.forward == forward) {
+                "Link ($name) is running ${if (lock.forward) "forward" else "backward"} and cannot " +
+                        "also admit the other direction."
+            }
+            lock.copy(count = lock.count + 1)
+        }
+    }
+
+    /**
+     * Gives up one hold on the direction of travel, freeing the link when the last one goes.
+     *
+     * @return true when the link is now clear, so that anyone waiting to run the other way may be
+     *   considered
+     */
+    internal fun releaseDirection(): Boolean {
+        if (type == LinkType.UNIDIRECTIONAL) return false
+        val lock = directionLock ?: return false
+        directionLock = if (lock.count <= 1) null else lock.copy(count = lock.count - 1)
+        return directionLock == null
+    }
+
+    /** Returns the link to its start-of-replication condition. */
+    internal fun resetLink() {
+        directionLock = null
+        spurReservation = null
+        myWaiters.clear()
+    }
+
     /** The intersection a forward traversal enters, used when weighting the routing graph. */
     internal fun entered(forward: Boolean): GuidedPathNetwork.Intersection =
         if (forward) endIntersection else beginIntersection

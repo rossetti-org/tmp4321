@@ -21,12 +21,16 @@ import ksl.controls.ControlType
 import ksl.controls.KSLControl
 import ksl.modeling.guidedpath.exceptions.GuidedPathNetworkException
 import ksl.modeling.guidedpath.internal.MovementEngine
+import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
+import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
 import ksl.modeling.guidedpath.internal.ZoneInvariantChecker
 import ksl.modeling.spatial.LocationIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
 import ksl.modeling.entity.ProcessModel
 import ksl.simulation.KSLEvent
+import io.github.oshai.kotlinlogging.KLogger
+import io.github.oshai.kotlinlogging.KotlinLogging
 import ksl.simulation.ModelElement
 
 /**
@@ -50,6 +54,7 @@ import ksl.simulation.ModelElement
 open class GuidedPathTransportSystem @JvmOverloads constructor(
     parent: ModelElement,
     val network: GuidedPathNetwork,
+    val zoneContentionRule: ZoneContentionRuleIfc = FIFOZoneContentionRule(),
     name: String? = null
 ) : ModelElement(parent, name) {
 
@@ -237,6 +242,12 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
         }
     }
 
+    private inner class ClaimRetryAction : EventActionIfc<GuidedTransporter> {
+        override fun action(event: KSLEvent<GuidedTransporter>) {
+            engine.retryClaim(event.message!!)
+        }
+    }
+
     private inner class RearReleaseAction : EventActionIfc<GuidedTransporter> {
         override fun action(event: KSLEvent<GuidedTransporter>) {
             engine.releaseRearAfterDistance(event.message!!)
@@ -244,6 +255,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     }
 
     private val myTraversalAction = TraversalAction()
+    private val myClaimRetryAction = ClaimRetryAction()
     private val myRearReleaseAction = RearReleaseAction()
 
     /** Schedules a transporter's arrival in the zone it is travelling into. */
@@ -251,6 +263,21 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
         schedule(
             myTraversalAction, delay, transporter to zone, ProcessModel.MOVE_PRIORITY,
             "${transporter.name}:enter:${zone.name}"
+        )
+    }
+
+    /**
+     * Schedules a waiting transporter's fresh attempt at what it was waiting for.
+     *
+     * Scheduled rather than called directly, so that its order against everything else happening at
+     * that instant is explicit, and so that one release cannot set off an unbounded chain of
+     * wake-ups inside a single event. The priority puts the attempt ahead of other transporters'
+     * arrivals at the same instant and behind a process resumption already in flight.
+     */
+    internal fun scheduleClaimRetry(transporter: GuidedTransporter) {
+        schedule(
+            myClaimRetryAction, 0.0, transporter, ProcessModel.ZONE_CLAIM_PRIORITY,
+            "${transporter.name}:retryClaim"
         )
     }
 
@@ -270,12 +297,44 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
             zone.resetZone()
         }
         for (link in network.links) {
-            link.directionLock = null
+            link.resetLink()
         }
         for (transporter in myTransporters) {
             transporter.placeAtInitialPosition()
+            engine.acquirePlacementHolds(transporter)
         }
         refreshFleetCounts()
+    }
+
+    /** The transporters currently unable to proceed, with what each is waiting for. */
+    val blockedTransporters: List<GuidedTransporter>
+        get() = myTransporters.filter { it.transporterState == TransporterState.BLOCKED }
+
+    /**
+     * Reports any transporter still waiting when a replication ends.
+     *
+     * A waiting transporter schedules nothing, so a guide path that has stopped moving does not
+     * announce itself: the clock simply runs on to the end of the replication with nobody going
+     * anywhere, and the output looks like a system that merely had no work to do. This is the point
+     * at which that becomes visible, and it names what each transporter holds and what it is
+     * waiting for, which is what a modeler needs in order to see the cycle or the obstruction.
+     */
+    override fun replicationEnded() {
+        val stuck = blockedTransporters
+        if (stuck.isEmpty()) return
+        logger.warn {
+            buildString {
+                append("GuidedPathTransportSystem ($name): ${stuck.size} transporter(s) were still ")
+                append("waiting when replication ${model.currentReplicationNumber} ended. ")
+                append("The guide path may have stopped moving rather than run out of work.")
+                for (t in stuck) {
+                    append(System.lineSeparator())
+                    append("  (${t.name}) holds [${t.heldZones.joinToString { z -> z.name }}] ")
+                    append("and waits for ")
+                    append(t.awaitedLink?.let { l -> "link (${l.name})" } ?: "zone (${t.awaitedZone?.name})")
+                }
+            }
+        }
     }
 
     override fun registerConditionalActions() {
@@ -283,6 +342,10 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
         val checker = ZoneInvariantChecker(this)
         myInvariantChecker = checker
         executive.register(checker)
+    }
+
+    companion object {
+        val logger: KLogger = KotlinLogging.logger {}
     }
 
     override fun toString(): String = buildString {

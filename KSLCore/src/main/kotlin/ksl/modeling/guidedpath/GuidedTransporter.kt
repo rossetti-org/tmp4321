@@ -266,8 +266,30 @@ class GuidedTransporter @JvmOverloads constructor(
     /** What the transporter will be doing once a pending redirection takes effect. */
     internal var pendingMovingState: TransporterState = TransporterState.RETURNING_HOME
 
-    /** The zone the transporter cannot claim, or null when it is not blocked. */
+    /**
+     * The spur this transporter has taken over, or null.
+     *
+     * Held separately from the zones it covers, because a transporter parked at the dead end of a
+     * spur covers only the junction there and no part of the spur itself -- yet it has plainly not
+     * left, since the only way out is back down the spur. Deciding it had left by looking at link
+     * zones alone would let a second transporter in behind it, and the two would then face each
+     * other with neither able to move.
+     */
+    internal var reservedSpur: Link? = null
+
+    /** The zone the transporter is waiting for, or null when it is not waiting. */
     var awaitedZone: Zone? = null
+        internal set
+
+    /**
+     * The link holding the transporter up, or null when it is waiting for a zone instead, or not
+     * waiting at all.
+     *
+     * A transporter can be stopped by a link whose zone is perfectly free: the link may be running
+     * the other way, or be a spur that another transporter is down. Recording which of the two is
+     * in the way is what lets it be woken by the right event.
+     */
+    var awaitedLink: Link? = null
         internal set
 
     /** The direction it faces on a link, which decides where it may go next. */
@@ -368,6 +390,8 @@ class GuidedTransporter @JvmOverloads constructor(
         claimedZone = null
         pendingDestination = null
         awaitedZone = null
+        awaitedLink = null
+        reservedSpur = null
         travellingForward = true
         transporterState = TransporterState.IDLE
         stateBeforeBlocking = TransporterState.IDLE

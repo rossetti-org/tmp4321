@@ -21,6 +21,7 @@ import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.IntersectionZone
 import ksl.modeling.guidedpath.LinkZone
+import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.Zone
 import ksl.modeling.guidedpath.ZoneState
 import ksl.simulation.ConditionalAction
@@ -77,6 +78,49 @@ internal class ZoneInvariantChecker(
         checkZonesAgreeWithTransporters()
         checkTransportersCoverContiguousRuns()
         checkOccupancyIsConserved()
+        checkWaitingIsConsistent()
+    }
+
+    /**
+     * A transporter is waiting for exactly one thing, and only while it is stopped.
+     *
+     * This is the invariant whose failure has no other symptom. A waiting transporter schedules
+     * nothing, so it is started again only by whoever releases what it is waiting for -- which
+     * means a transporter left in a waiting list it should have left, or missing from the one it
+     * should be in, does not recover slowly. It stalls forever, and the run simply stops advancing
+     * with nothing to say why.
+     */
+    private fun checkWaitingIsConsistent() {
+        for (t in mySystem.transporters) {
+            val zonesWaitedOn = mySystem.network.zones.filter { t in it.waiters }
+            val linksWaitedOn = mySystem.network.links.filter { t in it.waiters }
+            val places = zonesWaitedOn.size + linksWaitedOn.size
+            if (t.transporterState == TransporterState.BLOCKED) {
+                if (places != 1) {
+                    violate(
+                        "transporter (${t.name}) is blocked but is waiting in $places lists: " +
+                                "zones ${zonesWaitedOn.joinToString { it.name }}, links " +
+                                linksWaitedOn.joinToString { it.name }
+                    )
+                }
+                if (t.awaitedZone == null) {
+                    violate("transporter (${t.name}) is blocked but names nothing it is waiting for")
+                }
+            } else if (places != 0) {
+                violate(
+                    "transporter (${t.name}) is ${t.transporterState} but is still waiting in " +
+                            "$places list(s), so it would be woken for something it no longer wants"
+                )
+            }
+        }
+        for (zone in mySystem.network.zones) {
+            if (zone.holder != null && zone.holder in zone.waiters) {
+                violate("zone (${zone.name}) lists its own holder among those waiting for it")
+            }
+            if (zone.waiters.size != zone.waiters.distinct().size) {
+                violate("zone (${zone.name}) lists a transporter more than once among its waiters")
+            }
+        }
     }
 
     /**

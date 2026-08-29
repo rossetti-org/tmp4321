@@ -57,7 +57,7 @@ class SingleVehicleCycleTimeTest {
         zoneControl: () -> ksl.modeling.guidedpath.rules.ZoneControlRuleIfc = { EndOfZoneControl() }
     ) : ModelElement(parent, "OneCartModel") {
 
-        val system = GuidedPathTransportSystem(this, SimpleAgvNetwork.create(), "AgvSystem")
+        val system = GuidedPathTransportSystem(this, SimpleAgvNetwork.create(), name = "AgvSystem")
         val cart = GuidedTransporter(
             system, startAt, ConstantRV(velocity), lengthInZones, zoneControl(), "Cart1"
         )
@@ -157,7 +157,7 @@ class SingleVehicleCycleTimeTest {
             .link("Slow", "B", "C", length = 40.0, zoneLength = 10.0, velocityFactor = 0.5)
             .build()
         val holder = object : ModelElement(m, "Holder") {}
-        val system = GuidedPathTransportSystem(holder, net, "Sys")
+        val system = GuidedPathTransportSystem(holder, net, name = "Sys")
         val cart = GuidedTransporter(system, TransporterPlacement.At("A"), ConstantRV(10.0), name = "C1")
         system.checkInvariants = true
         val times = mutableListOf<Double>()

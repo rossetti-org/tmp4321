@@ -50,7 +50,7 @@ class ZoneStateTest {
             // link rather than merely re-using the zone already reserved.
             .link("L3", "A", "D", length = 24.0, zoneLength = 12.0)
             .build()
-        val system = GuidedPathTransportSystem(this, network, "Sys")
+        val system = GuidedPathTransportSystem(this, network, name = "Sys")
         val first = GuidedTransporter(system, TransporterPlacement.At("A"), ConstantRV(10.0), name = "First")
         val second = GuidedTransporter(system, TransporterPlacement.At("C"), ConstantRV(10.0), name = "Second")
     }
@@ -191,7 +191,7 @@ class ZoneStateTest {
             .link("Spur", "A", "D", length = 24.0, zoneLength = 12.0, type = LinkType.SPUR)
             .build()
         val holder = object : ModelElement(m, "Holder") {}
-        val system = GuidedPathTransportSystem(holder, net, "Sys")
+        val system = GuidedPathTransportSystem(holder, net, name = "Sys")
         val cart = GuidedTransporter(system, TransporterPlacement.At("A"), ConstantRV(10.0), name = "Cart")
         system.checkInvariants = true
 

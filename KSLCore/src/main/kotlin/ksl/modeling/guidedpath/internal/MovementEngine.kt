@@ -22,10 +22,13 @@ import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.IntersectionZone
+import ksl.modeling.guidedpath.Link
+import ksl.modeling.guidedpath.LinkType
 import ksl.modeling.guidedpath.LinkZone
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.VelocitySampling
 import ksl.modeling.guidedpath.Zone
+import ksl.modeling.guidedpath.routing.Route
 import ksl.modeling.guidedpath.rules.ZoneReleaseTiming
 
 /**
@@ -84,11 +87,13 @@ internal class MovementEngine(
     }
 
     /**
-     * Takes one step: claim the zone ahead and schedule the arrival, or stop.
+     * Takes one step: claim the zone ahead and schedule the arrival, or stop and wait.
      *
      * On every path out of this function the transporter is either scheduled to arrive somewhere or
-     * has stopped for a stated reason. It is never left with nothing scheduled and no explanation,
-     * which would be a transporter lost in the middle of the network.
+     * is waiting for a stated thing to change. It is never left with nothing scheduled and nothing
+     * to wait for, which would be a transporter lost in the middle of the network -- and because a
+     * waiting transporter schedules nothing at all, a lost wake-up would be a permanent stall
+     * rather than a slow recovery. That is why the two outcomes are kept exhaustive here.
      */
     fun advance(transporter: GuidedTransporter) {
         val route = transporter.currentRoute
@@ -100,18 +105,20 @@ internal class MovementEngine(
             arrive(transporter)
             return
         }
+        // A link can hold a transporter up even when the zone it wants is free: the link may be
+        // running the other way, or be a spur that someone else is down. Those are settled first,
+        // because what frees the transporter is a change to the link rather than to the zone.
+        val blockingLink = linkRefusing(transporter, next, route)
+        if (blockingLink != null) {
+            blockOnLink(transporter, blockingLink, next)
+            return
+        }
         if (!next.claim(transporter)) {
-            // Contention arrives with the next phase, which adds the waiting list and the wake-up
-            // that goes with it. Until then a refused claim can only mean a model that a single
-            // transporter cannot satisfy, and failing loudly beats stalling silently.
-            check(false) {
-                "Transporter (${transporter.name}) could not claim zone (${next.name}), which is " +
-                        "held by (${next.holder?.name}). Waiting for a held zone is not yet " +
-                        "implemented."
-            }
+            blockOnZone(transporter, next)
             return
         }
         transporter.claimedZone = next
+        acquireLinkHolds(transporter, next, route)
         val velocity = transporter.velocityForNextZone()
         if (transporter.velocitySampling == VelocitySampling.PER_ZONE) {
             transporter.currentVelocity = velocity
@@ -140,6 +147,184 @@ internal class MovementEngine(
             }
         }
         mySystem.scheduleTraversal(transporter, next, traversalTime)
+    }
+
+    /**
+     * The link standing in a transporter's way, or null when none is.
+     *
+     * Only a transporter *entering* a link can be refused by it. One already on a link has its
+     * direction and, where it matters, its reservation, and must be allowed to finish: refusing it
+     * part way along would strand it somewhere it cannot legally be.
+     */
+    private fun linkRefusing(
+        transporter: GuidedTransporter,
+        next: Zone,
+        route: Route
+    ): Link? {
+        if (next is IntersectionZone) {
+            // A transporter heading for the far end of a spur must not take the junction at the
+            // spur's mouth while another is still down there. The one down there can only come out
+            // through that junction, so letting a second in would leave the two facing each other
+            // with neither able to move -- which is the deadlock a spur is supposed to prevent.
+            // Traffic going anywhere else through the same junction is untouched.
+            for (spur in next.intersection.incidentLinks) {
+                if (spur.type != LinkType.SPUR) continue
+                if (spur.beginIntersection !== next.intersection) continue
+                if (route.destination !== spur.endIntersection) continue
+                val reservation = spur.spurReservation
+                if (reservation != null && reservation !== transporter) return spur
+            }
+            return null
+        }
+        if (next !is LinkZone) return null
+        val link = next.link
+        if (transporter.heldZones.any { it is LinkZone && it.link === link }) return null
+        val forward = next.positionOnLink == 1
+        if (!link.admitsDirection(forward)) return link
+        if (needsSpurReservation(link, route) &&
+            link.spurReservation != null &&
+            link.spurReservation !== transporter
+        ) {
+            return link
+        }
+        return null
+    }
+
+    /**
+     * Whether entering this link means taking it over entirely: true when it is a spur and the
+     * route ends at its far end.
+     *
+     * A transporter merely passing through the mouth of a spur takes nothing over, which is the
+     * distinction that lets a spur park a transporter out of the way without stopping other
+     * traffic.
+     */
+    private fun needsSpurReservation(link: Link, route: Route): Boolean =
+        link.type == LinkType.SPUR && route.destination === link.endIntersection
+
+    /** Takes whatever the link requires of a transporter that is entering it. */
+    private fun acquireLinkHolds(transporter: GuidedTransporter, next: Zone, route: Route) {
+        if (next !is LinkZone) return
+        val link = next.link
+        // Only on entry: a transporter already on the link took these when it arrived.
+        val alreadyOn = transporter.heldZones.any { it is LinkZone && it.link === link && it !== next }
+        if (alreadyOn) return
+        link.acquireDirection(next.positionOnLink == 1)
+        if (needsSpurReservation(link, route)) {
+            link.spurReservation = transporter
+            transporter.reservedSpur = link
+        }
+    }
+
+    /**
+     * Whether a transporter has genuinely left a spur.
+     *
+     * The junction at the dead end counts as part of the spur. A transporter standing there covers
+     * no zone of the spur at all, but it has not left: the only way out is back down. Treating it
+     * as gone is what would let a second transporter in behind it, leaving the two facing each
+     * other with no way past -- the very situation a spur exists to prevent.
+     */
+    private fun isClearOfSpur(transporter: GuidedTransporter, spur: Link): Boolean {
+        val terminal = spur.endIntersection.zone
+        return transporter.heldZones.none {
+            it === terminal || (it is LinkZone && it.link === spur)
+        }
+    }
+
+    /** Gives up a spur once its transporter is clear of both the spur and the junction at its end. */
+    private fun releaseSpurIfClear(transporter: GuidedTransporter) {
+        val spur = transporter.reservedSpur ?: return
+        if (!isClearOfSpur(transporter, spur)) return
+        transporter.reservedSpur = null
+        if (spur.spurReservation === transporter) {
+            spur.spurReservation = null
+        }
+        wakeOneWaiterOf(spur)
+    }
+
+    /**
+     * Gives up whatever a link required, once the transporter has left it entirely.
+     *
+     * Called after a zone is released, because leaving a link is exactly the moment its last zone
+     * stops being held.
+     */
+    private fun releaseLinkHoldsIfClearOf(transporter: GuidedTransporter, released: Zone) {
+        if (released !is LinkZone) return
+        val link = released.link
+        if (transporter.heldZones.any { it is LinkZone && it.link === link }) return
+        val nowClear = link.releaseDirection()
+        // Anyone held up by the link may now be able to go. Waking exactly one keeps the choice
+        // deliberate; if it turns out still to be refused it simply waits again. The spur is left
+        // alone here: leaving its zones is not the same as leaving the spur.
+        if (nowClear) {
+            wakeOneWaiterOf(link)
+        }
+    }
+
+    private fun wakeOneWaiterOf(link: Link) {
+        if (link.numWaiting == 0) return
+        val chosen = mySystem.zoneContentionRule.selectWaiter(link.zones.first(), link.waiters)
+            ?: return
+        link.removeWaiter(chosen)
+        mySystem.scheduleClaimRetry(chosen)
+    }
+
+    /** Records that a transporter is waiting for a zone someone else holds, and stops it. */
+    private fun blockOnZone(transporter: GuidedTransporter, zone: Zone) {
+        zone.addWaiter(transporter)
+        transporter.awaitedZone = zone
+        transporter.awaitedLink = null
+        beginBlocking(transporter)
+    }
+
+    /** Records that a transporter is waiting for a link to change, and stops it. */
+    private fun blockOnLink(transporter: GuidedTransporter, link: Link, zone: Zone) {
+        link.addWaiter(transporter)
+        transporter.awaitedZone = zone
+        transporter.awaitedLink = link
+        beginBlocking(transporter)
+    }
+
+    private fun beginBlocking(transporter: GuidedTransporter) {
+        if (transporter.transporterState != TransporterState.BLOCKED) {
+            transporter.stateBeforeBlocking = transporter.transporterState
+            transporter.transporterState = TransporterState.BLOCKED
+            transporter.countBlocking()
+        }
+        mySystem.refreshFleetCounts()
+        // Nothing is scheduled. A waiting transporter costs the executive nothing while it waits,
+        // and is started again only by whoever releases what it is waiting for.
+    }
+
+    /**
+     * Starts a transporter again after whatever it was waiting for has come free.
+     *
+     * The retry is a scheduled event rather than a direct call from the releasing transporter, so
+     * that its ordering against everything else happening at that instant is explicit rather than
+     * an artefact of the call stack, and so that one release cannot set off an unbounded chain of
+     * wake-ups inside a single event.
+     */
+    fun retryClaim(transporter: GuidedTransporter) {
+        if (transporter.transporterState != TransporterState.BLOCKED) return
+        transporter.awaitedZone = null
+        transporter.awaitedLink = null
+        transporter.transporterState = transporter.stateBeforeBlocking
+        mySystem.refreshFleetCounts()
+        advance(transporter)
+    }
+
+    /**
+     * Takes the direction of travel on any two-way link a transporter was placed on.
+     *
+     * A transporter standing on a two-way link is as much an obstacle to oncoming traffic as one
+     * moving along it, so the link is running its way from the moment the replication begins.
+     * Without this, the first transporter to be sent somewhere would find the link unclaimed and
+     * another could enter against it.
+     */
+    fun acquirePlacementHolds(transporter: GuidedTransporter) {
+        val links = transporter.occupiedZones.filterIsInstance<LinkZone>().map { it.link }.distinct()
+        for (link in links) {
+            link.acquireDirection(transporter.travellingForward)
+        }
     }
 
     /** Completes a traversal: the transporter now covers the zone it was travelling into. */
@@ -181,7 +366,7 @@ internal class MovementEngine(
     fun releaseRearIfSurplus(transporter: GuidedTransporter) {
         while (transporter.hasSurplusZones) {
             val rear = transporter.removeRearZone() ?: return
-            rear.release(transporter)
+            releaseZone(transporter, rear)
         }
     }
 
@@ -194,7 +379,20 @@ internal class MovementEngine(
     fun releaseRearAtStart(transporter: GuidedTransporter) {
         if (!transporter.isFullyOnPath) return
         val rear = transporter.removeRearZone() ?: return
-        rear.release(transporter)
+        releaseZone(transporter, rear)
+    }
+
+    /**
+     * Gives up one zone: hands it to whoever was waiting for it, and gives up anything the link
+     * required once the transporter is clear of it.
+     */
+    private fun releaseZone(transporter: GuidedTransporter, zone: Zone) {
+        val woken = zone.release(transporter, mySystem.zoneContentionRule)
+        releaseLinkHoldsIfClearOf(transporter, zone)
+        releaseSpurIfClear(transporter)
+        if (woken != null) {
+            mySystem.scheduleClaimRetry(woken)
+        }
     }
 
     /**

@@ -45,7 +45,7 @@ class TransporterPlacementTest {
         val placements: List<Pair<String, TransporterPlacement>>,
         val lengths: List<Int> = placements.map { 1 }
     ) : ModelElement(parent, "Fleet") {
-        val system = GuidedPathTransportSystem(this, SimpleAgvNetwork.create(), "Sys")
+        val system = GuidedPathTransportSystem(this, SimpleAgvNetwork.create(), name = "Sys")
         val carts = placements.mapIndexed { i, (name, placement) ->
             GuidedTransporter(system, placement, ConstantRV(10.0), lengths[i], name = name)
         }
@@ -260,9 +260,9 @@ class TransporterPlacementTest {
         val m = Model("TwoSystems")
         val net = SimpleAgvNetwork.create()
         val holder = object : ModelElement(m, "Holder") {}
-        GuidedPathTransportSystem(holder, net, "First")
+        GuidedPathTransportSystem(holder, net, name = "First")
         val e = assertFailsWith<GuidedPathNetworkException> {
-            GuidedPathTransportSystem(holder, net, "Second")
+            GuidedPathTransportSystem(holder, net, name = "Second")
         }
         val msg = e.message ?: ""
         assertTrue(msg.contains("First"), msg)

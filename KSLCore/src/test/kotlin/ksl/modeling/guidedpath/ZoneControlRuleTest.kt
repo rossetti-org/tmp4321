@@ -55,7 +55,7 @@ class ZoneControlRuleTest {
             .link("L1", "A", "B", length = 48.0, zoneLength = 12.0)
             .link("L2", "B", "C", length = 48.0, zoneLength = 12.0)
             .build()
-        val system = GuidedPathTransportSystem(this, network, "Sys")
+        val system = GuidedPathTransportSystem(this, network, name = "Sys")
         val cart = GuidedTransporter(system, placement, ConstantRV(10.0), lengthInZones, rule, "Cart")
 
         /** What was true of the guide path at each probed instant. */
