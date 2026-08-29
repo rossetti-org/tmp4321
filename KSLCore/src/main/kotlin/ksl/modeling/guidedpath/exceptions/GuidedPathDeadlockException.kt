@@ -116,7 +116,7 @@ class GuidedPathDeadlockException(
  * @param awaitedZoneName the zone it needs
  * @param idleTransporterName the idle transporter holding that zone
  */
-data class IdleVehicleObstruction(
+data class IdleTransporterObstruction(
     val time: Double,
     val blockedTransporterName: String,
     val awaitedZoneName: String,
@@ -136,5 +136,5 @@ data class IdleVehicleObstruction(
  * @param obstruction the transporters and zone involved
  */
 class GuidedPathObstructionException(
-    val obstruction: IdleVehicleObstruction
+    val obstruction: IdleTransporterObstruction
 ) : RuntimeException(obstruction.toString())

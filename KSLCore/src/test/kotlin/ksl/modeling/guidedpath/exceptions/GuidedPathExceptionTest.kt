@@ -169,7 +169,7 @@ class GuidedPathExceptionTest {
 
     @Test
     fun `an obstruction report says it is not a circular wait and names the idle transporter`() {
-        val o = IdleVehicleObstruction(7.5, "AGV2", "I4", "AGV1")
+        val o = IdleTransporterObstruction(7.5, "AGV2", "I4", "AGV1")
         val m = o.toString()
         assertTrue(m.contains("AGV1"), m)
         assertTrue(m.contains("AGV2"), m)
