@@ -3704,6 +3704,20 @@ open class ProcessModel(parent: ModelElement, name: String? = null) : ModelEleme
          */
         const val BLOCKAGE_PRIORITY : Int = KSLEvent.HIGH_PRIORITY - 10
 
+        /**
+         *  The default priority for a guided path transporter re-attempting its claim on a zone
+         *  that has just been released. The default is KSLEvent.HIGH_PRIORITY - 1.
+         *
+         *  The value is chosen relative to two neighbours. It is a higher priority than
+         *  MOVE_PRIORITY so that a woken transporter settles its claim before other transporters
+         *  finish traversals at the same instant, which is what keeps the order in which a zone is
+         *  freed and re-claimed observable and reproducible. It is a lower priority than
+         *  RESUME_PRIORITY so that it never preempts a process resumption already in flight. It is
+         *  one step ahead of SEIZE_PRIORITY so that space is settled before resource seizes at the
+         *  same instant read transporter state.
+         */
+        const val ZONE_CLAIM_PRIORITY : Int = KSLEvent.HIGH_PRIORITY - 1
+
         val logger: KLogger = KotlinLogging.logger {}
     }
 }
