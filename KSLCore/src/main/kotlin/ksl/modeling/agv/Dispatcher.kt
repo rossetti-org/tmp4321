@@ -7,7 +7,6 @@ import ksl.modeling.agv.policies.NearestVehiclePolicy
 import ksl.modeling.agv.policies.TaskSelectionRuleIfc
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.queue.Queue
-import ksl.simulation.KSLEvent
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response
@@ -85,35 +84,6 @@ open class Dispatcher @JvmOverloads constructor(
     /** Set when the dispatcher is woken while it is not dormant, so the wake is not lost. */
     private var wakePending: Boolean = false
 
-    /**
-     * How long to wait before reconsidering work that a pass left unassigned while vehicles were
-     * available.
-     *
-     * Without this the subsystem can strand a task permanently, and the way it happens is not
-     * obvious. The dispatcher is woken by a posting or an availability declaration, and by nothing
-     * else -- so a pass that leaves work on the board with vehicles free has, at that moment, no
-     * future event that will reconsider it. In a busy model the next arrival covers for it; in a
-     * quiet one the task simply waits forever while an idle fleet sits beside it. That breaks the
-     * invariant that every posted task is eventually assigned, completed, or explicitly cancelled.
-     *
-     * A pass leaves work assignable only when a policy declined to take it: an auction every vehicle
-     * refused, or a rule that found no vehicle able to reach a pickup. So in models whose policies
-     * always assign what they can, this never fires and changes nothing. Where it does fire, it is
-     * the difference between a fleet that recovers and one that does not.
-     *
-     * The default is arbitrary, as any interval in unnamed time units must be. Set it to match how
-     * quickly the modelled world could plausibly change its mind.
-     */
-    var retryInterval: Double = 10.0
-        set(value) {
-            require(value > 0.0) {
-                "The retry interval must be positive; zero would reconsider stranded work at the " +
-                        "same instant it was stranded, which is a busy loop rather than a retry."
-            }
-            field = value
-        }
-
-    private var retryEvent: KSLEvent<Nothing>? = null
 
     // ---- tasks -----------------------------------------------------------------------------
     // Task types are inner classes because QObject is an inner class of ModelElement, exactly as
@@ -373,6 +343,33 @@ open class Dispatcher @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Asks the dispatcher to look at the board again.
+     *
+     * The dispatcher is woken by the two things that can change a decision from *inside* this
+     * subsystem: a task being posted, and a vehicle declaring itself available. Between them those
+     * cover every internal change, because a vehicle that moves — finishing a task, finishing a
+     * disposition — re-declares when it stops, so anything that alters what a vehicle can reach
+     * already causes a fresh pass.
+     *
+     * What they do not cover is a decision that changes for reasons outside the subsystem: a shift
+     * beginning, a policy becoming permissive, an operator releasing a hold, a resource this fleet
+     * depends on coming back. The dispatcher cannot observe any of that and must not go looking —
+     * a dispatcher that woke on a timer to re-ask a question whose answer had not changed would be
+     * polling, which in a discrete-event model is both wasteful and a sign that a state change has
+     * gone unmodelled.
+     *
+     * So the model says so, by calling this. A shift change is an event the model already schedules;
+     * this is the one line that tells the fleet about it.
+     *
+     * Safe to call at any time, including while the dispatcher is mid-pass — the wake is remembered
+     * rather than lost. Calling it when nothing has changed costs one dispatching pass that assigns
+     * nothing.
+     */
+    fun reconsider() {
+        wake()
+    }
+
     /** True when the loop should skip its `hold` because a wake arrived while it was awake. */
     internal fun consumeWake(): Boolean {
         val pending = wakePending
@@ -417,27 +414,6 @@ open class Dispatcher @JvmOverloads constructor(
         val leftover = myNewlyDeclared.toList()
         myNewlyDeclared.clear()
         for (v in leftover) resume(v, null)
-        scheduleRetryIfWorkStranded()
-    }
-
-    /**
-     * Arranges to think again, when a pass has left assignable work with nobody scheduled to
-     * reconsider it.
-     *
-     * Guarded on there being both waiting work and an available vehicle, so it costs nothing in the
-     * ordinary case, and on no retry already being pending, so repeated passes do not accumulate
-     * events.
-     */
-    private fun scheduleRetryIfWorkStranded() {
-        if (board.numWaiting == 0 || myAvailable.isEmpty()) return
-        if (retryEvent?.isScheduled == true) return
-        retryEvent = schedule(::retryAction, retryInterval)
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    private fun retryAction(event: KSLEvent<Nothing>) {
-        retryEvent = null
-        wake()
     }
 
     private fun resume(vehicle: AgvVehicle, assignment: Assignment?) {
@@ -465,7 +441,6 @@ open class Dispatcher @JvmOverloads constructor(
         myAvailable.clear()
         myNewlyDeclared.clear()
         wakePending = false
-        retryEvent = null
         agent = null
     }
 

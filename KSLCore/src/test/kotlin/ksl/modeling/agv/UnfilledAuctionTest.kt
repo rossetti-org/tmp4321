@@ -16,6 +16,7 @@ import ksl.utilities.random.rvariable.ConstantRV
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -27,23 +28,35 @@ import kotlin.test.assertTrue
  *  demand the fleet cannot currently serve -- into a crash, and it would do so in the models where
  *  it matters most.
  *
- *  So the task waits and is auctioned again on the next pass, accruing waiting time all the while,
- *  which is exactly what should happen to work nobody will take. The count exists because a rising
- *  unfilled rate is the earliest sign that a bidding rule has been set too strictly, and nothing
- *  else in the output would say so: the fleet looks idle, the loads look slow, and no single
- *  statistic points at the reason.
+ *  So the task waits, accruing waiting time all the while, which is exactly what should happen to
+ *  work nobody will take. The count exists because a rising unfilled rate is the earliest sign that
+ *  a bidding rule has been set too strictly, and nothing else in the output would say so: the fleet
+ *  looks idle, the loads look slow, and no single statistic points at the reason.
+ *
+ *  ## Who is responsible for asking again
+ *
+ *  The dispatcher wakes on the two things that can change a decision from inside this subsystem: a
+ *  task being posted, and a vehicle declaring itself available. Between them those cover every
+ *  internal change, because a vehicle that moves re-declares when it stops.
+ *
+ *  A fleet that refuses for reasons *outside* the subsystem -- a shift not yet begun, here -- is a
+ *  different matter. The dispatcher cannot see a shift change and must not go looking for one: a
+ *  dispatcher waking on a timer to re-ask a question whose answer had not changed would be polling,
+ *  and polling in a discrete-event model means a state change has gone unmodelled. The shift change
+ *  is an event the model already schedules, so the model tells the fleet about it with
+ *  [Dispatcher.reconsider]. That is one line, at the place where the world actually changes.
  */
 class UnfilledAuctionTest {
 
-    /** Declines everything until [until], then bids normally. Silence is how a vehicle declines. */
-    private class DeclineUntil(private val until: Double) : BidPolicyIfc {
+    /** Declines while the shift has not begun. Silence is how a vehicle declines. */
+    private class OnShiftBid(private val onShift: () -> Boolean) : BidPolicyIfc {
         override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-            if (cfp.issuedAt < until) return null
+            if (!onShift()) return null
             return NetworkDistanceBid().bid(vehicle, cfp, network)
         }
     }
 
-    private class Shop(parent: ModelElement, declineUntil: Double) : ProcessModel(parent, "Shop") {
+    private class Shop(parent: ModelElement, val shiftStartsAt: Double) : ProcessModel(parent, "Shop") {
 
         val network = SimpleAgvNetwork.create()
 
@@ -55,16 +68,20 @@ class UnfilledAuctionTest {
             this, network, assignmentPolicy = ContractNetAssignmentPolicy(0.0), name = "Agv"
         )
 
+        var onShift = false
+            private set
+
         val cart = AgvVehicle(
             agv, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME), ConstantRV(10.0), name = "Cart1"
-        ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = DeclineUntil(declineUntil) }
+        ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = OnShiftBid { onShift } }
 
         var result: AgvTransportResult? = null
 
-        /** Board size while the fleet was refusing, so "stayed on the board" is observed and not
-         *  inferred from the load eventually being delivered. */
+        /** Board size and refusals while the fleet was off shift, so "stayed on the board" is
+         *  observed rather than inferred from the load eventually being delivered. */
         var boardWhileRefusing = -1
         var declinesWhileRefusing = 0
+        var unfilledWhileRefusing = 0.0
 
         inner class Part : Entity("Part") {
             val p = process(isDefaultProcess = true) {
@@ -76,83 +93,125 @@ class UnfilledAuctionTest {
         }
 
         override fun initialize() {
+            onShift = false
             activate(Part().p)
-            schedule(::sample, 25.0)
+            schedule(::sample, shiftStartsAt / 2.0)
+            schedule(::shiftBegins, shiftStartsAt)
         }
 
         @Suppress("UNUSED_PARAMETER")
         private fun sample(event: KSLEvent<Nothing>) {
             boardWhileRefusing = agv.dispatcher.taskQ.size
             declinesWhileRefusing = cart.agent?.callsDeclined ?: 0
+            unfilledWhileRefusing = agv.dispatcher.numAuctionsUnfilled.value
+        }
+
+        /** The world changes, and the model says so. Without the second line the fleet would never
+         *  learn: nothing inside the subsystem changed, so nothing inside it would wake. */
+        @Suppress("UNUSED_PARAMETER")
+        private fun shiftBegins(event: KSLEvent<Nothing>) {
+            onShift = true
+            agv.dispatcher.reconsider()
         }
     }
 
-    @Test
-    @DisplayName("Every vehicle declining is counted, the task waits, and it is served once bidding resumes")
-    fun anUnfilledAuctionIsCountedNotRaised() {
+    private fun run(shiftStartsAt: Double): Shop {
         val m = Model("UnfilledAuction")
-        val shop = Shop(m, declineUntil = 50.0)
+        val shop = Shop(m, shiftStartsAt)
         m.numberOfReplications = 1
-        m.lengthOfReplication = 600.0
-        // Notably: no exception. The whole point is that this runs.
+        m.lengthOfReplication = 900.0
         m.simulate()
+        return shop
+    }
+
+    @Test
+    @DisplayName("Every vehicle declining is counted, the task waits, and no exception is raised")
+    fun anUnfilledAuctionIsCountedNotRaised() {
+        // Notably: no exception. The whole point is that this runs.
+        val shop = run(shiftStartsAt = 50.0)
 
         // The task was on the board while the fleet was refusing it, and the vehicle was being asked
-        // rather than being passed over.
+        // rather than passed over.
         assertEquals(1, shop.boardWhileRefusing,
             "the task did not stay on the board while every vehicle was declining")
         assertTrue(shop.declinesWhileRefusing > 0,
             "the vehicle was never asked while it was set to decline, so nothing was tested")
+        assertTrue(shop.unfilledWhileRefusing > 0.0,
+            "an auction that nobody bid on was not counted")
 
-        // Unfilled auctions were counted, and there were several: the dispatcher keeps asking.
-        val unfilled = shop.agv.dispatcher.numAuctionsUnfilled.value
-        assertTrue(unfilled > 0.0, "an auction that nobody bid on was not counted")
-        assertTrue(shop.agv.dispatcher.numAuctionsRun.value > unfilled,
-            "every auction went unfilled, so the fleet never resumed bidding and the run proves " +
-                    "only that refusal does not crash")
-
-        // And once bidding resumed the load was served, having waited through the refusal.
+        // And once the shift began -- and the model said so -- the load was served, having waited
+        // through the refusal.
         val r = requireNotNull(shop.result) { "the load was never delivered" }
         assertTrue(r.waitForAssignment >= 50.0,
             "the load did not wait through the period in which the fleet refused it: $r")
         assertEquals(1.0, shop.agv.dispatcher.numTasksCompleted.value)
         assertEquals(0.0, shop.agv.dispatcher.numTasksCancelled.value,
             "an unfilled auction cancelled the task rather than leaving it on the board")
+        assertTrue(shop.agv.dispatcher.numAuctionsRun.value > shop.agv.dispatcher.numAuctionsUnfilled.value,
+            "every auction went unfilled, so the fleet never resumed bidding")
     }
 
     @Test
-    @DisplayName("Stranded work is reconsidered on a timer, and the interval must be positive")
-    fun strandedWorkIsReconsidered() {
-        // The retry is what makes the previous test's load ever get served. Without it the
-        // dispatcher, having gone dormant after an unfilled auction, has no future event that would
-        // reconsider the task: it is woken by a posting or an availability declaration and by
-        // nothing else. In a busy model the next arrival covers for it; in a quiet one an idle fleet
-        // sits beside a full board indefinitely, which is the invariant this discharges.
-        fun waitWith(interval: Double): Double {
-            val m = Model("Retry")
-            val shop = Shop(m, declineUntil = 50.0)
-            shop.agv.dispatcher.retryInterval = interval
-            m.numberOfReplications = 1
-            m.lengthOfReplication = 900.0
-            m.simulate()
-            return requireNotNull(shop.result).waitForAssignment
-        }
+    @DisplayName("A change the model does not announce is a change the dispatcher cannot see")
+    fun anUnannouncedChangeIsNotNoticed() {
+        // The counterpart, and the reason `reconsider` exists rather than a timer. Here the shift
+        // begins but nothing tells the fleet, and nothing inside the subsystem changes -- no task is
+        // posted, no vehicle becomes available, no vehicle moves. So no pass happens and the load
+        // waits out the run beside a cart that would now happily take it.
+        //
+        // This is the honest behaviour, not a defect. A dispatcher that polled would paper over it
+        // and would go on polling in every model that never needed it; the alternative on offer is
+        // one line at the point where the world actually changes. What the subsystem owes is that
+        // the task is not *lost* -- it is on the board, counted, and reported at the horizon.
+        val m = Model("UnannouncedShift")
+        val shop = object : ProcessModel(m, "Shop") {
+            val network = SimpleAgvNetwork.create()
 
-        val brisk = waitWith(5.0)
-        val slow = waitWith(40.0)
-        assertTrue(brisk >= 50.0 && slow >= 50.0,
-            "the load was assigned before the fleet resumed bidding: $brisk, $slow")
-        assertTrue(slow > brisk,
-            "the retry interval made no difference, so stranded work is not being reconsidered on " +
-                    "a timer at all: brisk=$brisk slow=$slow")
+            init {
+                spatialModel = network
+            }
 
-        // A zero interval would reconsider stranded work at the instant it was stranded, which is a
-        // busy loop rather than a retry.
-        for (bad in listOf(0.0, -1.0)) {
-            val m = Model("RetryBad")
-            val shop = Shop(m, declineUntil = 50.0)
-            val e = runCatching { shop.agv.dispatcher.retryInterval = bad }.exceptionOrNull()
-            assertTrue(e is IllegalArgumentException, "a retry interval of $bad should be refused")
+            val agv = AgvSystem(
+                this, network, assignmentPolicy = ContractNetAssignmentPolicy(0.0), name = "Agv"
+            )
+            var onShift = false
+            val cart = AgvVehicle(
+                agv, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME), ConstantRV(10.0), name = "Cart1"
+            ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = OnShiftBid { onShift } }
+            var result: AgvTransportResult? = null
+
+            inner class Part : Entity("Part") {
+                val p = process(isDefaultProcess = true) {
+                    currentLocation = network.requireLocation(SimpleAgvNetwork.ENTRY_STATION)
+                    result = transportByAgv(
+                        agv, SimpleAgvNetwork.EXIT_STATION, origin = SimpleAgvNetwork.ENTRY_STATION
+                    )
+                }
+            }
+
+            override fun initialize() {
+                onShift = false
+                activate(Part().p)
+                schedule(::shiftBeginsQuietly, 50.0)
+            }
+
+            @Suppress("UNUSED_PARAMETER")
+            private fun shiftBeginsQuietly(event: KSLEvent<Nothing>) {
+                onShift = true      // and deliberately nothing else
+            }
         }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 900.0
+        m.simulate()
+
+        assertNull(shop.result,
+            "the load was delivered without the model announcing the change, which means something " +
+                    "is waking the dispatcher on its own -- check that no polling has crept back in")
+
+        // Not lost, though: still on the board, counted, and reported at the horizon.
+        assertEquals(1, shop.agv.unfinishedTasksAtHorizon,
+            "the stranded task was not reported at the horizon")
+        assertEquals(1, shop.agv.loadsAwaitingPickupAtHorizon)
+        assertEquals(0.0, shop.agv.dispatcher.numTasksCompleted.value)
     }
 }
