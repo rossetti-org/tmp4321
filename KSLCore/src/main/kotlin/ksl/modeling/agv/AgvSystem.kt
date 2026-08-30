@@ -1,7 +1,9 @@
 package ksl.modeling.agv
 
+import ksl.modeling.agent.AgentMessage
 import ksl.modeling.agent.AgentModel
 import ksl.modeling.agv.policies.AssignmentPolicyIfc
+import ksl.modeling.agv.policies.CallForProposals
 import ksl.modeling.agv.policies.DispatchContext
 import ksl.modeling.agv.policies.Disposition
 import ksl.modeling.agv.policies.NearestVehiclePolicy
@@ -251,6 +253,59 @@ open class AgvSystem @JvmOverloads constructor(
     internal inner class VehicleAgent(val vehicle: AgvVehicle) : Agent("${vehicle.name}:Agent") {
 
         internal var assignment: Assignment? = null
+
+        /** How many calls for proposals this vehicle answered, and how many it declined. Kept on the
+         *  agent rather than the vehicle because they are per-replication facts about a negotiation,
+         *  and because a test that could not see them would have to infer declining from silence. */
+        internal var bidsSubmitted: Int = 0
+            private set
+        internal var callsDeclined: Int = 0
+            private set
+
+        init {
+            // Answering a call for proposals is done by a mailbox arrival handler rather than by the
+            // control loop, and the reason is structural. A vehicle spends almost all of its time
+            // suspended -- dormant, travelling, loading -- so a loop that had to be *at* a receive
+            // point to hear a call would only ever bid when it happened to be idle, which is exactly
+            // the vehicle a dispatcher least needs to ask about. An arrival handler answers wherever
+            // the vehicle is.
+            //
+            // It also has to be non-suspending, and that is not a limitation to work around: a bid
+            // is delivered synchronously inside the initiator's broadcast, which is what lets an
+            // auction with a zero deadline collect every bid rather than none. `BidPolicyIfc.bid`
+            // is a plain function, so the type system enforces this rather than a comment.
+            mailbox.onArrival { message -> respond(message) }
+        }
+
+        private fun respond(message: AgentMessage) {
+            when (message) {
+                is AgentMessage.Request<*> -> {
+                    val cfp = message.payload as? CallForProposals ?: return
+                    // Handled: take it out of the mailbox so calls do not accumulate over a run.
+                    mailbox.consume(message)
+                    val initiator = message.from as? Agent ?: return
+                    val bid = vehicle.bidPolicy.bid(vehicle, cfp, network)
+                    if (bid == null) {
+                        // Declining is ordinary operation, not a failure. Saying nothing is how a
+                        // vehicle declines; there is deliberately no "I decline" message, because a
+                        // dispatcher that received one would have to distinguish it from a bid.
+                        callsDeclined++
+                        return
+                    }
+                    bidsSubmitted++
+                    initiator.mailbox.deliver(
+                        AgentMessage.Propose(this, bid, message.conversationId!!)
+                    )
+                }
+                // The outcome of a negotiation reaches this vehicle as an assignment through the
+                // ordinary dispatching path, so these carry no information it needs. They are
+                // consumed rather than ignored: an unread message is a slow leak within a
+                // replication, and a mailbox that fills is a bug that only shows up in long runs.
+                is AgentMessage.Accept -> mailbox.consume(message)
+                is AgentMessage.Reject -> mailbox.consume(message)
+                else -> Unit
+            }
+        }
 
         internal var tour: Tour? = null
             private set

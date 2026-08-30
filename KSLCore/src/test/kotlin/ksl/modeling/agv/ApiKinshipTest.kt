@@ -80,7 +80,15 @@ class ApiKinshipTest {
         // suspending functions that are members or extensions OF THE BUILDER. A policy interface
         // whose method is a plain `suspend fun assign(context)` therefore cannot be called from the
         // dispatcher's process at all -- it does not compile. Declaring it as a member extension is
-        // the only form the language permits, so the seam is the one sanctioned exception.
+        // the only form the language permits, so the two seams that must suspend take that form:
+        //
+        //   assign   -- the policy seam itself, called as `with(policy) { assign(context) }`
+        //   auction  -- DispatchContext's Contract-Net negotiation, which must call `contractNet`,
+        //               itself a suspending extension on the builder, and whose deadline is a
+        //               suspension a policy is meant to see it is paying for.
+        //
+        // Both are members of a type, so neither can be called without naming that type at the call
+        // site; neither hides a suspension behind a bare helper name.
         //
         // What stays banned is the loose kind: a top-level or private helper that hides a
         // suspension point behind a name, which is what makes a control loop unreadable.
@@ -103,9 +111,11 @@ class ApiKinshipTest {
                     "which simulated time passes.")
 
         assertEquals(
-            setOf("assign"), found.map { it.second }.toSet(),
-            "the only permitted KSLProcessBuilder extension in this package is the assignment " +
-                    "policy seam, which @RestrictsSuspension forces into that form. Found: $found"
+            setOf("assign", "auction"), found.map { it.second }.toSet(),
+            "the only permitted KSLProcessBuilder extensions in this package are the two seams that " +
+                    "@RestrictsSuspension forces into that form -- the assignment policy and the " +
+                    "Contract-Net auction. A new name here is a new place a suspension can hide, and " +
+                    "should be justified before it is added to this list. Found: $found"
         )
     }
 

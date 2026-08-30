@@ -3,6 +3,7 @@ package ksl.modeling.agv.policies
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.AssignmentProposal
 import ksl.modeling.agv.TaskBoard
+import ksl.modeling.agent.contractNet
 import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.utilities.random.rng.RNStreamIfc
@@ -59,6 +60,67 @@ class DispatchContext internal constructor(
     // There is deliberately no `waitFor` here. A policy receives the process builder as its
     // receiver, so it consumes simulated time with `delay` directly -- the same verb it would use
     // anywhere else, with no wrapper to learn and nothing this object has to anticipate.
+
+    /**
+     * Runs a Contract-Net negotiation over the available vehicles and returns the winning bid.
+     *
+     * A real auction, not a distance rule wearing an auction's clothes. The dispatcher broadcasts
+     * the call and each vehicle answers with whatever its own [BidPolicyIfc] makes of it, so two
+     * fleets with the same layout and different bidding rules reach different awards. A vehicle may
+     * decline, and declining is silence rather than a message -- a dispatcher receiving an "I
+     * decline" would have to tell it apart from a bid.
+     *
+     * **The deadline consumes simulated time**, and that is the point of expressing an auction as
+     * something a policy does rather than as a rule it evaluates. Negotiation is not free; a model
+     * that charges for it is more faithful than one that awards instantaneously, and the cost is
+     * visible in the loads' waiting time rather than hidden in an assumption.
+     *
+     * A deadline of zero is well defined and is *not* a trap. `contractNet` collects the proposals
+     * that reached it before the deadline elapsed, and a bid is computed by a non-suspending mailbox
+     * handler that answers inside the broadcast itself -- so at zero every vehicle has still bid.
+     * That safety rests on [BidPolicyIfc.bid] not being a suspending function, which the type system
+     * enforces rather than a convention: a bidding rule that consumed simulated time could not be
+     * written, so a zero deadline cannot silently start collecting nothing.
+     *
+     * Ties are broken by **vehicle name**, not by position in the fleet. Elsewhere in this
+     * subsystem declaration order is the tiebreaker, and here it would be wrong: an auction treats
+     * its bidders as symmetric except for what they offer, so two vehicles quoting the same number
+     * should get the same answer however the fleet happened to be declared. Name is stable under
+     * reordering, total, and explicable to a modeller looking at a result they did not expect.
+     * A supplied [selectBest] takes on that responsibility for itself.
+     *
+     * @param cfp what the vehicles are being asked to bid on
+     * @param deadline how long to wait for proposals, in simulated time. Zero is instantaneous.
+     * @return the best bid by [selectBest], or null when every vehicle declined
+     */
+    suspend fun KSLProcessBuilder.auction(
+        cfp: CallForProposals,
+        deadline: Double,
+        selectBest: (List<Bid>) -> Bid? = ::lowestBidByName
+    ): Bid? {
+        require(deadline >= 0.0) { "An auction deadline cannot be negative." }
+        // The bidder list comes from the fleet the dispatcher was given, mapped to this
+        // replication's agents. Never from `AgentModel.agents`, which does not contain them: they
+        // are created inside initialize() and so are runtime agents by construction.
+        val bidders = available.mapNotNull { it.agent }
+        if (bidders.isEmpty()) return null
+        dispatcher.auctionRun()
+        val outcome = contractNet<CallForProposals, Bid>(
+            bidders, cfp, deadline,
+            selectBest = { proposals ->
+                val best = selectBest(proposals.map { it.proposal })
+                // Map the winning bid back to the proposal that carried it, by identity: two
+                // vehicles may legitimately bid the same value, and comparing by value would then
+                // award to whichever proposal happened to be first in the list.
+                proposals.firstOrNull { it.proposal === best }
+            }
+        )
+        if (outcome == null) {
+            dispatcher.auctionUnfilled()
+            return null
+        }
+        return outcome.winningProposal.proposal
+    }
 
     /**
      * Distance from where a vehicle is now to a location, **along the guide path**.
@@ -271,3 +333,70 @@ private inline fun greedyByDistance(
     }
     return proposals
 }
+
+/**
+ * Award each task by Contract-Net auction: the dispatcher calls for proposals, the vehicles bid, the
+ * best bid wins.
+ *
+ * The difference from every rule above is where the knowledge lives. `NearestVehiclePolicy` computes
+ * a number *about* each vehicle from the outside; this asks each vehicle what it makes of the job
+ * and lets it answer with whatever it knows about itself -- its speed, its charge, its faults, its
+ * own view of what it is willing to take on. Swap the fleet's [BidPolicyIfc] and the awards change
+ * without the dispatcher being touched, which is precisely what a passive resource cannot do,
+ * because it has nothing with which to hold an opinion.
+ *
+ * Tasks are auctioned one at a time, in the order the selection rule chose, and a vehicle that wins
+ * one is withdrawn before the next call goes out. That is a greedy sequence of auctions rather than
+ * a combinatorial one: it can be beaten on a set of tasks that would be better matched jointly, and
+ * a policy wanting that should collect bids for all of them and solve. The greedy form is here
+ * because it is the one Contract-Net actually describes.
+ *
+ * @param deadline how long each call for proposals stays open, in simulated time. Charged per
+ *   auction, so a fleet with several tasks outstanding pays it several times over -- which is the
+ *   honest cost of negotiating each job separately.
+ * @param selectBest which bid wins. Lower is better by convention, so the default takes the minimum.
+ */
+class ContractNetAssignmentPolicy(
+    val deadline: Double,
+    val selectBest: (List<Bid>) -> Bid? = ::lowestBidByName
+) : AssignmentPolicyIfc {
+
+    init {
+        require(deadline >= 0.0) { "An auction deadline cannot be negative." }
+    }
+
+    override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
+        val proposals = mutableListOf<AssignmentProposal>()
+        val spokenFor = mutableSetOf<AgvVehicle>()
+        // The board is a live view, so the list is taken once here: auctioning takes simulated time
+        // and tasks posted during it belong to the next pass, not to a list being iterated.
+        for (task in context.board.unassigned.toList()) {
+            val stillFree = context.available.filter { it !in spokenFor }
+            if (stillFree.isEmpty()) break
+            val round = DispatchContext(
+                context.board, stillFree, context.network, context.dispatcher.time, context.dispatcher
+            )
+            val cfp = CallForProposals(task, context.dispatcher.time)
+            // SUSPENDS for the deadline. Written at the call site so the cost of negotiating is
+            // visible in the policy that incurs it.
+            val winning = with(round) { auction(cfp, deadline, selectBest) } ?: continue
+            spokenFor.add(winning.vehicle)
+            proposals.add(AssignmentProposal(winning.vehicle, task, terms = winning.value))
+        }
+        return proposals
+    }
+
+    override fun toString(): String = "ContractNetAssignmentPolicy(deadline=$deadline)"
+}
+
+/**
+ * The default award rule: lowest bid, ties broken by vehicle name.
+ *
+ * The tiebreak is the part that matters. Exact ties are not a curiosity in this subsystem -- a
+ * symmetric layout with identical vehicles produces them constantly -- and a rule that left them to
+ * the order proposals happened to arrive in would make the winner depend on the order the fleet was
+ * declared, which is not something a negotiation should be able to see. Name is intrinsic to the
+ * vehicle, stable under any reordering, and total.
+ */
+fun lowestBidByName(bids: List<Bid>): Bid? =
+    bids.minWithOrNull(compareBy({ it.value }, { it.vehicle.name }))

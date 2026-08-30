@@ -7,6 +7,7 @@ import ksl.modeling.agv.policies.NearestVehiclePolicy
 import ksl.modeling.agv.policies.TaskSelectionRuleIfc
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.queue.Queue
+import ksl.simulation.KSLEvent
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response
@@ -83,6 +84,36 @@ open class Dispatcher @JvmOverloads constructor(
 
     /** Set when the dispatcher is woken while it is not dormant, so the wake is not lost. */
     private var wakePending: Boolean = false
+
+    /**
+     * How long to wait before reconsidering work that a pass left unassigned while vehicles were
+     * available.
+     *
+     * Without this the subsystem can strand a task permanently, and the way it happens is not
+     * obvious. The dispatcher is woken by a posting or an availability declaration, and by nothing
+     * else -- so a pass that leaves work on the board with vehicles free has, at that moment, no
+     * future event that will reconsider it. In a busy model the next arrival covers for it; in a
+     * quiet one the task simply waits forever while an idle fleet sits beside it. That breaks the
+     * invariant that every posted task is eventually assigned, completed, or explicitly cancelled.
+     *
+     * A pass leaves work assignable only when a policy declined to take it: an auction every vehicle
+     * refused, or a rule that found no vehicle able to reach a pickup. So in models whose policies
+     * always assign what they can, this never fires and changes nothing. Where it does fire, it is
+     * the difference between a fleet that recovers and one that does not.
+     *
+     * The default is arbitrary, as any interval in unnamed time units must be. Set it to match how
+     * quickly the modelled world could plausibly change its mind.
+     */
+    var retryInterval: Double = 10.0
+        set(value) {
+            require(value > 0.0) {
+                "The retry interval must be positive; zero would reconsider stranded work at the " +
+                        "same instant it was stranded, which is a busy loop rather than a retry."
+            }
+            field = value
+        }
+
+    private var retryEvent: KSLEvent<Nothing>? = null
 
     // ---- tasks -----------------------------------------------------------------------------
     // Task types are inner classes because QObject is an inner class of ModelElement, exactly as
@@ -207,6 +238,24 @@ open class Dispatcher @JvmOverloads constructor(
 
     private val myNumAssignmentsRevoked = Counter(this, "${this.name}:NumAssignmentsRevoked")
     val numAssignmentsRevoked: CounterCIfc get() = myNumAssignmentsRevoked
+
+    private val myNumAuctionsRun = Counter(this, "${this.name}:NumAuctionsRun")
+    val numAuctionsRun: CounterCIfc get() = myNumAuctionsRun
+
+    /**
+     * Auctions in which every vehicle declined.
+     *
+     * Counted rather than raised. A fleet that is out of range, out of charge or simply all busy has
+     * nothing to offer, and that is ordinary operation of a negotiated system rather than a fault --
+     * the task stays on the board and is auctioned again on the next pass. It is worth counting
+     * because a rising unfilled rate is the earliest sign that a bidding rule has been set too
+     * strictly, and nothing else in the output would say so.
+     */
+    private val myNumAuctionsUnfilled = Counter(this, "${this.name}:NumAuctionsUnfilled")
+    val numAuctionsUnfilled: CounterCIfc get() = myNumAuctionsUnfilled
+
+    internal fun auctionRun() = myNumAuctionsRun.increment()
+    internal fun auctionUnfilled() = myNumAuctionsUnfilled.increment()
 
     /**
      * How long a task waited before a vehicle committed to it.
@@ -368,6 +417,27 @@ open class Dispatcher @JvmOverloads constructor(
         val leftover = myNewlyDeclared.toList()
         myNewlyDeclared.clear()
         for (v in leftover) resume(v, null)
+        scheduleRetryIfWorkStranded()
+    }
+
+    /**
+     * Arranges to think again, when a pass has left assignable work with nobody scheduled to
+     * reconsider it.
+     *
+     * Guarded on there being both waiting work and an available vehicle, so it costs nothing in the
+     * ordinary case, and on no retry already being pending, so repeated passes do not accumulate
+     * events.
+     */
+    private fun scheduleRetryIfWorkStranded() {
+        if (board.numWaiting == 0 || myAvailable.isEmpty()) return
+        if (retryEvent?.isScheduled == true) return
+        retryEvent = schedule(::retryAction, retryInterval)
+    }
+
+    @Suppress("UNUSED_PARAMETER")
+    private fun retryAction(event: KSLEvent<Nothing>) {
+        retryEvent = null
+        wake()
     }
 
     private fun resume(vehicle: AgvVehicle, assignment: Assignment?) {
@@ -395,6 +465,7 @@ open class Dispatcher @JvmOverloads constructor(
         myAvailable.clear()
         myNewlyDeclared.clear()
         wakePending = false
+        retryEvent = null
         agent = null
     }
 
