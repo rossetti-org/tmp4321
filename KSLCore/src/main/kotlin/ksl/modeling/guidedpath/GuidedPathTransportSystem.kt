@@ -127,6 +127,10 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     val movementHoldQ: QueueCIfc<ProcessModel.Entity>
         get() = myMovementHoldQ
 
+    /** The queue itself, for the process verbs that suspend an entity in it. */
+    internal val movementHoldQueue: HoldQueue
+        get() = myMovementHoldQ
+
     internal fun addTransporter(transporter: GuidedTransporter) {
         require(model.isNotRunning) {
             "A transporter cannot be added while the model is running."

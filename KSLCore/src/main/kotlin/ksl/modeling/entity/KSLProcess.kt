@@ -34,6 +34,7 @@ import ksl.modeling.entity.ProcessModel.Companion.WAIT_FOR_PRIORITY
 import ksl.modeling.entity.ProcessModel.Companion.YIELD_PRIORITY
 import ksl.modeling.entity.ProcessModel.Entity
 import ksl.modeling.queue.Queue
+import ksl.modeling.guidedpath.*
 import ksl.modeling.spatial.*
 import ksl.simulation.ModelElement
 import ksl.utilities.GetValueIfc
@@ -2229,5 +2230,191 @@ interface KSLProcessBuilder {
         return transferTo(entity.conveyorRequest!!, nextConveyor,
             entryLocation, exitPriority, requestPriority, requestResumePriority, suspensionName)
     }
+
+    // ---- guided path transporters -------------------------------------------------------------
+    //
+    // These sit beside transportWith(), and are written in the same shape, because they answer the
+    // same question at a higher fidelity: transportWith() moves a resource that passes through
+    // everything in its way, while these move one that has to claim the space ahead of it before it
+    // can go there. A model that cares about congestion needs the second and cannot get it from the
+    // first.
+
+    /**
+     * Asks for a transporter from a pool and waits until one has come to collect the entity.
+     *
+     * The entity waits twice, and for two different things: first for a transporter to become free
+     * at all, then for the one chosen to travel to the pickup. Both are ordinary waiting and both
+     * are reflected in the pool's and the transporter's statistics.
+     *
+     * The returned request is the entity's claim on that transporter. Hold it until the journey is
+     * done, then release it.
+     *
+     * @param pool the transporters to ask
+     * @param pickupLocation the junction or station the transporter should come to
+     * @param requestPriority orders this request against others made at the same instant
+     * @param suspensionName names this suspension point when a process has several
+     * @return the claim on the transporter that came
+     */
+    suspend fun requestGuidedTransporter(
+        pool: GuidedTransporterPoolWithQ,
+        pickupLocation: String,
+        requestPriority: Int = TRANSPORT_REQUEST_PRIORITY,
+        suspensionName: String? = null
+    ): GuidedTransportRequest {
+        val system = pool.system
+        val pickup = system.network.requireLocation(pickupLocation)
+        val requestedAt = pool.time
+        // Wait for a transporter to be free, then choose one. Choosing only among transporters that
+        // are free at this instant is what lets the seize below return without waiting again, and
+        // what stops an entity being committed to a particular transporter before a nearer one
+        // comes back.
+        var chosen = pool.selectFor(pickup)
+        while (chosen == null) {
+            hold(pool.holdQueue, suspensionName = "$suspensionName:awaitTransporter:${pool.name}")
+            chosen = pool.selectFor(pickup)
+        }
+        val allocation = seize(chosen, 1, requestPriority, pool.seizeQ, suspensionName)
+        val request = GuidedTransportRequest(chosen, entity, allocation, pool.time)
+        request.requestedAt = requestedAt
+        // Taken before the empty move, so that blocking on the way to collect the entity counts
+        // against the journey it belongs to.
+        request.blockedAtAllocation = chosen.cumulativeBlockedTime
+        // Fetch the entity. A transporter already standing there has nothing to do.
+        val startedEmpty = pool.time
+        if (system.beginJourney(chosen, pickupLocation, TransporterState.MOVING_EMPTY, entity)) {
+            hold(system.movementHoldQueue, suspensionName = "$suspensionName:emptyMove:${chosen.name}")
+        }
+        request.emptyMoveTime = pool.time - startedEmpty
+        return request
+    }
+
+    /**
+     * Carries the entity to a destination on the transporter it has claimed.
+     *
+     * The loading and unloading delays are the time the entity spends being put on and taken off,
+     * during which the transporter is stationary and still holding its space -- which is why they
+     * belong here rather than being left to a separate delay: a transporter loading in a junction
+     * blocks that junction for exactly as long.
+     *
+     * @param request the claim obtained from requestGuidedTransporter
+     * @param destination the junction or station to be carried to
+     * @param loadingDelay how long it takes to load the entity
+     * @param unLoadingDelay how long it takes to unload it
+     * @param loadingPriority orders the loading delay against other events at the same instant
+     * @param unLoadingPriority orders the unloading delay likewise
+     * @param suspensionName names this suspension point when a process has several
+     * @return what the journey cost, including any time spent unable to claim the space ahead
+     */
+    suspend fun transportBy(
+        request: GuidedTransportRequest,
+        destination: String,
+        loadingDelay: GetValueIfc = ConstantRV.ZERO,
+        unLoadingDelay: GetValueIfc = ConstantRV.ZERO,
+        loadingPriority: Int = DELAY_PRIORITY,
+        unLoadingPriority: Int = DELAY_PRIORITY,
+        suspensionName: String? = null
+    ): GuidedTransportResult {
+        request.requireUsable("carry entity (${entity.name}) to ($destination)")
+        require(request.entity === entity) {
+            "Entity (${entity.name}) tried to be carried using a request belonging to entity " +
+                    "(${request.entity.name})."
+        }
+        val transporter = request.transporter
+        val system = transporter.system
+        if (loadingDelay != ConstantRV.ZERO) {
+            delay(loadingDelay, loadingPriority, "$suspensionName:loading")
+        }
+        val startedLoaded = system.time
+        val moving = system.beginJourney(transporter, destination, TransporterState.MOVING_LOADED, entity)
+        // Read while the journey is under way. The route is cleared on arrival, so asking after the
+        // hold returns nothing and the journey appears to have covered no ground at all.
+        val route = transporter.currentRoute
+        if (moving) {
+            hold(system.movementHoldQueue, suspensionName = "$suspensionName:transport:${transporter.name}")
+        }
+        request.loadedMoveTime = system.time - startedLoaded
+        request.zonesTraversed = route?.zonesTraversed ?: 0
+        request.routeLength = route?.totalLength ?: 0.0
+        // The entity is where the transporter is, which is what makes distance-based logic later in
+        // the process work without the modeler having to say so.
+        entity.currentLocation = transporter.currentLocation
+        if (unLoadingDelay != ConstantRV.ZERO) {
+            delay(unLoadingDelay, unLoadingPriority, "$suspensionName:unloading")
+        }
+        return GuidedTransportResult(
+            totalTime = system.time - request.requestedAt,
+            emptyMoveTime = request.emptyMoveTime,
+            loadedMoveTime = request.loadedMoveTime,
+            blockedTime = (transporter.cumulativeBlockedTime - request.blockedAtAllocation).coerceAtLeast(0.0),
+            zonesTraversed = request.zonesTraversed,
+            routeLength = request.routeLength
+        )
+    }
+
+    /**
+     * Gives the transporter back to its pool.
+     *
+     * If anything is waiting for a transporter, this one goes straight to whoever has waited
+     * longest and the idle rule is not consulted: sending it off to a home base while work waits
+     * would be worse than useless. Otherwise the pool's idle rule decides where it waits, and the
+     * entity does not wait for it to get there.
+     *
+     * The request is inert afterwards.
+     *
+     * @param request the claim to give up
+     * @param pool the pool the transporter came from
+     * @param suspensionName names this suspension point when a process has several
+     */
+    suspend fun releaseGuidedTransporter(
+        request: GuidedTransportRequest,
+        pool: GuidedTransporterPoolWithQ,
+        suspensionName: String? = null
+    ) {
+        request.requireUsable("release transporter (${request.transporter.name})")
+        val transporter = request.transporter
+        release(request.allocation)
+        request.state = GuidedTransportRequestState.COMPLETED
+        pool.dispose(transporter)
+    }
+
+    /**
+     * Asks for a transporter, is carried to a destination, and gives the transporter back.
+     *
+     * The whole of an ordinary transport in one call, and the form most models want. Where a
+     * process has to do something between being loaded and being unloaded, use the three verbs it
+     * is built from instead.
+     *
+     * @param pool the transporters to ask
+     * @param destination the junction or station to be carried to
+     * @param pickupLocation where the transporter should collect the entity, by default wherever
+     *   the entity already is
+     * @param loadingDelay how long it takes to load the entity
+     * @param unLoadingDelay how long it takes to unload it
+     * @param requestPriority orders this request against others made at the same instant
+     * @param loadingPriority orders the loading delay against other events at the same instant
+     * @param unLoadingPriority orders the unloading delay likewise
+     * @param suspensionName names this suspension point when a process has several
+     * @return what the journey cost
+     */
+    suspend fun guidedTransport(
+        pool: GuidedTransporterPoolWithQ,
+        destination: String,
+        pickupLocation: String = entity.currentLocation.name,
+        loadingDelay: GetValueIfc = ConstantRV.ZERO,
+        unLoadingDelay: GetValueIfc = ConstantRV.ZERO,
+        requestPriority: Int = TRANSPORT_REQUEST_PRIORITY,
+        loadingPriority: Int = DELAY_PRIORITY,
+        unLoadingPriority: Int = DELAY_PRIORITY,
+        suspensionName: String? = null
+    ): GuidedTransportResult {
+        val request = requestGuidedTransporter(pool, pickupLocation, requestPriority, suspensionName)
+        val result = transportBy(
+            request, destination, loadingDelay, unLoadingDelay,
+            loadingPriority, unLoadingPriority, suspensionName
+        )
+        releaseGuidedTransporter(request, pool, suspensionName)
+        return result
+    }
+
 
 }

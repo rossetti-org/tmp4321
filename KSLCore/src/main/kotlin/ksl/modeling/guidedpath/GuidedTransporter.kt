@@ -164,6 +164,20 @@ class GuidedTransporter @JvmOverloads constructor(
             field = value
         }
 
+    /**
+     * Where this transporter waits when it has nothing to do, or null when it waits where it stops.
+     *
+     * Named rather than resolved, so that a network can be rebuilt from data without the fleet
+     * holding stale references into the old one.
+     */
+    var homeBase: String? = null
+        set(value) {
+            require(model.isNotRunning) {
+                "The home base cannot be changed while the model is running."
+            }
+            field = value
+        }
+
     /** How often the velocity is drawn when it is random. */
     var velocitySampling: VelocitySampling = VelocitySampling.PER_MOVE
         set(value) {
@@ -228,6 +242,16 @@ class GuidedTransporter @JvmOverloads constructor(
      */
     var transporterState: TransporterState = TransporterState.IDLE
         internal set(value) {
+            // Blocked time is accumulated here rather than read back off the time-weighted
+            // statistic, because that statistic reports an average over the post-warm-up interval
+            // and only moves when the state does. A journey needs the elapsed blocked time between
+            // two instants, which is a different quantity.
+            if (field == TransporterState.BLOCKED && value != TransporterState.BLOCKED) {
+                myCumulativeBlockedTime += time - blockedSince
+                blockedSince = Double.NaN
+            } else if (field != TransporterState.BLOCKED && value == TransporterState.BLOCKED) {
+                blockedSince = time
+            }
             field = value
             myFracTimeMoving.value = isMoving.toDouble()
             myFracTimeBlocked.value = (value == TransporterState.BLOCKED).toDouble()
@@ -391,6 +415,18 @@ class GuidedTransporter @JvmOverloads constructor(
         myNumTimesBlocked.increment()
     }
 
+    private var blockedSince: Double = Double.NaN
+    private var myCumulativeBlockedTime: Double = 0.0
+
+    /**
+     * How long this transporter has spent blocked so far in this replication, including any block
+     * still in progress. Differences of this between two instants give the blocked time within a
+     * journey.
+     */
+    internal val cumulativeBlockedTime: Double
+        get() = if (blockedSince.isNaN()) myCumulativeBlockedTime
+        else myCumulativeBlockedTime + (time - blockedSince)
+
     // ---- placement and movement ---------------------------------------------------------------
 
     /**
@@ -398,6 +434,8 @@ class GuidedTransporter @JvmOverloads constructor(
      * Called for every transporter at the start of every replication.
      */
     internal fun placeAtInitialPosition() {
+        blockedSince = Double.NaN
+        myCumulativeBlockedTime = 0.0
         myOccupiedZones.clear()
         currentRoute = null
         claimedZone = null

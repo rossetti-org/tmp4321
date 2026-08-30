@@ -92,7 +92,11 @@ class GuidedTransportRequest internal constructor(
     internal var loadedMoveTime: Double = 0.0
     internal var zonesTraversed: Int = 0
     internal var routeLength: Double = 0.0
-    internal var blockedAtStart: Double = 0.0
+    /** When the entity asked for a transporter, which precedes the allocation by the pool wait. */
+    internal var requestedAt: Double = timeAllocated
+
+    /** The transporter's blocked-time total at allocation, so the journey's own share can be told. */
+    internal var blockedAtAllocation: Double = 0.0
 
     /**
      * Checks that this request may still be used, and says what went wrong when it may not.
