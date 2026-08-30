@@ -14,6 +14,8 @@ import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response
 import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
@@ -132,6 +134,65 @@ open class AgvSystem @JvmOverloads constructor(
         myTransportTime.value = value
     }
 
+    // ---- horizon diagnostics -------------------------------------------------------------------
+    // Counters rather than flags, because "did this happen" is much less useful than "how often":
+    // one stranded task in a warm-up replication is noise, and the same number every replication is
+    // a fleet that cannot meet its demand.
+
+    /**
+     * Runs the horizon diagnostics, and exists **only** to run them before the counters below
+     * observe themselves.
+     *
+     * `Counter.replicationEnded` is where a counter records its value for the across-replication
+     * statistics, and `ModelElement` runs `replicationEnded` for children before self. A count
+     * incremented in `AgvSystem.replicationEnded` is therefore incremented *after* every counter has
+     * already snapshotted: the within-replication value is right, the across-replication average is
+     * zero, and nothing says so. Every diagnostic here would have reported correctly on a single
+     * replication and silently reported nothing over many -- which is exactly the run where it
+     * matters.
+     *
+     * A child declared **before** the counters is visited before them, so its increments land in
+     * time. That is an ordering dependency, and an invisible one, so `HorizonCounterTimingTest`
+     * pins it: if this field is ever moved below the counters, or the framework's traversal order
+     * changes, a test fails rather than a statistic quietly becoming zero.
+     */
+    private inner class HorizonDiagnostics : ModelElement(this@AgvSystem, "${this@AgvSystem.name}:Diagnostics") {
+        override fun replicationEnded() {
+            super.replicationEnded()
+            // All pure reads of live state, and nothing is woken.
+            reportTasksNeverAssigned()
+            reportEntitiesNeverResumed()
+            reportAssignmentsStillOpen()
+            // Vehicles still blocked are reported by the space layer's own horizon diagnostic, which
+            // this subsystem inherits. Repeating it would put two warnings in the log for one
+            // condition and invite a reader to think they were two.
+        }
+    }
+
+    private val myDiagnostics = HorizonDiagnostics()
+
+    private val myNumTasksNeverAssigned = Counter(this, "${this.name}:NumTasksNeverAssigned")
+    val numTasksNeverAssigned: CounterCIfc get() = myNumTasksNeverAssigned
+
+    private val myNumEntitiesNeverResumed = Counter(this, "${this.name}:NumEntitiesNeverResumed")
+    val numEntitiesNeverResumed: CounterCIfc get() = myNumEntitiesNeverResumed
+
+    private val myNumAssignmentsStillOpen = Counter(this, "${this.name}:NumAssignmentsStillOpen")
+    val numAssignmentsStillOpen: CounterCIfc get() = myNumAssignmentsStillOpen
+
+    /** Emits the one thing a viewer cannot infer from watching vehicles move: that a decision was
+     *  made. Guarded, so it costs nothing when no animation sink is installed. */
+    internal fun emitAssignment(assignment: Assignment) {
+        val sink = model.animationSink
+        if (!sink.isActive) return
+        sink.emit(
+            ksl.animation.AnimationEvent.AgvAssignmentMade(
+                time, this.name, assignment.vehicle.name, assignment.task.id,
+                assignment.task.pickupLocation, assignment.task.destination
+            )
+        )
+    }
+
     /**
      * Hands an assignment to a vehicle's agent, wherever that agent currently is.
      *
@@ -211,6 +272,86 @@ open class AgvSystem @JvmOverloads constructor(
         myUnfinishedTasks = dispatcher.board.tasks.size
         myLoadsAwaitingPickup = awaitingPickupHoldQ.size
         myLoadsInTransit = inTransitHoldQ.size
+        // The counted diagnostics are NOT run here -- see HorizonDiagnostics for why.
+    }
+
+    /**
+     * Tasks that were posted and never given to anyone.
+     *
+     * The quiet failure of a dispatching subsystem. A model whose fleet is too small, whose bidding
+     * rule is too strict, or whose layout leaves a station unreachable produces a run that completes
+     * normally, reports plausible statistics for the work it *did* do, and says nothing at all about
+     * the work it did not. The averages are computed over the loads that were served, so a fleet
+     * that served a third of its demand can look better than one that served all of it.
+     */
+    private fun reportTasksNeverAssigned() {
+        val orphaned = dispatcher.board.tasks.filter { it.assignedAt.isNaN() }
+        if (orphaned.isEmpty()) return
+        myNumTasksNeverAssigned.increment(orphaned.size.toDouble())
+        logger.warn {
+            buildString {
+                append("AgvSystem ($name): ${orphaned.size} task(s) were posted and never assigned ")
+                append("before replication ${model.currentReplicationNumber} ended. ")
+                append("Statistics are computed over the loads that were served, so this run's ")
+                append("averages describe a smaller problem than the one posed.")
+                for (t in orphaned) {
+                    append(System.lineSeparator())
+                    append("  (${t.name}) posted at ${t.timeEnteredQueue}, ")
+                    append("waiting ${time - t.timeEnteredQueue} for a vehicle to ")
+                    append("(${t.pickupLocation})")
+                }
+            }
+        }
+    }
+
+    /**
+     * Entities suspended in this subsystem's hold queues when the horizon fell.
+     *
+     * Distinct from a task never assigned: these are loads that *were* being dealt with. Reported
+     * separately because the two have different causes -- one says the fleet never got to the work,
+     * the other says the run was too short for the work it did get to -- and a modeller acting on
+     * the wrong one changes the wrong thing.
+     */
+    private fun reportEntitiesNeverResumed() {
+        val stranded = awaitingPickupHoldQ.size + inTransitHoldQ.size
+        if (stranded == 0) return
+        myNumEntitiesNeverResumed.increment(stranded.toDouble())
+        logger.warn {
+            buildString {
+                append("AgvSystem ($name): $stranded entit(ies) were still suspended when ")
+                append("replication ${model.currentReplicationNumber} ended -- ")
+                append("${awaitingPickupHoldQ.size} awaiting collection, ")
+                append("${inTransitHoldQ.size} aboard a vehicle. ")
+                append("Their waits are not observations and are not in the statistics.")
+                for (e in awaitingPickupHoldQ.immutableList) {
+                    append(System.lineSeparator())
+                    append("  (${e.name}) awaiting collection")
+                }
+                for (e in inTransitHoldQ.immutableList) {
+                    append(System.lineSeparator())
+                    append("  (${e.name}) aboard")
+                }
+            }
+        }
+    }
+
+    /** Vehicles that were part-way through a task. Reported so a run that looks like it ran out of
+     *  work can be told from one that was cut off in the middle of some. */
+    private fun reportAssignmentsStillOpen() {
+        val open = myVehicles.mapNotNull { v -> v.currentAssignment?.let { v to it } }
+        if (open.isEmpty()) return
+        myNumAssignmentsStillOpen.increment(open.size.toDouble())
+        logger.warn {
+            buildString {
+                append("AgvSystem ($name): ${open.size} assignment(s) were still open when ")
+                append("replication ${model.currentReplicationNumber} ended.")
+                for ((v, a) in open) {
+                    append(System.lineSeparator())
+                    append("  (${v.name}) was ${a.state} on task (${a.task.name}), ")
+                    append("committed at ${a.madeAt} by ${a.decidedBy}")
+                }
+            }
+        }
     }
 
     private var myUnfinishedTasks: Int = 0

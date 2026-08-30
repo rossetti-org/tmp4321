@@ -640,6 +640,31 @@ sealed class AnimationEvent {
         val state: String
     ) : AnimationEvent()
 
+    /**
+     * A dispatcher committed a vehicle to a task.
+     *
+     * The one thing an active fleet does that a passive one has no equivalent of, and the one thing
+     * a viewer cannot infer from watching the vehicles move. Movement, state and zone occupancy are
+     * already emitted by the body, so a recording of a passive run and an active run look the same
+     * on a canvas: carts going places. What distinguishes them is *why* — a decision was made, by an
+     * object, at an instant, and this is that instant.
+     *
+     * It carries the origin and destination as well as the vehicle, because the interesting question
+     * when watching a fleet is usually not which cart moved but why that cart was sent to that
+     * pickup rather than a nearer one. A revocation shows up as a second event for the same task
+     * with a different vehicle, so re-tasking is visible without a tag of its own.
+     */
+    @Serializable
+    @SerialName("AgvAssignmentMade")
+    data class AgvAssignmentMade(
+        override val simTime: Double,
+        val systemName: String,
+        val vehicleName: String,
+        val taskId: Long,
+        val origin: String,
+        val destination: String
+    ) : AnimationEvent()
+
     // ──────────────────────────────────────────────────────────────────────
     //  Statistics
     // ──────────────────────────────────────────────────────────────────────

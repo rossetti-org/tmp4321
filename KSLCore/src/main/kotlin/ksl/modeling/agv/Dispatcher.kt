@@ -283,12 +283,47 @@ open class Dispatcher @JvmOverloads constructor(
     /**
      * Abandons a task, dequeuing it with no waiting statistics collected: a wait that was given up
      * rather than served is not an observation of service.
+     *
+     * A vehicle already committed to the task is released first. Without that the vehicle goes on to
+     * the pickup and tries to collect a load whose task no longer exists, which surfaces much later
+     * as an illegal state transition from a place that has nothing to do with the cancellation.
+     *
+     * **The waiting entity is not resumed.** Cancelling a transport task abandons the *task*; the
+     * load that asked for it stays suspended, and unless the model does something about it, it waits
+     * out the run and is reported by the horizon diagnostics. That is deliberate — this subsystem
+     * cannot know what a load should do instead of being carried, and resuming it as though it had
+     * arrived would be a lie its process would act on. A model that wants the load to give up should
+     * use [TaskQ.removeAndTerminate], which ends its process, or cancel from within the load's own
+     * process where it can decide for itself.
+     *
+     * @throws AgvAssignmentException when the load is already aboard: there is nowhere to put it
+     *   down, so the delivery must finish.
      */
     fun cancel(task: Task) {
         require(task.dispatcher === this) { "Task (${task.name}) does not belong to ${this.name}." }
+        assignmentFor(task)?.let { live ->
+            live.requireRevocable()
+            releaseFrom(live)
+        }
         myTaskQ.remove(task, false)
         task.transitionTo(TaskState.CANCELLED)
         myNumTasksCancelled.increment()
+    }
+
+    /**
+     * Detaches a vehicle from an assignment and makes it assignable again, without deciding what
+     * becomes of the task.
+     *
+     * Shared by [revoke], which returns the task to the board, and [cancel], which does not. Keeping
+     * the vehicle-side steps in one place is what stops the two operations drifting apart: they
+     * differ in what happens to the *task*, and should not differ in what happens to the vehicle.
+     */
+    private fun releaseFrom(assignment: Assignment) {
+        assignment.state = AssignmentState.REVOKED
+        // Available again in the same breath, so a pass that releases and reassigns can do both
+        // without an intervening wake.
+        declareAvailable(assignment.vehicle)
+        assignment.vehicle.agent?.abandonAssignment()
     }
 
     /**
@@ -318,15 +353,11 @@ open class Dispatcher @JvmOverloads constructor(
         require(assignment.task.dispatcher === this) {
             "Assignment of task (${assignment.task.name}) does not belong to ${this.name}."
         }
-        assignment.state = AssignmentState.REVOKED
         assignment.task.transitionTo(TaskState.POSTED)
         assignment.task.assignedAt = Double.NaN
         (assignment.task as? TransportTask)?.let { it.numReassignments++ }
         myNumAssignmentsRevoked.increment()
-        // The vehicle becomes assignable again in the same breath, so a pass that revokes and
-        // reassigns can do both without an intervening wake.
-        declareAvailable(assignment.vehicle)
-        assignment.vehicle.agent?.abandonAssignment()
+        releaseFrom(assignment)
     }
 
     // ---- the vehicle protocol ----------------------------------------------------------------
@@ -458,6 +489,7 @@ open class Dispatcher @JvmOverloads constructor(
             p.task.assignedAt = time
             myWaitForAssignment.value = time - p.task.timeEnteredQueue
             myNumAssignmentsMade.increment()
+            system.emitAssignment(a)
             withdraw(p.vehicle)
             resume(p.vehicle, a)
         }
