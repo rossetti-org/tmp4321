@@ -293,6 +293,11 @@ internal class MovementEngine(
         mySystem.refreshFleetCounts()
         // Nothing is scheduled. A waiting transporter costs the executive nothing while it waits,
         // and is started again only by whoever releases what it is waiting for.
+        //
+        // This is the one moment a circular wait can come into existence, so it is the one place
+        // the wait-for graph is examined. The call is last, after the transporter's held zones,
+        // awaited zone, and state are all in place, because the detector reads exactly those.
+        mySystem.transporterBlocked(transporter)
     }
 
     /**

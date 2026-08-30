@@ -238,6 +238,14 @@ class SpurAndBidirectionalSemanticsTest {
             }
         }
         tw.system.checkInvariants = true
+        // This configuration deadlocks a moment after the point being tested, and it is meant to:
+        // Inbound is standing on B, which is where Outbound is going, so once Outbound reaches the
+        // far end of the link the two are waiting on each other. That is a real circular wait and
+        // Phase 6's detector raises on it at time 2.4. What this test is about is the direction
+        // rule at time 1.0, before any of that, so detection is switched off to leave the two
+        // mechanisms independently testable. The deadlock itself is asserted in
+        // DeadlockDetectionTest, which uses this same shape deliberately.
+        tw.system.deadlockDetectionEnabled = false
         m.numberOfReplications = 1
         m.lengthOfReplication = 50.0
         m.simulate()

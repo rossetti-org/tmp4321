@@ -19,12 +19,17 @@ package ksl.modeling.guidedpath
 
 import ksl.controls.ControlType
 import ksl.controls.KSLControl
+import ksl.modeling.guidedpath.exceptions.GuidedPathDeadlockException
 import ksl.modeling.guidedpath.exceptions.GuidedPathNetworkException
+import ksl.modeling.guidedpath.exceptions.GuidedPathObstructionException
+import ksl.modeling.guidedpath.internal.DeadlockDetector
 import ksl.modeling.guidedpath.internal.MovementEngine
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
 import ksl.modeling.guidedpath.internal.ZoneInvariantChecker
 import ksl.modeling.spatial.LocationIfc
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
 import ksl.modeling.entity.HoldQueue
@@ -91,6 +96,88 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
             }
             field = value
         }
+
+    /**
+     * Whether the wait-for graph is walked when a transporter blocks.
+     *
+     * On by default. A guide path that deadlocks and says nothing is the failure mode the whole
+     * subsystem exists to improve on, so the cost is accepted: the walk happens only when a
+     * transporter blocks, which in a well-designed network is rare, and it is proportional to the
+     * fleet rather than to the number of events.
+     *
+     * Turning it off buys throughput and gives up `G5`. A run that then deadlocks stops advancing
+     * and finishes normally, with nothing but the end-of-replication warning to say so.
+     */
+    @set:KSLControl(controlType = ControlType.BOOLEAN)
+    var deadlockDetectionEnabled: Boolean = true
+        set(value) {
+            require(model.isNotRunning) {
+                "Deadlock detection cannot be switched while the model is running."
+            }
+            field = value
+        }
+
+    /**
+     * Whether an idle transporter obstructing another ends the replication instead of being warned
+     * about and counted.
+     *
+     * Off by default, and the asymmetry with deadlock is deliberate. A cycle cannot resolve itself,
+     * so it is always an error. An obstruction can: dispatching the idle transporter clears it, and
+     * the condition is judged from a single instant, so raising by default would fail models that
+     * are perfectly sound. Set this when a study needs the obstruction treated as a design failure
+     * rather than as a warning, and expect occasional false alarms in exchange for certainty.
+     */
+    @set:KSLControl(controlType = ControlType.BOOLEAN)
+    var strictObstructionPolicy: Boolean = false
+        set(value) {
+            require(model.isNotRunning) {
+                "The obstruction policy cannot be changed while the model is running."
+            }
+            field = value
+        }
+
+    private val myDetector: DeadlockDetector = DeadlockDetector(this)
+
+    private val myNumObstructions = Counter(this, name = "${this.name}:NumObstructionsDetected")
+
+    /**
+     * How many times a transporter was found blocked behind an idle one that will not move.
+     *
+     * Counted rather than only logged so that the condition appears in the standard report, where
+     * an analyst will see it. A model that produces a positive count here has almost certainly
+     * stopped moving somewhere, and the run that produced it should not be believed until the
+     * count is explained.
+     */
+    val numObstructionsDetected: CounterCIfc
+        get() = myNumObstructions
+
+    /**
+     * Examines a transporter that has just become blocked, and is the only place either condition
+     * is looked for.
+     *
+     * A cycle can only come into existence when somebody enters the blocked state, so checking
+     * there is both necessary and sufficient; checking on a timer or at every event would cost in
+     * proportion to the event count and find nothing extra.
+     *
+     * @throws GuidedPathDeadlockException when the transporter lies on a circular wait
+     * @throws GuidedPathObstructionException when it is behind an idle transporter and the strict
+     *   policy is set
+     */
+    internal fun transporterBlocked(transporter: GuidedTransporter) {
+        if (!deadlockDetectionEnabled) return
+        val cycle = myDetector.findCycle(transporter)
+        if (cycle != null) {
+            logger.error { cycle.toString() }
+            throw GuidedPathDeadlockException(cycle)
+        }
+        val obstruction = myDetector.findObstruction(transporter) ?: return
+        myNumObstructions.increment()
+        if (strictObstructionPolicy) {
+            logger.error { obstruction.toString() }
+            throw GuidedPathObstructionException(obstruction)
+        }
+        logger.warn { obstruction.toString() }
+    }
 
     private val myNumMoving = TWResponse(this, name = "${this.name}:NumTransportersMoving")
 
