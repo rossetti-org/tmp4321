@@ -46,6 +46,7 @@ model matches your problem.
 | [`ksl-spatial`](ksl-spatial.md) | **Spatial substrate** — locations, distances, movable resources; the substrate that `move` operates on |
 | [`ksl-station`](ksl-station.md) *(experimental)* | **Queueing-network view** — passive stations route jobs |
 | [`ksl-agent`](ksl-agent.md) *(experimental)* | **Agent-based view** — statechart-reactive autonomous actors |
+| [`ksl-guidedpath`](ksl-guidedpath.md) *(experimental)* | **Guided path transporters** — vehicles on a fixed network that must claim the space ahead of them, and block each other when they cannot |
 | [`ksl-supplychain`](ksl-supplychain.md) *(experimental)* | **Multi-echelon supply-chain** domain layer |
 
 These guides cross-reference each other in their §7 "See also"

@@ -274,3 +274,22 @@ tasks.register<JavaExec>("showcaseCapture") {
         if (project.hasProperty(p)) systemProperty(p, project.property(p)!!)
     }
 }
+
+// Runs the guided-path throughput benchmark (docs/guides/ksl-guidedpath.md, performance section).
+// It measures wall-clock time, so it is a task rather than a test: its answer depends on the
+// machine and has no business failing a build on somebody else's.
+tasks.register<JavaExec>("guidedPathBenchmark") {
+    group = "verification"
+    description = "Run the guided path throughput benchmark and print the reference figures."
+    mainClass.set("ksl.examples.general.guidedpath.GuidedPathThroughputBenchmark")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+// Runs the simple AGV example of the guided-path guide, twice: as the source text designs it, and
+// with the idle carts left where they stop so the failure mode is visible side by side.
+tasks.register<JavaExec>("simpleAgvExample") {
+    group = "application"
+    description = "Run the simple AGV guided-path example."
+    mainClass.set("ksl.examples.general.guidedpath.SimpleAGVExample")
+    classpath = sourceSets["main"].runtimeClasspath
+}

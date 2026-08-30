@@ -247,7 +247,14 @@ class GuidedTransporter @JvmOverloads constructor(
             // and only moves when the state does. A journey needs the elapsed blocked time between
             // two instants, which is a different quantity.
             if (field == TransporterState.BLOCKED && value != TransporterState.BLOCKED) {
-                myCumulativeBlockedTime += time - blockedSince
+                // A replication can end with a transporter still blocked, and the reset that starts
+                // the next one clears the start instant while the state is still BLOCKED. Without
+                // this guard that transition accumulates `time - NaN`, and the NaN then travels
+                // into the first transport result of the new replication and fails the run --
+                // several thousand simulated minutes away from the reset that caused it.
+                if (!blockedSince.isNaN()) {
+                    myCumulativeBlockedTime += time - blockedSince
+                }
                 blockedSince = Double.NaN
             } else if (field != TransporterState.BLOCKED && value == TransporterState.BLOCKED) {
                 blockedSince = time
@@ -435,8 +442,6 @@ class GuidedTransporter @JvmOverloads constructor(
      * Called for every transporter at the start of every replication.
      */
     internal fun placeAtInitialPosition() {
-        blockedSince = Double.NaN
-        myCumulativeBlockedTime = 0.0
         myOccupiedZones.clear()
         currentRoute = null
         claimedZone = null
@@ -448,6 +453,10 @@ class GuidedTransporter @JvmOverloads constructor(
         travellingForward = true
         transporterState = TransporterState.IDLE
         stateBeforeBlocking = TransporterState.IDLE
+        // After the state, so that a transporter still blocked when the previous replication ended
+        // leaves that state through the setter above before its running totals are cleared.
+        blockedSince = Double.NaN
+        myCumulativeBlockedTime = 0.0
         currentVelocity = sampleVelocity()
         val zones = system.resolvePlacement(this, initialPlacement)
         for (zone in zones) {

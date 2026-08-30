@@ -76,6 +76,12 @@ internal class MovementEngine(
             transporter.pendingMovingState = movingState
             return true
         }
+        // A blocked transporter holds no claim, so it may be sent somewhere else -- and it is
+        // worth being able to, since a cart stopped on its way back to a parking spur is doing
+        // work nobody needs while an entity waits for one. But it is on a waiter list, and that
+        // has to be given up first: leaving it there would put it on the list twice once it
+        // blocked again, and would have it woken later for a journey it is no longer making.
+        cancelWait(transporter)
         if (front === destination.zone) return false
         transporter.currentVelocity = transporter.sampleVelocity()
         transporter.currentRoute =
@@ -282,6 +288,30 @@ internal class MovementEngine(
         transporter.awaitedZone = zone
         transporter.awaitedLink = link
         beginBlocking(transporter)
+    }
+
+    /**
+     * Takes a waiting transporter off whatever it was waiting for and stands it down where it is.
+     *
+     * Called only when a waiting transporter is redirected. It settles the transporter exactly as
+     * an arrival does, short of announcing one -- nobody is waiting to be told, because the journey
+     * it was on has been abandoned rather than completed.
+     *
+     * A transporter held up by a link is on that link's waiter list and not on the awaited zone's,
+     * so both are cleared; removing a transporter that was not waiting is defined to do nothing,
+     * which is what makes handling the two cases together safe rather than merely convenient.
+     */
+    private fun cancelWait(transporter: GuidedTransporter) {
+        if (transporter.transporterState != TransporterState.BLOCKED) return
+        transporter.awaitedZone?.removeWaiter(transporter)
+        transporter.awaitedLink?.removeWaiter(transporter)
+        transporter.awaitedZone = null
+        transporter.awaitedLink = null
+        releaseRearIfSurplus(transporter)
+        transporter.currentRoute = null
+        transporter.transporterState = TransporterState.IDLE
+        transporter.currentLocation = mySystem.locationOf(transporter)
+        mySystem.refreshFleetCounts()
     }
 
     private fun beginBlocking(transporter: GuidedTransporter) {
