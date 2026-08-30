@@ -40,6 +40,9 @@ import kotlin.test.assertTrue
  */
 class ResponseCardinalityTest {
 
+    /** Set by the model element that tries to change a flag mid-run. */
+    private var caught: Throwable? = null
+
     /**
      *  A ring of `n` intersections joined by one-way links, so that zone count scales with `n` and
      *  every network built this way is legal.
@@ -137,6 +140,113 @@ class ResponseCardinalityTest {
         // Twenty link zones and five intersection zones.
         assertEquals(25, added.size, "unexpected additions: $added")
         assertTrue(added.all { it.endsWith(":ZoneOccupied") }, "$added")
+    }
+
+    @Test
+    @DisplayName("A tier can be switched on after construction and takes effect at once")
+    fun aTierCanBeSwitchedOnAfterConstruction() {
+        // The model refuses to add a model element only while it is *running*, so everything the
+        // setter does is legal right up to the first replication. A flag that had to be decided in
+        // the constructor would force a modeller to know they wanted the detail before they had
+        // built the thing they wanted it about.
+        val m = Model("SwitchOn")
+        val ring = Ring(m, intersections = 5, zonesPerLink = 4)
+        val before = (m.responses.map { it.name } + m.counters.map { it.name }).toSet()
+        ring.system.collectLinkStatistics = true
+        val after = (m.responses.map { it.name } + m.counters.map { it.name }).toSet()
+        assertEquals(15, (after - before).size, "unexpected additions: ${after - before}")
+        assertEquals(5, ring.system.linkOccupancy.size)
+    }
+
+    @Test
+    @DisplayName("Switching a tier off removes its responses rather than leaving them empty")
+    fun switchingOffRemovesTheResponses() {
+        // Leaving them registered but never written would be the worst of both: every report and
+        // every database table would carry the columns with nothing in them, and a reader could not
+        // tell "collected and always zero" from "not collected at all".
+        val m = Model("SwitchOff")
+        val ring = Ring(m, intersections = 5, zonesPerLink = 4, collectLinks = true, collectZones = true)
+        val withDetail = (m.responses.map { it.name } + m.counters.map { it.name }).toSet()
+        ring.system.collectLinkStatistics = false
+        ring.system.collectZoneStatistics = false
+        val without = (m.responses.map { it.name } + m.counters.map { it.name }).toSet()
+        assertTrue(
+            withDetail.size > without.size,
+            "the report must actually shrink: ${withDetail.size} then ${without.size}"
+        )
+        assertTrue(ring.system.linkOccupancy.isEmpty())
+        assertTrue(ring.system.zoneOccupancy.isEmpty())
+        assertTrue(
+            without.none { it.endsWith(":NumZonesOccupied") || it.endsWith(":ZoneOccupied") },
+            "no trace of the removed tiers may remain: $without"
+        )
+        // And what is left is exactly what a system built without the detail would have had.
+        val neverAsked = statisticNames { Ring(it, intersections = 5, zonesPerLink = 4) }
+        assertEquals(neverAsked, without)
+    }
+
+    @Test
+    @DisplayName("A tier switched off and on again registers cleanly")
+    fun aTierCanBeSwitchedOffAndOnAgain() {
+        // Removal frees the names, so this only works if the responses really left the model. A
+        // half-removal would surface here as a duplicate-name refusal.
+        val m = Model("SwitchCycle")
+        val ring = Ring(m, intersections = 5, zonesPerLink = 4, collectLinks = true)
+        val first = (m.responses.map { it.name }).toSet()
+        ring.system.collectLinkStatistics = false
+        ring.system.collectLinkStatistics = true
+        val second = (m.responses.map { it.name }).toSet()
+        assertEquals(first, second)
+    }
+
+    @Test
+    @DisplayName("A model whose tiers were toggled still runs and still collects")
+    fun aToggledModelStillRuns() {
+        // The point of the whole exercise: the responses must be live model elements afterwards,
+        // not orphans that merely have the right names.
+        val m = Model("ToggledRun")
+        val ring = Ring(m, intersections = 4, zonesPerLink = 3, collectLinks = true)
+        ring.system.collectLinkStatistics = false
+        ring.system.collectLinkStatistics = true
+        GuidedTransporter(
+            ring.system, TransporterPlacement.At("I0"),
+            ksl.utilities.random.rvariable.ConstantRV(10.0), 1, name = "Cart"
+        )
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 50.0
+        m.simulate()
+        val link = ring.network.link("L0")!!
+        assertEquals(
+            1.0,
+            ring.system.intersectionOccupancy.getValue(ring.network.requireLocation("I0"))
+                .withinReplicationStatistic.weightedAverage,
+            1e-9,
+            "the parked cart covers I0 for the whole run, and the re-registered response must " +
+                    "have been collecting it"
+        )
+        assertTrue(ring.system.linkUtilization.containsKey(link))
+    }
+
+    @Test
+    @DisplayName("Neither tier may be switched while the model is running")
+    fun theTiersAreFrozenDuringARun() {
+        val m = Model("SwitchDuringRun")
+        val ring = Ring(m, intersections = 4, zonesPerLink = 3)
+        object : ModelElement(ring, "Meddler") {
+            override fun initialize() {
+                caught = runCatching { system.collectLinkStatistics = true }.exceptionOrNull()
+            }
+
+            val system get() = ring.system
+        }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 10.0
+        m.simulate()
+        val thrown = caught
+        assertTrue(
+            thrown is IllegalArgumentException,
+            "adding responses mid-run would corrupt the model, so it must be refused: $thrown"
+        )
     }
 
     @Test

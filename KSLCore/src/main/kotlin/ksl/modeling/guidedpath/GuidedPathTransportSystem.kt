@@ -64,8 +64,8 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     parent: ModelElement,
     val network: GuidedPathNetwork,
     val zoneContentionRule: ZoneContentionRuleIfc = FIFOZoneContentionRule(),
-    val collectLinkStatistics: Boolean = false,
-    val collectZoneStatistics: Boolean = false,
+    collectLinkStatistics: Boolean = false,
+    collectZoneStatistics: Boolean = false,
     name: String? = null
 ) : ModelElement(parent, name) {
 
@@ -264,37 +264,98 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     // the system-level aggregates above -- which are O(1) in network size and answer the first
     // question anybody asks about congestion -- are always there.
     //
-    // The flags are constructor parameters rather than settable properties because the responses
-    // they govern are model elements, and a model element must exist before the run. A property
-    // that could be set later would either register nothing (and silently do nothing) or register
-    // everything (and give up the saving that is the whole point). Constructing the system with the
-    // flag is the only form of the choice that can actually be honoured.
+    // Both flags are settable up to the moment the model runs, and either direction takes effect
+    // immediately: switching one on registers its responses, switching it off removes them. That
+    // works because the model only refuses to add or remove a model element while it is *running*,
+    // so everything either flag does is legal right up to the first replication. Turning the detail
+    // off therefore genuinely shrinks the report rather than merely stopping the numbers being
+    // updated, which matters -- a response left registered but never written would appear in every
+    // report and every database table with nothing in it, which is worse than either honest answer.
 
-    private val myLinkOccupancy: Map<Link, TWResponse> =
-        if (collectLinkStatistics) {
-            network.links.associateWith { TWResponse(this, name = "${this.name}:${it.name}:NumZonesOccupied") }
-        } else emptyMap()
+    private var myLinkOccupancy: Map<Link, TWResponse> = emptyMap()
+    private var myLinkUtilization: Map<Link, Response> = emptyMap()
+    private var myIntersectionOccupancy: Map<GuidedPathNetwork.Intersection, TWResponse> = emptyMap()
+    private var myZoneOccupancy: Map<Zone, TWResponse> = emptyMap()
 
-    private val myLinkUtilization: Map<Link, Response> =
-        if (collectLinkStatistics) {
-            network.links.associateWith { Response(this, name = "${this.name}:${it.name}:Utilization") }
-        } else emptyMap()
-
-    private val myIntersectionOccupancy: Map<GuidedPathNetwork.Intersection, TWResponse> =
-        if (collectLinkStatistics) {
-            // Named for the tier rather than just for the place. An intersection *is* a zone, so
-            // with both flags on it would otherwise be registered twice under one name and the
-            // model would refuse to build -- which is exactly what happened the first time the two
-            // tiers were switched on together.
-            network.intersections.associateWith {
-                TWResponse(this, name = "${this.name}:${it.name}:IntersectionOccupied")
+    /**
+     * Whether occupancy is collected for each link and each intersection.
+     *
+     * Settable until the model runs. Setting it registers or removes the responses there and then,
+     * so the flag and the report always agree.
+     */
+    @set:KSLControl(controlType = ControlType.BOOLEAN)
+    var collectLinkStatistics: Boolean = false
+        set(value) {
+            require(model.isNotRunning) {
+                "Link statistics cannot be switched while the model is running."
             }
-        } else emptyMap()
+            if (value == field) return
+            if (value) {
+                myLinkOccupancy = network.links.associateWith {
+                    TWResponse(this, name = "${this.name}:${it.name}:NumZonesOccupied")
+                }
+                myLinkUtilization = network.links.associateWith {
+                    Response(this, name = "${this.name}:${it.name}:Utilization")
+                }
+                // Named for the tier rather than just for the place. An intersection *is* a zone,
+                // so with both flags on it would otherwise be registered twice under one name and
+                // the model would refuse to build -- which is exactly what happened the first time
+                // the two tiers were switched on together.
+                myIntersectionOccupancy = network.intersections.associateWith {
+                    TWResponse(this, name = "${this.name}:${it.name}:IntersectionOccupied")
+                }
+            } else {
+                discard(myLinkOccupancy.values)
+                discard(myLinkUtilization.values)
+                discard(myIntersectionOccupancy.values)
+                myLinkOccupancy = emptyMap()
+                myLinkUtilization = emptyMap()
+                myIntersectionOccupancy = emptyMap()
+            }
+            field = value
+        }
 
-    private val myZoneOccupancy: Map<Zone, TWResponse> =
-        if (collectZoneStatistics) {
-            network.zones.associateWith { TWResponse(this, name = "${this.name}:${it.name}:ZoneOccupied") }
-        } else emptyMap()
+    /**
+     * Whether occupancy is collected for every individual zone.
+     *
+     * The finest tier and the most expensive: one response per zone. Settable until the model runs,
+     * in either direction, as [collectLinkStatistics] is.
+     */
+    @set:KSLControl(controlType = ControlType.BOOLEAN)
+    var collectZoneStatistics: Boolean = false
+        set(value) {
+            require(model.isNotRunning) {
+                "Zone statistics cannot be switched while the model is running."
+            }
+            if (value == field) return
+            if (value) {
+                myZoneOccupancy = network.zones.associateWith {
+                    TWResponse(this, name = "${this.name}:${it.name}:ZoneOccupied")
+                }
+            } else {
+                discard(myZoneOccupancy.values)
+                myZoneOccupancy = emptyMap()
+            }
+            field = value
+        }
+
+    /**
+     * Takes responses back out of the model, so that switching a tier off shrinks the report
+     * instead of leaving empty columns in it. The name each held becomes free again, which is what
+     * lets a tier be switched off and on again.
+     */
+    private fun discard(responses: Collection<ModelElement>) {
+        for (response in responses) {
+            model.removeFromModel(response)
+        }
+    }
+
+    init {
+        // Applied through the setters, so that constructing with a flag and setting it afterwards
+        // go down exactly the same path and cannot drift apart.
+        this.collectLinkStatistics = collectLinkStatistics
+        this.collectZoneStatistics = collectZoneStatistics
+    }
 
     /** Zones of each link covered by a transporter, when link statistics were asked for. */
     val linkOccupancy: Map<Link, TWResponseCIfc>
