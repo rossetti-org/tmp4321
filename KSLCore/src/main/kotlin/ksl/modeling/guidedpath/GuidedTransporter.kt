@@ -258,6 +258,7 @@ class GuidedTransporter @JvmOverloads constructor(
             myFracTimeTransporting.value = (value == TransporterState.MOVING_LOADED).toDouble()
             myFracTimeMovingEmpty.value =
                 (value == TransporterState.MOVING_EMPTY || value == TransporterState.RETURNING_HOME).toDouble()
+            system.emitTransporterState(this, value)
         }
 
     /**

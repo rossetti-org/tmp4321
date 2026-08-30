@@ -2341,7 +2341,7 @@ interface KSLProcessBuilder {
         if (unLoadingDelay != ConstantRV.ZERO) {
             delay(unLoadingDelay, unLoadingPriority, "$suspensionName:unloading")
         }
-        return GuidedTransportResult(
+        val result = GuidedTransportResult(
             totalTime = system.time - request.requestedAt,
             emptyMoveTime = request.emptyMoveTime,
             loadedMoveTime = request.loadedMoveTime,
@@ -2349,6 +2349,10 @@ interface KSLProcessBuilder {
             zonesTraversed = request.zonesTraversed,
             routeLength = request.routeLength
         )
+        // Reported to the process and accumulated for the fleet, so that neither a per-entity
+        // tabulation nor a fleet summary needs an observer written for it.
+        system.collectTransportResult(result)
+        return result
     }
 
     /**

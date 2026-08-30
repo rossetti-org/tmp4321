@@ -30,6 +30,8 @@ import ksl.modeling.guidedpath.internal.ZoneInvariantChecker
 import ksl.modeling.spatial.LocationIfc
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
 import ksl.modeling.entity.HoldQueue
@@ -62,6 +64,8 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     parent: ModelElement,
     val network: GuidedPathNetwork,
     val zoneContentionRule: ZoneContentionRuleIfc = FIFOZoneContentionRule(),
+    val collectLinkStatistics: Boolean = false,
+    val collectZoneStatistics: Boolean = false,
     name: String? = null
 ) : ModelElement(parent, name) {
 
@@ -138,6 +142,54 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
 
     private val myDetector: DeadlockDetector = DeadlockDetector(this)
 
+    // ---- what the guide path costs the executive -----------------------------------------------
+    //
+    // A zone traversal is one event, so discretizing a layout finely to make an animation look
+    // smooth buys that smoothness in events, and a modeler who picks zone size for the picture
+    // rather than for the control granularity can make a model far slower without meaning to. The
+    // guide says so; these two make it measurable, and their ratio is what catches the failure that
+    // matters most -- a regression into repeated wake-ups, where a transporter is woken, refused,
+    // and rescheduled over and over. That shows up as events per traversal climbing while the model
+    // still gives the right answers.
+
+    private val myNumZoneTraversals = Counter(this, name = "${this.name}:NumZoneTraversals")
+
+    /** How many zones were entered, across the whole fleet. */
+    val numZoneTraversals: CounterCIfc
+        get() = myNumZoneTraversals
+
+    private val myNumEventsScheduled = Counter(this, name = "${this.name}:NumEventsScheduled")
+
+    /** How many events the guide path put on the calendar: traversals, rear releases, and retries. */
+    val numEventsScheduled: CounterCIfc
+        get() = myNumEventsScheduled
+
+    private val myEventsPerTraversal = Response(this, name = "${this.name}:EventsPerZoneTraversal")
+
+    /**
+     * Events scheduled per zone entered, computed when the replication ends.
+     *
+     * One is the floor: a transporter that never waits for anything schedules a single traversal
+     * for each zone it enters. Distance-based zone control adds a second event per traversal by
+     * design and lands near two. Anything much above that is transporters being woken and refused,
+     * which is a performance defect rather than a modelling choice.
+     */
+    val eventsPerZoneTraversal: ResponseCIfc
+        get() = myEventsPerTraversal
+
+    private val myNumDeadlocks = Counter(this, name = "${this.name}:NumDeadlocksDetected")
+
+    /**
+     * How many circular waits were found. At most one per replication, since finding one ends it.
+     *
+     * Counted anyway, and the reason is the parameter sweep: a study that catches the exception
+     * around each replication and records the design point as infeasible needs something in the
+     * output that says which points those were. Reading it off the counter beats keeping a tally
+     * beside the run.
+     */
+    val numDeadlocksDetected: CounterCIfc
+        get() = myNumDeadlocks
+
     private val myNumObstructions = Counter(this, name = "${this.name}:NumObstructionsDetected")
 
     /**
@@ -167,6 +219,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
         if (!deadlockDetectionEnabled) return
         val cycle = myDetector.findCycle(transporter)
         if (cycle != null) {
+            myNumDeadlocks.increment()
             logger.error { cycle.toString() }
             throw GuidedPathDeadlockException(cycle)
         }
@@ -202,6 +255,141 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     /** The fraction of the guide path's zones that are covered by a transporter. */
     val zoneUtilization: TWResponseCIfc
         get() = myZoneUtilization
+
+    // ---- opt-in detail statistics -------------------------------------------------------------
+    //
+    // A guide path of a thousand zones would register a thousand time-weighted responses if
+    // occupancy were collected automatically, and every report and every output-database table
+    // would carry them whether or not anyone asked. So the detail is off unless requested, while
+    // the system-level aggregates above -- which are O(1) in network size and answer the first
+    // question anybody asks about congestion -- are always there.
+    //
+    // The flags are constructor parameters rather than settable properties because the responses
+    // they govern are model elements, and a model element must exist before the run. A property
+    // that could be set later would either register nothing (and silently do nothing) or register
+    // everything (and give up the saving that is the whole point). Constructing the system with the
+    // flag is the only form of the choice that can actually be honoured.
+
+    private val myLinkOccupancy: Map<Link, TWResponse> =
+        if (collectLinkStatistics) {
+            network.links.associateWith { TWResponse(this, name = "${this.name}:${it.name}:NumZonesOccupied") }
+        } else emptyMap()
+
+    private val myLinkUtilization: Map<Link, Response> =
+        if (collectLinkStatistics) {
+            network.links.associateWith { Response(this, name = "${this.name}:${it.name}:Utilization") }
+        } else emptyMap()
+
+    private val myIntersectionOccupancy: Map<GuidedPathNetwork.Intersection, TWResponse> =
+        if (collectLinkStatistics) {
+            // Named for the tier rather than just for the place. An intersection *is* a zone, so
+            // with both flags on it would otherwise be registered twice under one name and the
+            // model would refuse to build -- which is exactly what happened the first time the two
+            // tiers were switched on together.
+            network.intersections.associateWith {
+                TWResponse(this, name = "${this.name}:${it.name}:IntersectionOccupied")
+            }
+        } else emptyMap()
+
+    private val myZoneOccupancy: Map<Zone, TWResponse> =
+        if (collectZoneStatistics) {
+            network.zones.associateWith { TWResponse(this, name = "${this.name}:${it.name}:ZoneOccupied") }
+        } else emptyMap()
+
+    /** Zones of each link covered by a transporter, when link statistics were asked for. */
+    val linkOccupancy: Map<Link, TWResponseCIfc>
+        get() = myLinkOccupancy
+
+    /**
+     * The fraction of each link's zones covered over the replication, computed when the replication
+     * ends in the same way a conveyor computes its cell utilization.
+     */
+    val linkUtilization: Map<Link, ResponseCIfc>
+        get() = myLinkUtilization
+
+    /** Whether each intersection was covered, when link statistics were asked for. */
+    val intersectionOccupancy: Map<GuidedPathNetwork.Intersection, TWResponseCIfc>
+        get() = myIntersectionOccupancy
+
+    /** Whether each individual zone was covered, when zone statistics were asked for. */
+    val zoneOccupancy: Map<Zone, TWResponseCIfc>
+        get() = myZoneOccupancy
+
+    // ---- what each completed transport cost ----------------------------------------------------
+    //
+    // These are returned to the process in a GuidedTransportResult as well as accumulated here. The
+    // duplication is deliberate: a modeler who wants per-entity outcomes gets them without
+    // attaching an observer, and one who wants the fleet-level summary gets it without writing any
+    // collection code at all.
+
+    private val myTransportTime = Response(this, name = "${this.name}:TransportTime")
+
+    /** How long a whole transport took, from the request to the entity being set down. */
+    val transportTime: ResponseCIfc
+        get() = myTransportTime
+
+    private val myEmptyMoveTime = Response(this, name = "${this.name}:EmptyMoveTime")
+
+    /** How long transporters spent travelling to collect an entity. */
+    val emptyMoveTime: ResponseCIfc
+        get() = myEmptyMoveTime
+
+    private val myLoadedMoveTime = Response(this, name = "${this.name}:LoadedMoveTime")
+
+    /** How long transporters spent carrying one. */
+    val loadedMoveTime: ResponseCIfc
+        get() = myLoadedMoveTime
+
+    private val myTransportBlockedTime = Response(this, name = "${this.name}:TransportBlockedTime")
+
+    /**
+     * How much of a transport was spent unable to claim the space ahead. The quantity a free-path
+     * model cannot produce at all, which is why it is reported per transport and not only as a
+     * fraction of each transporter's time.
+     */
+    val transportBlockedTime: ResponseCIfc
+        get() = myTransportBlockedTime
+
+    private val myZonesTraversed = Response(this, name = "${this.name}:ZonesTraversedPerTransport")
+
+    /** How many zones a loaded transporter crossed. */
+    val zonesTraversedPerTransport: ResponseCIfc
+        get() = myZonesTraversed
+
+    private val myRouteLength = Response(this, name = "${this.name}:RouteLengthPerTransport")
+
+    /** How far a loaded transporter travelled. */
+    val routeLengthPerTransport: ResponseCIfc
+        get() = myRouteLength
+
+    /** Records a completed transport. Called by the process verb that finishes one. */
+    internal fun collectTransportResult(result: GuidedTransportResult) {
+        myTransportTime.value = result.totalTime
+        myEmptyMoveTime.value = result.emptyMoveTime
+        myLoadedMoveTime.value = result.loadedMoveTime
+        myTransportBlockedTime.value = result.blockedTime
+        myZonesTraversed.value = result.zonesTraversed.toDouble()
+        myRouteLength.value = result.routeLength
+    }
+
+    // ---- animation -----------------------------------------------------------------------------
+
+    private val myAnimationEmitter = GuidedPathAnimationEmitter(this)
+
+    /** Emits a transporter's state change, doing nothing when no animation sink is active. */
+    internal fun emitTransporterState(transporter: GuidedTransporter, state: TransporterState) {
+        myAnimationEmitter.emitTransporterState(transporter, state)
+    }
+
+    /** Emits a transporter's arrival in a zone, doing nothing when no animation sink is active. */
+    internal fun emitTransporterMoved(transporter: GuidedTransporter, zone: Zone) {
+        myAnimationEmitter.emitTransporterMoved(transporter, zone)
+    }
+
+    /** Records that a transporter entered a zone while travelling. */
+    internal fun countZoneTraversal() {
+        myNumZoneTraversals.increment()
+    }
 
     private val myMovementHoldQ = HoldQueue(this, "${this.name}:MovementHoldQ")
 
@@ -361,8 +549,29 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
         myNumMoving.value = moving.toDouble()
         myNumBlocked.value = blocked.toDouble()
         myNumIdle.value = idle.toDouble()
+        // One walk over the zones serves the aggregate and, when they were asked for, the details.
+        // The walk happens either way, so collecting the detail costs the map lookups and nothing
+        // more -- and when the flags are off the maps are empty and there are no lookups at all.
         var occupied = 0
-        for (z in network.zones) if (z.isOccupied) occupied++
+        val perLink = if (collectLinkStatistics) HashMap<Link, Int>(network.links.size) else null
+        for (z in network.zones) {
+            val isOccupied = z.isOccupied
+            if (isOccupied) occupied++
+            myZoneOccupancy[z]?.value = if (isOccupied) 1.0 else 0.0
+            when (z) {
+                is LinkZone -> if (perLink != null && isOccupied) {
+                    perLink[z.link] = (perLink[z.link] ?: 0) + 1
+                }
+
+                is IntersectionZone ->
+                    myIntersectionOccupancy[z.intersection]?.value = if (isOccupied) 1.0 else 0.0
+            }
+        }
+        if (perLink != null) {
+            for ((link, response) in myLinkOccupancy) {
+                response.value = (perLink[link] ?: 0).toDouble()
+            }
+        }
         myZoneUtilization.value = occupied.toDouble() / network.zones.size
     }
 
@@ -397,6 +606,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
 
     /** Schedules a transporter's arrival in the zone it is travelling into. */
     internal fun scheduleTraversal(transporter: GuidedTransporter, zone: Zone, delay: Double) {
+        myNumEventsScheduled.increment()
         schedule(
             myTraversalAction, delay, transporter to zone, ProcessModel.MOVE_PRIORITY,
             "${transporter.name}:enter:${zone.name}"
@@ -412,6 +622,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
      * arrivals at the same instant and behind a process resumption already in flight.
      */
     internal fun scheduleClaimRetry(transporter: GuidedTransporter) {
+        myNumEventsScheduled.increment()
         schedule(
             myClaimRetryAction, 0.0, transporter, ProcessModel.ZONE_CLAIM_PRIORITY,
             "${transporter.name}:retryClaim"
@@ -423,6 +634,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
      * the zone ahead rather than at one end or the other.
      */
     internal fun scheduleRearRelease(transporter: GuidedTransporter, delay: Double) {
+        myNumEventsScheduled.increment()
         schedule(
             myRearReleaseAction, delay, transporter, ProcessModel.MOVE_PRIORITY,
             "${transporter.name}:releaseRear"
@@ -441,6 +653,13 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
             engine.acquirePlacementHolds(transporter)
         }
         refreshFleetCounts()
+        // Emitted every replication rather than once per run, so that a viewer joining at any
+        // replication boundary has the structure before anything moves on it.
+        myAnimationEmitter.emitGuidedPathDefined()
+        for (transporter in myTransporters) {
+            transporter.frontZone?.let { myAnimationEmitter.emitTransporterMoved(transporter, it) }
+            myAnimationEmitter.emitTransporterState(transporter, transporter.transporterState)
+        }
     }
 
     /** The transporters currently unable to proceed, with what each is waiting for. */
@@ -457,6 +676,16 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
      * waiting for, which is what a modeler needs in order to see the cycle or the obstruction.
      */
     override fun replicationEnded() {
+        val traversals = myNumZoneTraversals.value
+        if (traversals > 0.0) {
+            myEventsPerTraversal.value = myNumEventsScheduled.value / traversals
+        }
+        // The same derivation a conveyor uses for cell utilization: the time-weighted average
+        // number of zones covered, over how many zones the link has.
+        for ((link, occupancy) in myLinkOccupancy) {
+            myLinkUtilization[link]?.value =
+                occupancy.withinReplicationStatistic.weightedAverage / link.numZones
+        }
         val stuck = blockedTransporters
         if (stuck.isEmpty()) return
         logger.warn {

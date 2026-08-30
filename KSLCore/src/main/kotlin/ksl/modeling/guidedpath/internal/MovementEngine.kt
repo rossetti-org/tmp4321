@@ -337,6 +337,8 @@ internal class MovementEngine(
         zone.occupy(transporter)
         transporter.claimedZone = null
         transporter.addFrontZone(zone)
+        mySystem.countZoneTraversal()
+        mySystem.emitTransporterMoved(transporter, zone)
         transporter.travellingForward = directionAfterEntering(transporter, zone)
         val route = transporter.currentRoute
             ?: throw IllegalStateException(

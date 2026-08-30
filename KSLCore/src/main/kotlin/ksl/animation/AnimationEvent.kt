@@ -580,6 +580,67 @@ sealed class AnimationEvent {
     ) : AnimationEvent()
 
     // ──────────────────────────────────────────────────────────────────────
+    //  Guided path transporters
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * The static guide path of a `GuidedPathTransportSystem` (emitted once per replication, at the
+     * system's initialize). [intersections] carry their own world coordinates, so unlike a conveyor
+     * the guide path needs no authored layout at all: a link is drawn between the two intersections
+     * it names, and a transporter reported on zone *k* of a link with *n* zones is placed by
+     * interpolating that fraction along it. [links] also say which are two-way and which are spurs,
+     * because those are the two features a viewer most needs to see when reading congestion.
+     */
+    @Serializable
+    @SerialName("GuidedPathDefined")
+    data class GuidedPathDefined(
+        override val simTime: Double,
+        val networkName: String,
+        val intersections: List<GuidedPathIntersectionDef> = emptyList(),
+        val links: List<GuidedPathLinkDef> = emptyList()
+    ) : AnimationEvent()
+
+    /**
+     * A transporter took possession of a zone, which is the guided-path analogue of
+     * [ConveyorItemMoved] and the same trick: the renderer interpolates between consecutive
+     * samples rather than being told a continuous position.
+     *
+     * [linkName] is null when the transporter is standing at an intersection, where [zoneIndex] has
+     * no meaning and is zero; on a link, [zoneIndex] is one-based from the link's begin end.
+     *
+     * Blocking needs no event of its own here, and that is the point of sampling on entry: a
+     * transporter that cannot claim the space ahead simply emits nothing and stays where the
+     * renderer last put it, so congestion appears as stillness without anything having to say so.
+     */
+    @Serializable
+    @SerialName("GuidedTransporterMoved")
+    data class GuidedTransporterMoved(
+        override val simTime: Double,
+        val transporterName: String,
+        val networkName: String,
+        val zoneName: String,
+        val linkName: String? = null,
+        val zoneIndex: Int = 0
+    ) : AnimationEvent()
+
+    /**
+     * A transporter changed what it is doing: travelling empty, carrying, returning, blocked, or
+     * idle. [state] is the transporter state's own name.
+     *
+     * This is what lets a viewer tell the two kinds of stillness apart. A transporter parked with
+     * nothing to do and one stopped because the path ahead is taken look identical on a canvas, and
+     * they mean opposite things about the design.
+     */
+    @Serializable
+    @SerialName("GuidedTransporterStateChanged")
+    data class GuidedTransporterStateChanged(
+        override val simTime: Double,
+        val transporterName: String,
+        val networkName: String,
+        val state: String
+    ) : AnimationEvent()
+
+    // ──────────────────────────────────────────────────────────────────────
     //  Statistics
     // ──────────────────────────────────────────────────────────────────────
 
@@ -892,6 +953,28 @@ internal val AnimationEvent.entityIdOrNull: Long?
         is AnimationEvent.StationExited -> entityId
         else -> null
     }
+
+/**
+ * An intersection of a [AnimationEvent.GuidedPathDefined]: [name] at world position ([x],[y]).
+ * Coordinates come from the guide path itself, which carries them for exactly this purpose.
+ */
+@Serializable
+data class GuidedPathIntersectionDef(val name: String, val x: Double, val y: Double)
+
+/**
+ * A link of a [AnimationEvent.GuidedPathDefined], running from intersection [from] to [to] and
+ * divided into [numZones] equal zones. [bidirectional] and [spur] say which of the two features
+ * that most affect congestion this link has.
+ */
+@Serializable
+data class GuidedPathLinkDef(
+    val name: String,
+    val from: String,
+    val to: String,
+    val numZones: Int,
+    val bidirectional: Boolean = false,
+    val spur: Boolean = false
+)
 
 /** A laid-out node in a [AnimationEvent.NetworkDefined]: an agent [id] at world position ([x],[y]) — G7. */
 @Serializable
