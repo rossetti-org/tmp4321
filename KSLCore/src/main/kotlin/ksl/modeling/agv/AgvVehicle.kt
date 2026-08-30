@@ -89,9 +89,27 @@ open class AgvVehicle @JvmOverloads constructor(
      *  replication's mailbox, which nothing in the framework resets for a runtime agent. */
     internal var agent: AgvSystem.VehicleAgent? = null
 
-    /** Where it is now, as a network location name. */
+    /**
+     * Where the vehicle is, as a network location name, **updated while it travels**.
+     *
+     * Derived from the zone the vehicle currently holds rather than from its spatial position, and
+     * the difference matters more than it looks. The body's `currentLocation` is a spatial
+     * coordinate that is written when the vehicle is *placed* and when it *arrives*: throughout a
+     * journey it still reports where the vehicle set off from. Anything asking a moving vehicle
+     * where it is -- a bidding rule, a re-tasking rule, a feasible-set cost -- would be answered
+     * with its last stopping place, and would keep choosing as though it had never left.
+     *
+     * A link zone reports the intersection it leads to, so a vehicle part-way along a leg is treated
+     * as being at the end of that leg. That is the right approximation for a one-way guide path,
+     * where a vehicle cannot turn round: the junction ahead is the first point from which it has any
+     * choice, so it is the honest place to measure a future journey from. It is the same convention
+     * the passive subsystem's allocation rules use.
+     */
     val currentLocationName: String
-        get() = body.currentLocation.name
+        get() {
+            val front = body.frontZone ?: return body.currentLocation.name
+            return system.network.intersectionOf(front).name
+        }
 
     /**
      * How fast this vehicle travels, as most recently sampled.
@@ -143,8 +161,15 @@ open class AgvVehicle @JvmOverloads constructor(
         myFracTimeOnTask.value = 1.0
     }
 
+    /** The vehicle is no longer on task, however that came about -- delivered or abandoned. */
     internal fun taskEnded() {
         myFracTimeOnTask.value = 0.0
+    }
+
+    /** The vehicle delivered. Separate from [taskEnded] because a tour abandoned part-way through
+     *  ends without completing, and counting it would let a fleet report more deliveries than there
+     *  were loads. */
+    internal fun taskCompleted() {
         myNumTasksCompleted.increment()
     }
 

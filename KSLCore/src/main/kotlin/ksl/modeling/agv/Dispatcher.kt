@@ -79,6 +79,19 @@ open class Dispatcher @JvmOverloads constructor(
 
     internal fun isAvailable(vehicle: AgvVehicle): Boolean = myAvailable.contains(vehicle)
 
+    /**
+     * The live assignment for a task, or null when nobody is committed to it.
+     *
+     * A vehicle holds its assignment, so this is a search over the fleet rather than a lookup. That
+     * is deliberate: an index would be a second place the pairing is recorded, and two records of
+     * one fact is exactly the arrangement that lets a revocation update one and not the other. The
+     * fleet is small enough that the search costs nothing worth the risk.
+     */
+    fun assignmentFor(task: Task): Assignment? =
+        system.vehicles.firstNotNullOfOrNull { v ->
+            v.currentAssignment?.takeIf { it.task === task }
+        }
+
     internal var agent: AgvSystem.DispatcherAgent? = null
 
     /** Set when the dispatcher is woken while it is not dormant, so the wake is not lost. */
@@ -276,6 +289,44 @@ open class Dispatcher @JvmOverloads constructor(
         myTaskQ.remove(task, false)
         task.transitionTo(TaskState.CANCELLED)
         myNumTasksCancelled.increment()
+    }
+
+    /**
+     * Takes a task back from a vehicle that has not yet collected its load, and gives the vehicle
+     * something else to do.
+     *
+     * This is the capability the passive paradigm has no place for. There, a transporter belongs to
+     * the entity that seized it for the whole journey, so a cart three-quarters of the way to a far
+     * pickup cannot be turned round for a nearer one that has just appeared — not because the
+     * movement machinery could not do it, but because there is no object whose business it would be
+     * to decide. Here there is.
+     *
+     * The task returns to `POSTED` and is **not re-enqueued**: it never left the queue, so its
+     * accumulated wait survives. Re-enqueuing would reset the wait and make a load that has been
+     * waiting longest look as though it had just arrived — corrupting both the statistic and any
+     * age-based selection rule, in the one case where the load has most cause to complain.
+     *
+     * The vehicle is not told to stop. It is redirected, and the space layer decides when: a vehicle
+     * mid-traversal defers to the next zone boundary, because something between two places cannot
+     * turn round; a blocked vehicle gives up its wait first, so it is not left on a waiter list for
+     * a journey it is no longer making.
+     *
+     * @throws AgvAssignmentException when the load is already aboard, naming both participants.
+     */
+    fun revoke(assignment: Assignment) {
+        assignment.requireRevocable()
+        require(assignment.task.dispatcher === this) {
+            "Assignment of task (${assignment.task.name}) does not belong to ${this.name}."
+        }
+        assignment.state = AssignmentState.REVOKED
+        assignment.task.transitionTo(TaskState.POSTED)
+        assignment.task.assignedAt = Double.NaN
+        (assignment.task as? TransportTask)?.let { it.numReassignments++ }
+        myNumAssignmentsRevoked.increment()
+        // The vehicle becomes assignable again in the same breath, so a pass that revokes and
+        // reassigns can do both without an intervening wake.
+        declareAvailable(assignment.vehicle)
+        assignment.vehicle.agent?.abandonAssignment()
     }
 
     // ---- the vehicle protocol ----------------------------------------------------------------

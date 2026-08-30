@@ -2,6 +2,7 @@ package ksl.modeling.agv.policies
 
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.AssignmentProposal
+import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.TaskBoard
 import ksl.modeling.agent.contractNet
 import ksl.modeling.entity.KSLProcessBuilder
@@ -56,6 +57,15 @@ class DispatchContext internal constructor(
     val time: Double,
     internal val dispatcher: ksl.modeling.agv.Dispatcher
 ) {
+
+    /**
+     * The vehicle-to-task pairings available at this instant, as an object to enumerate and search.
+     *
+     * Built on demand rather than in the constructor: most policies never look at it, and building
+     * it eagerly would make every dispatching pass pay for reachability queries that nothing reads.
+     */
+    val feasible: FeasibleAssignments
+        get() = FeasibleAssignments(board.unassigned, available, network)
 
     // There is deliberately no `waitFor` here. A policy receives the process builder as its
     // receiver, so it consumes simulated time with `delay` directly -- the same verb it would use
@@ -400,3 +410,144 @@ class ContractNetAssignmentPolicy(
  */
 fun lowestBidByName(bids: List<Bid>): Bid? =
     bids.minWithOrNull(compareBy({ it.value }, { it.vehicle.name }))
+
+/**
+ * Scores every feasible pairing and takes the best.
+ *
+ * Here to show that the feasible set is *usable* rather than merely present. It is also the shape a
+ * cost-function or value-function policy has: enumerate the available actions, score each, choose
+ * one. A rule like nearest-vehicle is a special case of it -- score by distance to the pickup and
+ * the two agree exactly, which `ScoringPolicyTest` asserts, because two shapes that are supposed to
+ * be interchangeable should be shown to be so rather than asserted to be.
+ *
+ * Greedy across tasks: the best pairing is taken, both parties removed, and the next best chosen
+ * from what remains. That can be beaten on a set of tasks better matched jointly; a policy wanting
+ * that has the same enumerable set to solve over and should do so rather than reaching for this.
+ *
+ * @param score lower is better. Given the candidate and the whole feasible set, so a score may be
+ *   relative -- "how much worse than the best alternative for this task" is a legitimate thing to
+ *   want, and it needs the set.
+ */
+class ScoringAssignmentPolicy(
+    val score: (AssignmentProposal, FeasibleAssignments) -> Double
+) : AssignmentPolicyIfc {
+
+    override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
+        val taken = mutableSetOf<AgvVehicle>()
+        val done = mutableSetOf<Dispatcher.Task>()
+        val proposals = mutableListOf<AssignmentProposal>()
+        while (true) {
+            val set = FeasibleAssignments(
+                context.board.unassigned.filter { it !in done },
+                context.available.filter { it !in taken },
+                context.network
+            )
+            val best = set.best { score(it, set) } ?: break
+            taken.add(best.vehicle)
+            done.add(best.task)
+            proposals.add(best)
+        }
+        return proposals
+    }
+
+    override fun toString(): String = "ScoringAssignmentPolicy"
+}
+
+/**
+ * Takes a task back from a vehicle when a materially better pairing has become available.
+ *
+ * The capability the passive paradigm cannot express. There, a transporter belongs to the entity
+ * that seized it until the journey ends, so a cart three-quarters of the way to a far pickup goes on
+ * to it however good the alternative -- not because the movement machinery could not turn it round,
+ * but because there is no object whose business it would be to decide.
+ *
+ * The threshold is what makes this usable rather than pathological. Without one, any improvement at
+ * all justifies a swap, and a fleet under load will churn: revoke, redirect, revoke again as the
+ * board shifts under it, with vehicles spending their time changing their minds. Requiring the
+ * saving to exceed a stated distance means a swap has to be worth making. Set it in the same units
+ * as the network's link lengths.
+ *
+ * Only assignments whose load is not yet aboard are considered; once a vehicle has the load it
+ * finishes the delivery, which the assignment's own guard enforces rather than this policy
+ * remembering to check.
+ *
+ * ## The inner policy must rank pairings, not tasks
+ *
+ * The default is a scoring policy over the feasible set, and that is not an arbitrary choice.
+ * [NearestVehiclePolicy] walks the **tasks** in selection-rule order and picks the nearest vehicle
+ * for each; with one vehicle and two tasks it therefore hands the first task in the queue whatever
+ * is free -- including the vehicle that was just taken off it. A re-tasking policy wrapped around a
+ * rule like that revokes and immediately re-awards the same pairing, does it again on the next pass,
+ * and accomplishes nothing but a rising revocation count.
+ *
+ * A policy that ranks *pairings* has no such problem: it takes the globally best vehicle-and-task
+ * together, which after a revocation is the near task the revocation was made for. Anything supplied
+ * here should have that property, and the interaction is worth knowing about because the failure is
+ * silent -- the model runs, the loads are delivered, and only the revocation counter says something
+ * is wrong.
+ *
+ * @param improvementThreshold how much nearer, in guide-path distance, a swap must be before it is
+ *   worth making
+ * @param inner what to do with the tasks nobody is committed to. Must rank pairings; see above.
+ */
+class ReassigningPolicy(
+    val improvementThreshold: Double,
+    val inner: AssignmentPolicyIfc = ScoringAssignmentPolicy { p, f -> f.cost(p.vehicle, p.task) }
+) : AssignmentPolicyIfc {
+
+    init {
+        require(improvementThreshold > 0.0) {
+            "The improvement threshold must be positive; at zero any improvement justifies a swap " +
+                    "and a loaded fleet will churn instead of working."
+        }
+    }
+
+    override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
+        val dispatcher = context.dispatcher
+        // Taking work back happens before deciding what to do with what is free, so a vehicle freed
+        // by a revocation is available to this same pass rather than the next. Revoking is not
+        // itself an assignment, so it is done here rather than returned as a proposal: a policy
+        // decides, and this is it acting on its decision through the one public operation that
+        // exists for it.
+        //
+        // A vehicle committed to a task has been *withdrawn*, so it is not in `available` and cannot
+        // be seen there. It is reached through the task it holds, which is why both tests below are
+        // written over the assigned tasks rather than over the free vehicles.
+        for (task in context.board.assigned.toList()) {
+            val holder = dispatcher.assignmentFor(task) ?: continue
+            if (!holder.isRevocable) continue
+            val incumbentCost = context.distanceTo(holder.vehicle, task.pickupLocation)
+            if (!incumbentCost.isFinite()) continue
+
+            // Case one: someone else could collect this load materially sooner.
+            val challenger = context.available
+                .filter { it !== holder.vehicle }
+                .minWithOrNull(
+                    compareBy({ context.distanceTo(it, task.pickupLocation) }, { it.name })
+                )
+            val challengerCost =
+                challenger?.let { context.distanceTo(it, task.pickupLocation) } ?: Double.POSITIVE_INFINITY
+
+            // Case two: this vehicle could collect a *different* load materially sooner. The two are
+            // not the same test and a fleet of one has only the second -- which is precisely the
+            // case the passive paradigm cannot express at all, since there the cart belongs to the
+            // entity that seized it until the journey ends.
+            val betterTask = context.board.unassigned
+                .minWithOrNull(
+                    compareBy({ context.distanceTo(holder.vehicle, it.pickupLocation) }, { it.name })
+                )
+            val betterTaskCost = betterTask
+                ?.let { context.distanceTo(holder.vehicle, it.pickupLocation) }
+                ?: Double.POSITIVE_INFINITY
+
+            val bestAlternative = minOf(challengerCost, betterTaskCost)
+            if (!bestAlternative.isFinite()) continue
+            if (incumbentCost - bestAlternative <= improvementThreshold) continue
+            dispatcher.revoke(holder)
+        }
+        return with(inner) { assign(context) }
+    }
+
+    override fun toString(): String =
+        "ReassigningPolicy(threshold=$improvementThreshold, inner=$inner)"
+}

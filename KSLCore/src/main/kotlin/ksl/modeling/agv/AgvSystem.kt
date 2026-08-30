@@ -146,8 +146,10 @@ open class AgvSystem @JvmOverloads constructor(
      * the next entity simply seizes it. Withdrawing the vehicle for the duration of its disposition
      * looked tidier and cost roughly ten per cent of the mean time in system -- which Gate A caught.
      *
-     * A vehicle already carrying out a task is never in this position: it is withdrawn for the whole
-     * of a tour, and re-tasking a committed vehicle is a separate matter with its own rules.
+     * A vehicle part-way through a *revoked* task reaches this the same way and for the same reason:
+     * `revoke` re-declares it before abandoning its tour, so it is available again while still
+     * somewhere on the guide path, and turning it round is exactly what re-tasking means. A vehicle
+     * holding a live assignment is never in this position -- it is withdrawn for the whole of a tour.
      */
     internal fun deliverAssignment(agent: VehicleAgent, assignment: Assignment) {
         agent.assignment = assignment
@@ -277,6 +279,26 @@ open class AgvSystem @JvmOverloads constructor(
             mailbox.onArrival { message -> respond(message) }
         }
 
+        /**
+         * Gives up the current assignment, wherever the vehicle has got to with it.
+         *
+         * Called only from `Dispatcher.revoke`, which has already checked that the load is not
+         * aboard. The vehicle keeps its body allocation and its place in the movement queue: it is
+         * still a vehicle that is somewhere and may be moving, and the loop it will return into is
+         * the same one. What it loses is the reason it was going there.
+         *
+         * The tour is dropped rather than advanced, because a revoked tour's remaining stops belong
+         * to a task this vehicle no longer holds. Nothing is redirected here: the vehicle's own loop
+         * discovers the change when its current leg ends, and the dispatcher's next pass -- which
+         * `revoke` has already arranged by re-declaring availability -- either turns it round in
+         * flight through `deliverAssignment` or leaves it to finish where it was going and then ask
+         * for work. Redirecting from here as well would race with that.
+         */
+        internal fun abandonAssignment() {
+            assignment = null
+            tour = null
+        }
+
         private fun respond(message: AgentMessage) {
             when (message) {
                 is AgentMessage.Request<*> -> {
@@ -388,6 +410,11 @@ open class AgvSystem @JvmOverloads constructor(
                         hold(spaceSystem.movementHoldQueue,                 // SUSPENDS
                             suspensionName = "${vehicle.name}:travellingTo:${stop.location}")
                     }
+                    // The assignment can be revoked while we travel, and if it was, this stop
+                    // belongs to a task we no longer hold. `t` is a local, so without this check the
+                    // loop would go on to collect a load that has been given to someone else -- and
+                    // the model would keep running, with two vehicles believing they had it.
+                    if (assignment !== a) break
                     when (val act = stop.action) {
                         is StopAction.PickUp -> {
                             act.task.blockedAtPickup = vehicle.body.cumulativeBlockedTime - blockedAtStart
@@ -419,8 +446,14 @@ open class AgvSystem @JvmOverloads constructor(
                     t.advance()
                 }
                 release(allocation)
-                dispatcher.completed(a)
-                assignment = null
+                if (assignment === a) {
+                    // Finished it. A tour abandoned part-way through is not a completion, and
+                    // counting it as one would let a fleet report more deliveries than there were
+                    // loads.
+                    dispatcher.completed(a)
+                    assignment = null
+                    vehicle.taskCompleted()
+                }
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()
