@@ -3,7 +3,8 @@ package ksl.modeling.agv
 import ksl.modeling.agv.exceptions.AgvDispatchException
 import ksl.modeling.agv.exceptions.AgvProtocolException
 import ksl.modeling.agv.policies.AssignmentPolicyIfc
-import ksl.modeling.agv.policies.PullFromBoardPolicy
+import ksl.modeling.agv.policies.NearestVehiclePolicy
+import ksl.modeling.agv.policies.TaskSelectionRuleIfc
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.queue.Queue
 import ksl.modeling.variable.Counter
@@ -31,7 +32,7 @@ import ksl.utilities.GetValueIfc
  */
 open class Dispatcher @JvmOverloads constructor(
     val system: AgvSystem,
-    assignmentPolicy: AssignmentPolicyIfc = PullFromBoardPolicy(),
+    assignmentPolicy: AssignmentPolicyIfc = NearestVehiclePolicy(),
     discipline: Queue.Discipline = Queue.Discipline.FIFO,
     name: String? = null
 ) : ModelElement(system, name ?: "Dispatcher") {

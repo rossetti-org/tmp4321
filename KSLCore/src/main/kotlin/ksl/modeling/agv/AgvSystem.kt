@@ -4,7 +4,7 @@ import ksl.modeling.agent.AgentModel
 import ksl.modeling.agv.policies.AssignmentPolicyIfc
 import ksl.modeling.agv.policies.DispatchContext
 import ksl.modeling.agv.policies.Disposition
-import ksl.modeling.agv.policies.PullFromBoardPolicy
+import ksl.modeling.agv.policies.NearestVehiclePolicy
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.KSLProcess
 import ksl.modeling.guidedpath.GuidedPathNetwork
@@ -35,7 +35,7 @@ open class AgvSystem @JvmOverloads constructor(
     parent: ModelElement,
     val network: GuidedPathNetwork,
     zoneContentionRule: ZoneContentionRuleIfc = FIFOZoneContentionRule(),
-    assignmentPolicy: AssignmentPolicyIfc = PullFromBoardPolicy(),
+    assignmentPolicy: AssignmentPolicyIfc = NearestVehiclePolicy(),
     name: String? = null
 ) : AgentModel(parent, name) {
 
@@ -402,7 +402,7 @@ open class AgvSystem @JvmOverloads constructor(
                     hold(dispatcherIdleQ, suspensionName = "${dispatcher.name}:idle")
                 }
                 val context = DispatchContext(
-                    dispatcher.board, dispatcher.availableVehicles, network, time
+                    dispatcher.board, dispatcher.availableVehicles, network, time, dispatcher
                 )
                 // The policy may consume simulated time -- that is what makes batching and auctions
                 // expressible -- so this call is a suspension point even though Phase 1's policy

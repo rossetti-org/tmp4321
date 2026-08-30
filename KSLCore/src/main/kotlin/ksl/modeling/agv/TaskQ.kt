@@ -1,30 +1,9 @@
 package ksl.modeling.agv
 
+import ksl.modeling.agv.policies.TaskSelectionRuleIfc
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.queue.Queue
 import ksl.simulation.ModelElement
-
-/**
- * Determines the order in which an assignment policy is shown the outstanding tasks.
- *
- * The same relationship `RequestQ.requestSelectionRule` has to a resource: the rule may present
- * tasks in an order the queue discipline does not imply, so a later-arriving task can be offered
- * first without disturbing the queue itself or the waiting statistics it carries.
- */
-fun interface TaskSelectionRuleIfc {
-
-    /**
-     * @param tasks the unassigned tasks, in queue order
-     * @return the same tasks in the order a policy should consider them
-     */
-    fun order(tasks: List<Dispatcher.Task>): List<Dispatcher.Task>
-}
-
-/** Queue order, unchanged. The default. */
-class FifoTaskSelection : TaskSelectionRuleIfc {
-    override fun order(tasks: List<Dispatcher.Task>): List<Dispatcher.Task> = tasks
-    override fun toString(): String = "FifoTaskSelection"
-}
 
 /**
  * The waiting line: the one queue this subsystem reports.

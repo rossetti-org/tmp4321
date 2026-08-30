@@ -48,3 +48,21 @@ class ParkInPlaceDisposition : DispositionPolicyIfc {
     override fun disposition(vehicle: AgvVehicle): Disposition = Disposition.ParkInPlace
     override fun toString(): String = "ParkInPlaceDisposition"
 }
+
+/**
+ * Send the vehicle to a named staging point.
+ *
+ * Between [ReturnToHomeBaseDisposition] and [ParkInPlaceDisposition] in what it assumes: a home base
+ * is per vehicle and a staging area is shared, so this is the rule for a fleet that should gather
+ * somewhere central rather than disperse to its own corners. Whether that is better depends entirely
+ * on where the work comes from, which is why it is a policy and not a default.
+ *
+ * The staging point must have room for every vehicle that may go there. A zone holds one vehicle, so
+ * a staging *intersection* stages exactly one and the rest queue on the approach -- which is usually
+ * not what was wanted and is exactly the configuration that quietly strangles a model. Stage on a
+ * spur per vehicle, or accept that this is a rule about one parking space.
+ */
+class MoveToStagingDisposition(val locationName: String) : DispositionPolicyIfc {
+    override fun disposition(vehicle: AgvVehicle): Disposition = Disposition.MoveTo(locationName)
+    override fun toString(): String = "MoveToStagingDisposition($locationName)"
+}

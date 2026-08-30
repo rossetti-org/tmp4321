@@ -2,37 +2,112 @@ package ksl.modeling.agv.policies
 
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.Dispatcher
+import ksl.modeling.guidedpath.GuidedPathNetwork
+
+/**
+ * A dispatcher's invitation to bid on a task.
+ *
+ * Carries the instant it was issued as well as the task, because a bid may legitimately depend on
+ * how long a vehicle has to respond and because a run's record should show when the call went out,
+ * not only what came back.
+ */
+data class CallForProposals(val task: Dispatcher.Task, val issuedAt: Double)
+
+/**
+ * A vehicle's offer.
+ *
+ * **Lower is better.** That convention has to be stated somewhere and this is the place: a bid is a
+ * cost the vehicle is quoting, not a fitness it is claiming, so distance, completion time and
+ * remaining charge all point the same way without any policy having to negate anything.
+ *
+ * The [note] is for the modeller, not for the mechanism -- nothing reads it. It exists so that a
+ * study comparing bidding rules can record *why* a vehicle offered what it did, which is otherwise
+ * lost the moment the auction closes.
+ */
+data class Bid(val vehicle: AgvVehicle, val value: Double, val note: String? = null)
 
 /**
  * What a vehicle offers when a dispatcher calls for proposals.
  *
- * Declared now and consulted from the negotiated-dispatching phase. It is here rather than there
- * because a vehicle carrying its own bidding rule -- rather than the dispatcher computing on the
- * vehicle's behalf -- is the substantive difference between an auction and a centrally-solved
- * assignment, and putting the field on the vehicle from the start keeps that honest.
- *
- * @return the vehicle's offer, lower being better, or null to decline the call
+ * Carried by the vehicle rather than computed by the dispatcher on the vehicle's behalf, and that is
+ * the substantive difference between an auction and a centrally-solved assignment. A dispatcher that
+ * evaluates every vehicle itself is solving an optimisation over a fleet it models; a dispatcher
+ * that asks is deferring to what each vehicle knows about itself -- its charge, its faults, its own
+ * idea of what it is willing to take on. The second is expressible here and is not expressible in
+ * the passive paradigm at all, because a passive resource has nothing with which to hold an opinion.
  */
 fun interface BidPolicyIfc {
-    fun bid(vehicle: AgvVehicle, task: Dispatcher.Task): Double?
+
+    /**
+     * @return the vehicle's offer, lower being better, or **null to decline**. Declining is normal
+     *   operation and not an error: a vehicle out of range, out of charge, or already committed has
+     *   nothing useful to say, and a dispatcher that received a bid from it anyway would have to
+     *   invent a number meaning "no", which is how sentinel values get compared as though they were
+     *   costs.
+     */
+    fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid?
 }
 
 /**
- * Bid the network distance to the pickup, and decline when it is unreachable.
+ * Bid the distance to the pickup, and decline when it is unreachable.
  *
  * Distance along the guide path, never straight-line separation: on a one-way loop a vehicle
- * standing a few feet past a pickup point has to go all the way round, and bidding its proximity
- * would win it a job it is furthest from.
+ * standing a few feet past a pickup point must go all the way round, and bidding its proximity would
+ * win it the job it is furthest from.
  */
 class NetworkDistanceBid : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, task: Dispatcher.Task): Double? {
-        val network = vehicle.system.network
+    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
         val here = network.location(vehicle.currentLocationName) ?: return null
-        val there = network.location(task.pickupLocation) ?: return null
+        val there = network.location(cfp.task.pickupLocation) ?: return null
         if (!network.isReachable(here, there)) return null
-        return network.distance(here, there)
+        return Bid(vehicle, network.distance(here, there), "distance to pickup")
     }
 
     override fun toString(): String = "NetworkDistanceBid"
+}
+
+/**
+ * Bid the time to finish the whole job: travel to the pickup, then carry the load to its
+ * destination, at this vehicle's own velocity.
+ *
+ * The difference from [NetworkDistanceBid] is the point of having two. Nearest-to-pickup is a proxy
+ * for "soonest done" that stops being one as soon as vehicles differ in speed or the loaded legs
+ * differ in length -- a fast vehicle slightly further away finishes first, and a rule that cannot
+ * say so will not send it. This is the rule that can, and it needs nothing from the dispatcher to do
+ * it, because the vehicle knows its own velocity.
+ */
+class CompletionTimeBid : BidPolicyIfc {
+
+    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
+        val here = network.location(vehicle.currentLocationName) ?: return null
+        val pickup = network.location(cfp.task.pickupLocation) ?: return null
+        val destination = network.location(cfp.task.destination) ?: return null
+        if (!network.isReachable(here, pickup)) return null
+        if (!network.isReachable(pickup, destination)) return null
+        val velocity = vehicle.nominalVelocity
+        if (velocity <= 0.0) return null
+        val distance = network.distance(here, pickup) + network.distance(pickup, destination)
+        return Bid(vehicle, distance / velocity, "empty + loaded legs at $velocity")
+    }
+
+    override fun toString(): String = "CompletionTimeBid"
+}
+
+/**
+ * Bid distance, but decline outright when already carrying out a task.
+ *
+ * Included because declining has to be demonstrably ordinary. A rule that always returns a number
+ * makes "no" indistinguishable from "very expensive", and the first time a modeller wants a vehicle
+ * to genuinely refuse -- a fault, a flat battery, a shift ending -- they will reach for a large
+ * constant and discover that a large constant still wins an auction nobody else entered.
+ */
+class DeclineWhenBusyBid(private val inner: BidPolicyIfc = NetworkDistanceBid()) : BidPolicyIfc {
+
+    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
+        if (vehicle.currentAssignment != null) return null
+        return inner.bid(vehicle, cfp, network)
+    }
+
+    override fun toString(): String = "DeclineWhenBusyBid($inner)"
 }

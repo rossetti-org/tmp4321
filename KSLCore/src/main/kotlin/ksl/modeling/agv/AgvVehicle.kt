@@ -93,6 +93,18 @@ open class AgvVehicle @JvmOverloads constructor(
     val currentLocationName: String
         get() = body.currentLocation.name
 
+    /**
+     * How fast this vehicle travels, as most recently sampled.
+     *
+     * For a bidding rule that wants to quote a completion time rather than a distance, since a fast
+     * vehicle slightly further off finishes first and a distance-only rule cannot say so. It is the
+     * *last sampled* value rather than a distributional mean, which is exact when velocity is
+     * constant -- the usual case -- and an estimate otherwise. A bid is a quote, not a guarantee, so
+     * an estimate is the right thing here; anything drawing on it for a hard constraint should not.
+     */
+    val nominalVelocity: Double
+        get() = body.currentVelocity
+
     /** True when it has declared itself available and holds no assignment. Asserted by the vehicle,
      *  never inferred by the dispatcher. */
     val isAvailable: Boolean

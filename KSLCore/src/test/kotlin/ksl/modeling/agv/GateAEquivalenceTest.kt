@@ -30,10 +30,11 @@ import kotlin.test.assertTrue
  *  wanted to make between paradigms would be confounded.
  *
  *  The two models are matched as tightly as the two APIs allow: one network, one cart, the same
- *  arrival stream, the same velocities and delays, and a policy pair chosen to be degenerate.
- *  With a single vehicle, "closest idle transporter" and "the first available vehicle takes the
- *  first task" are the same rule -- there is only ever one candidate -- so any difference that
- *  survives is a difference of paradigm rather than of dispatching.
+ *  arrival stream, the same velocities and delays, and a matched pair of dispatching rules. The
+ *  passive pool runs `ClosestByNetworkDistanceRule` and the active system its default
+ *  `NearestVehiclePolicy`, which are the same rule stated in the two paradigms' own terms; with a
+ *  single vehicle they are additionally degenerate, since there is only ever one candidate. Any
+ *  difference that survives is therefore a difference of paradigm rather than of dispatching.
  *
  *  Acceptance is **statistical equivalence**. The exact comparison is computed and reported
  *  alongside, because a single mismatched digit localizes a fault that a confidence interval
