@@ -35,6 +35,9 @@ import ksl.modeling.entity.ProcessModel.Companion.YIELD_PRIORITY
 import ksl.modeling.entity.ProcessModel.Entity
 import ksl.modeling.queue.Queue
 import ksl.modeling.guidedpath.*
+import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.AgvTransportResult
+import ksl.modeling.agv.Dispatcher
 import ksl.modeling.spatial.*
 import ksl.simulation.ModelElement
 import ksl.utilities.GetValueIfc
@@ -2420,5 +2423,118 @@ interface KSLProcessBuilder {
         return result
     }
 
+
+
+    // ---- active guided vehicles ---------------------------------------------------------------
+    //
+    // These sit beside the guided-path verbs above and answer the same question under a different
+    // modelling paradigm. There, the entity holds a claim on a particular transporter and steers
+    // it: request one, be carried, release it. Here the entity states what it needs and suspends.
+    // It never chooses a vehicle, never waits for a particular one, and cannot tell which came --
+    // because the choice belongs to a dispatcher that can see the whole fleet and the whole board,
+    // and can take time to decide.
+    //
+    // The shorter surface is the point. The passive verbs expose a protocol because the entity
+    // drives it; these expose a request because it does not.
+
+    /**
+     * Asks for transport and waits until it has been delivered.
+     *
+     * The entity waits twice and for two different things -- for a vehicle to be assigned and to
+     * arrive, then for the ride itself -- but both are the same suspension from the process's point
+     * of view, which is why this is one verb rather than three. Use
+     * [requestAgvTransport]/[awaitAgvTransport] when the process must act in between.
+     *
+     * @param system the fleet to ask
+     * @param destination the junction or station to be delivered to
+     * @param origin where the vehicle should collect the entity; where it is now by default
+     * @param loadingDelay how long it takes to put the entity aboard, during which the vehicle is
+     *   stationary and still holding its space
+     * @param unLoadingDelay how long it takes to take it off
+     * @param priority orders this request against others posted at the same instant
+     * @param suspensionName names this suspension point when a process has several
+     * @return what the transport cost
+     */
+    suspend fun transportByAgv(
+        system: AgvSystem,
+        destination: String,
+        origin: String = entity.currentLocation.name,
+        loadingDelay: GetValueIfc = ConstantRV.ZERO,
+        unLoadingDelay: GetValueIfc = ConstantRV.ZERO,
+        priority: Int = TRANSPORT_REQUEST_PRIORITY,
+        suspensionName: String? = null
+    ): AgvTransportResult {
+        val task = requestAgvTransport(
+            system, destination, origin, loadingDelay, unLoadingDelay, priority
+        )
+        return awaitAgvTransport(task, suspensionName)
+    }
+
+    /**
+     * Posts a transport request and returns immediately, without waiting for it.
+     *
+     * For a process that must do something between asking and being carried -- finishing an
+     * operation, releasing a machine -- so that the vehicle can be on its way while that happens.
+     * The returned task must be passed to [awaitAgvTransport]; abandoning it would leave the
+     * vehicle to collect an entity that never suspends.
+     *
+     * @return the posted task, which is also where its wait is recorded
+     */
+    suspend fun requestAgvTransport(
+        system: AgvSystem,
+        destination: String,
+        origin: String = entity.currentLocation.name,
+        loadingDelay: GetValueIfc = ConstantRV.ZERO,
+        unLoadingDelay: GetValueIfc = ConstantRV.ZERO,
+        priority: Int = TRANSPORT_REQUEST_PRIORITY
+    ): Dispatcher.TransportTask {
+        // The dispatcher is the factory as well as the owner of the wait: posting enqueues the task
+        // on its queue, which is where the reported waiting statistics accrue. There is deliberately
+        // no window in which a caller holds an unposted task.
+        return system.dispatcher.postTransport(
+            entity, origin, destination, loadingDelay, unLoadingDelay, priority
+        )
+    }
+
+    /**
+     * Waits until a task posted by [requestAgvTransport] has been delivered.
+     *
+     * @param task the task returned by [requestAgvTransport]
+     * @param suspensionName names this suspension point when a process has several
+     * @return what the transport cost
+     */
+    suspend fun awaitAgvTransport(
+        task: Dispatcher.TransportTask,
+        suspensionName: String? = null
+    ): AgvTransportResult {
+        require(task.load === entity) {
+            "Entity (${entity.name}) tried to wait on a transport task belonging to entity " +
+                    "(${task.load.name})."
+        }
+        val system = task.dispatcher.system
+        val posted = task.timeEnteredQueue
+        // Two holds, and neither reports anything: they carry the suspension, while the wait itself
+        // is recorded on the task in the dispatcher's queue. Making these the statistics would put
+        // two rows on the report that look like waiting lines, one of which -- riding -- is not one.
+        hold(system.awaitingPickupHoldQ, suspensionName = "$suspensionName:awaitingVehicle")
+        val pickedUp = system.time
+        hold(system.inTransitHoldQ, suspensionName = "$suspensionName:riding")
+        // The vehicle resumed us, having set currentLocation before doing so.
+        val delivered = system.time
+        system.recordTransportTime(delivered - pickedUp)
+        // The assignment instant is read off the task rather than recomputed, so the decomposition
+        // cannot drift from the queue's own figure: the two waits sum to pickedUp - posted, which
+        // is exactly the task's time in queue.
+        return AgvTransportResult(
+            totalTime = delivered - posted,
+            waitForAssignment = task.assignedAt - posted,
+            waitForArrival = pickedUp - task.assignedAt,
+            transportTime = delivered - pickedUp,
+            blockedTime = task.blockedAtPickup + task.blockedWhileLoaded,
+            routeLength = task.loadedRouteLength,
+            vehicleName = task.carriedBy?.name ?: "",
+            numReassignments = task.numReassignments
+        )
+    }
 
 }
