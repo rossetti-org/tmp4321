@@ -29,6 +29,8 @@ import ksl.utilities.GetValueIfc
 import ksl.utilities.IdentityIfc
 import io.github.oshai.kotlinlogging.KotlinLogging
 import ksl.modeling.elements.GeneratorActionIfc
+import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.guidedpath.GuidedTransporterPoolWithQ
 import ksl.modeling.spatial.*
 import ksl.utilities.Identity
 import ksl.utilities.random.rvariable.RVariableIfc
@@ -713,6 +715,17 @@ open class ProcessModel(parent: ModelElement, name: String? = null) : ModelEleme
         ) : Request(amountRequested = 1){
             override val resource: ResourceIfc
                 get() = myMovableResourcePool
+        }
+
+        /**
+         *  A request for any transporter of a guided-path pool. Names the **pool**, because which
+         *  transporter is chosen is decided at allocation rather than when the request queues.
+         */
+        inner class GuidedTransporterPoolRequest internal constructor (
+            internal var myGuidedTransporterPool: GuidedTransporterPoolWithQ
+        ) : Request(amountRequested = 1){
+            override val resource: ResourceIfc
+                get() = myGuidedTransporterPool
         }
 
         /**
@@ -2328,6 +2341,47 @@ open class ProcessModel(parent: ModelElement, name: String? = null) : ModelEleme
                 )
                 logger.trace { "r = ${model.currentReplicationNumber} : $time > ENTITY: entity_id = ${entity.id}: allocated 1 unit of ${thePool.name} : allocation_id = ${allocation.id}" }
                 logger.trace { "r = ${model.currentReplicationNumber} : $time > END : SEIZE: MOVABLE RESOURCE POOL: ${thePool.name} : ENTITY: entity_id = ${entity.id}: suspension name = $currentSuspendName" }
+                currentSuspendName = null
+                currentSuspendType = SuspendType.NONE
+                return allocation
+            }
+
+            override suspend fun seize(
+                pool: GuidedTransporterPoolWithQ,
+                pickup: GuidedPathNetwork.Intersection,
+                seizePriority: Int,
+                suspensionName: String?
+            ): Allocation {
+                currentSuspendName = suspensionName
+                currentSuspendType = SuspendType.SEIZE
+                logger.trace { "r = ${model.currentReplicationNumber} : $time > BEGIN : SEIZE: GUIDED TRANSPORTER POOL: ${pool.name} : ENTITY: entity_id = ${entity.id}: suspension name = $currentSuspendName" }
+                yield(seizePriority, "SEIZE yield for guided transporter pool ${pool.name}")
+                val queue = pool.myWaitingQ
+                val request = GuidedTransporterPoolRequest(myGuidedTransporterPool = pool)
+                request.priority = entity.priority
+                queue.enqueue(request) // put the request in the queue, whether or not it will wait
+                emitAnimation { AnimationEvent.SeizeQueued(time, entity.id, pool.name, queue.name, 1) }
+                try {
+                    if (!pool.hasIdleTransporter) {
+                        logger.trace { "r = ${model.currentReplicationNumber} : $time > \t SUSPENDED : SEIZE: ENTITY: entity_id = ${entity.id}: suspension name = $currentSuspendName" }
+                        emitAnimation { AnimationEvent.SeizeWaiting(time, entity.id, pool.name) }
+                        entity.state.waitForResource()
+                        suspend()
+                        entity.state.activate()
+                        logger.trace { "r = ${model.currentReplicationNumber} : $time > \t RESUMED : SEIZE: ENTITY: entity_id = ${entity.id}: suspension name = $currentSuspendName" }
+                    }
+                    queue.remove(request) // take the request out of the queue after possible wait
+                } finally {
+                    // Abnormal exit only; see seize(resource: Resource, ...) for the full reasoning.
+                    (request.queue as? RequestQ)?.remove(request, false)
+                }
+                logger.trace { "r = ${model.currentReplicationNumber} : $time > ENTITY: entity_id = ${entity.id} waited ${request.timeInQueue} units" }
+                val thePool = request.myGuidedTransporterPool
+                require(thePool.hasIdleTransporter) { "r = ${model.currentReplicationNumber} : $time > No transporter can be allocated to entity_id = ${entity.id} resuming after waiting for pool ${thePool.name}" }
+                // The allocation rule runs here rather than when the request queued, so an entity
+                // that has waited gets the transporter that is best for it now.
+                val allocation = thePool.allocateFor(entity, pickup, suspensionName)
+                logger.trace { "r = ${model.currentReplicationNumber} : $time > ENTITY: entity_id = ${entity.id}: allocated transporter ${allocation.myResource.name} : allocation_id = ${allocation.id}" }
                 currentSuspendName = null
                 currentSuspendType = SuspendType.NONE
                 return allocation

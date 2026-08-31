@@ -17,8 +17,9 @@
  */
 package ksl.modeling.guidedpath
 
-import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
+import ksl.modeling.entity.AbstractResourcePool
+import ksl.modeling.entity.Allocation
 import ksl.modeling.entity.RequestQ
 import ksl.modeling.guidedpath.rules.ClosestByNetworkDistanceRule
 import ksl.modeling.guidedpath.rules.GuidedTransporterAllocationRuleIfc
@@ -54,7 +55,7 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
     val allocationRule: GuidedTransporterAllocationRuleIfc = ClosestByNetworkDistanceRule(),
     val idleDispositionRule: IdleDispositionRuleIfc = ParkInPlaceRule(),
     name: String? = null
-) : ModelElement(parent, name) {
+) : AbstractResourcePool<GuidedTransporter>(parent, name) {
 
     init {
         require(transporters.isNotEmpty()) { "A transporter pool must contain at least one transporter." }
@@ -63,39 +64,41 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
                 "Transporter (${t.name}) belongs to system (${t.system.name}), not to " +
                         "(${system.name}), so it cannot be pooled here."
             }
+            addResource(t)
         }
     }
 
-    private val myTransporters: List<GuidedTransporter> = transporters.toList()
-
     /** The fleet, in declaration order, which is the order ties are broken in. */
     val transporters: List<GuidedTransporter>
-        get() = myTransporters
+        get() = myResources
 
     /**
-     * Required by the underlying resource seize, which always takes a queue. In practice a
-     * transporter is only ever seized once it is known to be free, so nothing waits here; entities
-     * that find the fleet busy wait on [waitingQ] instead, where the statistics that matter are
-     * collected.
+     * Where entities wait for a transporter of this pool.
+     *
+     * A [RequestQ], and the same one the allocation is made through, because that is what makes
+     * this pool behave like every other resource pool in the library. A request is enqueued **on
+     * every call**, whether or not a transporter is free, and removed when one is allocated: so an
+     * entity served immediately records a wait of zero rather than no observation at all, which is
+     * what `seize` has always done and what the reported mean has to be over to mean anything.
+     *
+     * It is also what stops the queue being jumped. A released transporter marks the next eligible
+     * request `resumePending`, which reserves the pool's availability for it; an entity arriving in
+     * the same instant enqueues behind it and finds itself not next, rather than taking the
+     * transporter out from under it.
      */
-    internal val seizeQ = RequestQ(this, "${this.name}:SeizeQ")
-
-    private val myWaitingQ = HoldQueue(this, "${this.name}:WaitingQ")
+    internal val myWaitingQ: RequestQ = RequestQ(this, "${this.name}:Q")
 
     /** Entities waiting for any transporter of this pool to become free. */
-    val waitingQ: QueueCIfc<ProcessModel.Entity>
-        get() = myWaitingQ
-
-    internal val holdQueue: HoldQueue
+    val waitingQ: QueueCIfc<ProcessModel.Entity.Request>
         get() = myWaitingQ
 
     /** The transporters that are allocated to nobody. */
     val idleTransporters: List<GuidedTransporter>
-        get() = myTransporters.filter { it.hasAvailableUnits }
+        get() = myResources.filter { it.hasAvailableUnits }
 
     /** True when some transporter of the pool could be sent now. */
     val hasIdleTransporter: Boolean
-        get() = myTransporters.any { it.hasAvailableUnits }
+        get() = myResources.any { it.hasAvailableUnits }
 
     /**
      * Clears any state the allocation rule carries, so a replication cannot inherit the end of the
@@ -124,32 +127,43 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
     }
 
     /**
-     * Wakes the entity that has waited longest, if any.
+     * Allocates a transporter to an entity, choosing which one only now.
      *
-     * Called when a transporter is released. Exactly one is woken: it will choose a transporter for
-     * itself, and if the fleet has meanwhile become busy again it simply waits once more.
+     * The choice is deliberately made here rather than when the entity queued. An entity that has
+     * been waiting should get the transporter that is best for it *at the moment one is free*, not
+     * the one that happened to be nearest when it joined the queue -- and by then the fleet has
+     * moved. This is the same division of labour that [ksl.modeling.spatial.MovableResourcePool]
+     * uses, for the same reason.
+     *
+     * @param entity who the transporter is for
+     * @param pickup where it is wanted, which is what the rule ranks by
+     * @param allocationName names the allocation
      */
-    internal fun wakeNextWaiter() {
-        val next = myWaitingQ.peekNext() ?: return
-        myWaitingQ.removeAndResume(next)
+    internal fun allocateFor(
+        entity: ProcessModel.Entity,
+        pickup: GuidedPathNetwork.Intersection,
+        allocationName: String? = null
+    ): Allocation {
+        require(hasIdleTransporter) { "Pool ($name) has no idle transporter to allocate." }
+        val chosen = selectFor(pickup)!!
+        val allocation = chosen.allocate(entity, 1, myWaitingQ, allocationName)
+        // The requests waiting in this queue are the pool's, not the member's: a request names the
+        // pool, because no transporter has been chosen when it queues. Recording the pool here is
+        // what lets the release process the queue on the pool's behalf.
+        allocation.originatingPool = this
+        return allocation
     }
 
     /**
-     * Puts a released transporter back to work, or to rest.
+     * What a transporter does once it has been given back and nobody is waiting for it.
      *
-     * Anything waiting takes precedence over the idle rule, and not as a matter of policy: sending
-     * a transporter off to a home base while an entity waits for one would leave both worse off,
-     * and no rule should be able to ask for that. Only when nothing is waiting does where the
-     * transporter idles become a question at all.
-     *
-     * A transporter sent somewhere to wait travels there over simulated time, and the entity that
-     * released it does not wait for it to arrive.
+     * Called after the release, which has already offered the transporter to whoever was waiting.
+     * Work beats disposition: a fleet that sent a transporter home while an entity was queued for
+     * it would be paying for the journey twice, so a non-empty queue means there is nothing to
+     * decide here.
      */
-    internal fun dispose(transporter: GuidedTransporter) {
-        if (myWaitingQ.isNotEmpty) {
-            wakeNextWaiter()
-            return
-        }
+    internal fun disposeIfUnwanted(transporter: GuidedTransporter) {
+        if (myWaitingQ.isNotEmpty) return
         when (val disposition = idleDispositionRule.disposition(transporter)) {
             is IdleDisposition.ParkInPlace -> Unit
 
@@ -163,6 +177,6 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
     }
 
     override fun toString(): String =
-        "GuidedTransporterPoolWithQ($name, ${myTransporters.size} transporters, " +
+        "GuidedTransporterPoolWithQ($name, ${myResources.size} transporters, " +
                 "${idleTransporters.size} idle, ${myWaitingQ.size} waiting)"
 }

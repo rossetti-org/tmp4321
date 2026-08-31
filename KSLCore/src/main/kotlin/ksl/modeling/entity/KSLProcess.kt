@@ -2258,6 +2258,28 @@ interface KSLProcessBuilder {
      * @param suspensionName names this suspension point when a process has several
      * @return the claim on the transporter that came
      */
+    /**
+     *  Requests any transporter of a guided-path pool, waiting for one if the fleet is busy.
+     *
+     *  The same shape as the seize of a resource pool or a movable resource pool, and for the same
+     *  reasons: the request is queued whether or not it waits, so its wait is observed even when it
+     *  is zero; the release of a transporter reserves the pool's availability for whoever is next;
+     *  and *which* transporter is chosen is decided at allocation rather than when the request
+     *  queues, so an entity that has waited is given the transporter that is best for it now.
+     *
+     *  @param pool the fleet to request from
+     *  @param pickup where the transporter is wanted, which is what the allocation rule ranks by
+     *  @param seizePriority orders this request against others made at the same instant
+     *  @param suspensionName names this suspension point when a process has several
+     *  @return the allocation of the chosen transporter
+     */
+    suspend fun seize(
+        pool: GuidedTransporterPoolWithQ,
+        pickup: GuidedPathNetwork.Intersection,
+        seizePriority: Int = SEIZE_PRIORITY,
+        suspensionName: String? = null
+    ): Allocation
+
     suspend fun requestGuidedTransporter(
         pool: GuidedTransporterPoolWithQ,
         pickupLocation: String,
@@ -2267,16 +2289,12 @@ interface KSLProcessBuilder {
         val system = pool.system
         val pickup = system.network.requireLocation(pickupLocation)
         val requestedAt = pool.time
-        // Wait for a transporter to be free, then choose one. Choosing only among transporters that
-        // are free at this instant is what lets the seize below return without waiting again, and
-        // what stops an entity being committed to a particular transporter before a nearer one
-        // comes back.
-        var chosen = pool.selectFor(pickup)
-        while (chosen == null) {
-            hold(pool.holdQueue, suspensionName = "$suspensionName:awaitTransporter:${pool.name}")
-            chosen = pool.selectFor(pickup)
-        }
-        val allocation = seize(chosen, 1, requestPriority, pool.seizeQ, suspensionName)
+        // One seize against the pool, exactly as a resource pool or a movable resource pool is
+        // seized. The entity queues whether or not it waits, and which transporter it gets is
+        // decided when one is allocated rather than when it joined the queue -- so it is never
+        // committed to a particular transporter before a nearer one comes back.
+        val allocation = seize(pool, pickup, requestPriority, suspensionName)
+        val chosen = allocation.myResource as GuidedTransporter
         val request = GuidedTransportRequest(chosen, entity, allocation, pool.time)
         request.requestedAt = requestedAt
         // Taken before the empty move, so that blocking on the way to collect the entity counts
@@ -2379,9 +2397,12 @@ interface KSLProcessBuilder {
     ) {
         request.requireUsable("release transporter (${request.transporter.name})")
         val transporter = request.transporter
+        // The release processes the pool's queue on the pool's behalf, because the allocation
+        // records the pool it came from -- so whoever is next is offered the transporter before any
+        // question of sending it home arises.
         release(request.allocation)
         request.state = GuidedTransportRequestState.COMPLETED
-        pool.dispose(transporter)
+        pool.disposeIfUnwanted(transporter)
     }
 
     /**

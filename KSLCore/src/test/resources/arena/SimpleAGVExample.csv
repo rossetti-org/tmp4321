@@ -26,7 +26,5 @@ numberIn,20
 numberOut,12
 entityObservations,12
 queueObservations,14
-# Mean x count. Free of the observation-counting convention the two tools differ on: Arena books
-# an observation for a request served instantly (its reported minimum wait is 0) and this subsystem
-# never queues one. The totals are the same quantity; the means are over different denominators.
+# Mean x count, kept as a second reading of the same fact.
 requestQueueTotalWaitingTime,982.7999999999972

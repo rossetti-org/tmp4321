@@ -99,15 +99,15 @@ import kotlin.test.assertTrue
  *  crosses it twice per cycle and only the outbound crossing is shortened; that is what showed the
  *  mechanism is asymmetric, which the first guess had wrong.
  *
- *  ### The one convention the two tools do not share
+ *  ### Every quantity, including the queue
  *
- *  Arena reports a mean queue waiting time of 70.2 over **14** observations; this subsystem reports
- *  81.9 over **12**. Both are 982.8 in total. The difference is entirely in what counts as an
- *  observation: Arena books one for a request served instantly -- its reported minimum waiting time
- *  is 0 -- while an entity that finds a cart free never enters this subsystem's queue at all. So the
- *  comparison above is made on the total, which is the same physical quantity without the counting
- *  convention riding along, and the two observation counts are pinned by their own assertions so
- *  that this stays the known difference rather than quietly becoming a different one.
+ *  An earlier version of this test could not compare the mean queue wait directly. Arena reported
+ *  70.2 over 14 observations and this subsystem 81.9 over 12, and the comparison was made on the
+ *  total instead, on the reasoning that the two tools counted observations differently. That
+ *  reasoning was wrong: Arena counts the way `seize` counts, and it was the guided-path pool that
+ *  departed from the library by parking entities in a hold queue only when the fleet was busy. The
+ *  pool is now seized like any other resource pool, so a request served instantly records a wait of
+ *  zero, the counts agree at 14, and the mean is compared like everything else.
  */
 class SimpleAgvArenaCrossCheckTest {
 
@@ -241,10 +241,8 @@ class SimpleAgvArenaCrossCheckTest {
             "queueObservations" to shop.carts.waitingQ.timeInQ.withinReplicationStatistic.count
         )
         ksl["transporterUtilization"] = ksl.getValue("transporterNumberBusy") / 2.0
-        // Mean times count, which is free of the observation-counting convention that the two tools
-        // differ on. See the KDoc: Arena books a queue observation for a request served instantly
-        // and this subsystem never queues one, so the two means are over different denominators
-        // while the quantity underneath them is the same.
+        // Kept as a second reading of the same fact: mean times count. It agrees because the counts
+        // agree, which is the thing that had to be fixed rather than reconciled.
         ksl["requestQueueTotalWaitingTime"] =
             ksl.getValue("requestQueueWaitingTime") * ksl.getValue("queueObservations")
 
@@ -278,13 +276,13 @@ class SimpleAgvArenaCrossCheckTest {
         // difference is 4e-13 and the rest are nearer 1e-15.
         val tolerance = 1.0e-9
 
-        for (name in listOf("numberIn", "numberOut", "entityObservations")) {
+        for (name in listOf("numberIn", "numberOut", "entityObservations", "queueObservations")) {
             assertEquals(arena.getValue(name), ksl.getValue(name), "structural mismatch on $name")
         }
 
         val compared = listOf(
             "entityTotalTime", "entityTransferTime", "entityWaitTime", "entityOtherTime",
-            "entityWIP", "requestQueueNumberWaiting",
+            "entityWIP", "requestQueueNumberWaiting", "requestQueueWaitingTime",
             "transporterNumberBusy", "transporterUtilization",
             "requestQueueTotalWaitingTime"
         )
@@ -296,19 +294,5 @@ class SimpleAgvArenaCrossCheckTest {
                 "$name: Arena $a against KSL $k"
             )
         }
-
-        // The one quantity that is deliberately NOT compared as reported, and why. Asserting the
-        // means equal would be asserting that the two tools count observations the same way, which
-        // they do not and need not; asserting the totals equal -- which the loop above does -- is
-        // the same physical claim without that assumption riding along. Pinned here so that the
-        // difference stays the known one rather than quietly becoming a different one.
-        assertEquals(
-            14.0, arena.getValue("queueObservations"),
-            "Arena's queue observation count changed; the reconciliation below may no longer hold"
-        )
-        assertEquals(
-            12.0, ksl.getValue("queueObservations"),
-            "this subsystem's queue observation count changed; two of Arena's are zero-wait requests"
-        )
     }
 }
