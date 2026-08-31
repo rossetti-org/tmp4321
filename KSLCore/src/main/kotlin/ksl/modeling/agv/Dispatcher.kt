@@ -465,15 +465,15 @@ open class Dispatcher @JvmOverloads constructor(
      * disposition — re-declares when it stops, so anything that alters what a vehicle can reach
      * already causes a fresh pass.
      *
-     * What they do not cover is a decision that changes for reasons outside the subsystem: a shift
-     * beginning, a policy becoming permissive, an operator releasing a hold, a resource this fleet
-     * depends on coming back. The dispatcher cannot observe any of that and must not go looking —
-     * a dispatcher that woke on a timer to re-ask a question whose answer had not changed would be
-     * polling, which in a discrete-event model is both wasteful and a sign that a state change has
-     * gone unmodelled.
+     * What they do not cover is a decision that changes for reasons **outside** the subsystem. A
+     * policy or a bidding rule is written by the modeller and may depend on anything in their model
+     * — a machine coming back up, a buffer draining, a flag an operator sets — and the dispatcher
+     * has no way to know when any of it changes. It must not go looking, either: a dispatcher that
+     * woke on a timer to re-ask a question whose answer had not changed would be polling, which in a
+     * discrete-event model is both wasteful and a sign that a state change has gone unmodelled.
      *
-     * So the model says so, by calling this. A shift change is an event the model already schedules;
-     * this is the one line that tells the fleet about it.
+     * So the model says so, by calling this at the event where the change actually happens — which
+     * is an event the model already has.
      *
      * Safe to call at any time, including while the dispatcher is mid-pass — the wake is remembered
      * rather than lost. Calling it when nothing has changed costs one dispatching pass that assigns

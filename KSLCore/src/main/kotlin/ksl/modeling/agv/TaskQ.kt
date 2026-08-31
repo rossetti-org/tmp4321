@@ -33,7 +33,7 @@ class TaskQ @JvmOverloads constructor(
      * Removes the task from the queue and terminates the process of the entity waiting on it.
      *
      * For the modeller who wants outstanding transport requests abandoned rather than left hanging
-     * -- a shutdown, a shift end, a decision to stop serving a station. It is **not** used for
+     * -- for whatever reason their model has. It is **not** used for
      * end-of-replication teardown: that is done by `ProcessModel.afterReplication`, which
      * terminates every suspended entity without any help from this subsystem.
      *

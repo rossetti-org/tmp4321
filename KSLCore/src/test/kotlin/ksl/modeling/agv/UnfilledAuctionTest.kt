@@ -39,24 +39,25 @@ import kotlin.test.assertTrue
  *  task being posted, and a vehicle declaring itself available. Between them those cover every
  *  internal change, because a vehicle that moves re-declares when it stops.
  *
- *  A fleet that refuses for reasons *outside* the subsystem -- a shift not yet begun, here -- is a
- *  different matter. The dispatcher cannot see a shift change and must not go looking for one: a
+ *  A fleet that refuses for reasons *outside* the subsystem -- a acceptance not yet begun, here -- is a
+ *  different matter. The dispatcher cannot see a acceptance change and must not go looking for one: a
  *  dispatcher waking on a timer to re-ask a question whose answer had not changed would be polling,
- *  and polling in a discrete-event model means a state change has gone unmodelled. The shift change
+ *  and polling in a discrete-event model means a state change has gone unmodelled. The acceptance change
  *  is an event the model already schedules, so the model tells the fleet about it with
  *  [Dispatcher.reconsider]. That is one line, at the place where the world actually changes.
  */
 class UnfilledAuctionTest {
 
-    /** Declines while the shift has not begun. Silence is how a vehicle declines. */
-    private class OnShiftBid(private val onShift: () -> Boolean) : BidPolicyIfc {
+    /** Declines until the model says the fleet is accepting work. Silence is how a vehicle
+     *  declines -- there is deliberately no "I decline" message for a dispatcher to interpret. */
+    private class AcceptingWorkBid(private val acceptingWork: () -> Boolean) : BidPolicyIfc {
         override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-            if (!onShift()) return null
+            if (!acceptingWork()) return null
             return NetworkDistanceBid().bid(vehicle, cfp, network)
         }
     }
 
-    private class Shop(parent: ModelElement, val shiftStartsAt: Double) : ProcessModel(parent, "Shop") {
+    private class Shop(parent: ModelElement, val acceptsFrom: Double) : ProcessModel(parent, "Shop") {
 
         val network = SimpleAgvNetwork.create()
 
@@ -68,16 +69,16 @@ class UnfilledAuctionTest {
             this, network, assignmentPolicy = ContractNetAssignmentPolicy(0.0), name = "Agv"
         )
 
-        var onShift = false
+        var acceptingWork = false
             private set
 
         val cart = AgvVehicle(
             agv, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME), ConstantRV(10.0), name = "Cart1"
-        ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = OnShiftBid { onShift } }
+        ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = AcceptingWorkBid { acceptingWork } }
 
         var result: AgvTransportResult? = null
 
-        /** Board size and refusals while the fleet was off shift, so "stayed on the board" is
+        /** Board size and refusals while the fleet was off acceptance, so "stayed on the board" is
          *  observed rather than inferred from the load eventually being delivered. */
         var boardWhileRefusing = -1
         var declinesWhileRefusing = 0
@@ -93,10 +94,10 @@ class UnfilledAuctionTest {
         }
 
         override fun initialize() {
-            onShift = false
+            acceptingWork = false
             activate(Part().p)
-            schedule(::sample, shiftStartsAt / 2.0)
-            schedule(::shiftBegins, shiftStartsAt)
+            schedule(::sample, acceptsFrom / 2.0)
+            schedule(::startsAccepting, acceptsFrom)
         }
 
         @Suppress("UNUSED_PARAMETER")
@@ -109,15 +110,15 @@ class UnfilledAuctionTest {
         /** The world changes, and the model says so. Without the second line the fleet would never
          *  learn: nothing inside the subsystem changed, so nothing inside it would wake. */
         @Suppress("UNUSED_PARAMETER")
-        private fun shiftBegins(event: KSLEvent<Nothing>) {
-            onShift = true
+        private fun startsAccepting(event: KSLEvent<Nothing>) {
+            acceptingWork = true
             agv.dispatcher.reconsider()
         }
     }
 
-    private fun run(shiftStartsAt: Double): Shop {
+    private fun run(acceptsFrom: Double): Shop {
         val m = Model("UnfilledAuction")
-        val shop = Shop(m, shiftStartsAt)
+        val shop = Shop(m, acceptsFrom)
         m.numberOfReplications = 1
         m.lengthOfReplication = 900.0
         m.simulate()
@@ -128,7 +129,7 @@ class UnfilledAuctionTest {
     @DisplayName("Every vehicle declining is counted, the task waits, and no exception is raised")
     fun anUnfilledAuctionIsCountedNotRaised() {
         // Notably: no exception. The whole point is that this runs.
-        val shop = run(shiftStartsAt = 50.0)
+        val shop = run(acceptsFrom = 50.0)
 
         // The task was on the board while the fleet was refusing it, and the vehicle was being asked
         // rather than passed over.
@@ -139,7 +140,7 @@ class UnfilledAuctionTest {
         assertTrue(shop.unfilledWhileRefusing > 0.0,
             "an auction that nobody bid on was not counted")
 
-        // And once the shift began -- and the model said so -- the load was served, having waited
+        // And once the acceptance began -- and the model said so -- the load was served, having waited
         // through the refusal.
         val r = requireNotNull(shop.result) { "the load was never delivered" }
         assertTrue(r.waitForAssignment >= 50.0,
@@ -154,7 +155,7 @@ class UnfilledAuctionTest {
     @Test
     @DisplayName("A change the model does not announce is a change the dispatcher cannot see")
     fun anUnannouncedChangeIsNotNoticed() {
-        // The counterpart, and the reason `reconsider` exists rather than a timer. Here the shift
+        // The counterpart, and the reason `reconsider` exists rather than a timer. Here the acceptance
         // begins but nothing tells the fleet, and nothing inside the subsystem changes -- no task is
         // posted, no vehicle becomes available, no vehicle moves. So no pass happens and the load
         // waits out the run beside a cart that would now happily take it.
@@ -163,7 +164,7 @@ class UnfilledAuctionTest {
         // and would go on polling in every model that never needed it; the alternative on offer is
         // one line at the point where the world actually changes. What the subsystem owes is that
         // the task is not *lost* -- it is on the board, counted, and reported at the horizon.
-        val m = Model("UnannouncedShift")
+        val m = Model("UnannouncedAcceptance")
         val shop = object : ProcessModel(m, "Shop") {
             val network = SimpleAgvNetwork.create()
 
@@ -174,10 +175,10 @@ class UnfilledAuctionTest {
             val agv = AgvSystem(
                 this, network, assignmentPolicy = ContractNetAssignmentPolicy(0.0), name = "Agv"
             )
-            var onShift = false
+            var acceptingWork = false
             val cart = AgvVehicle(
                 agv, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME), ConstantRV(10.0), name = "Cart1"
-            ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = OnShiftBid { onShift } }
+            ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME; bidPolicy = AcceptingWorkBid { acceptingWork } }
             var result: AgvTransportResult? = null
 
             inner class Part : Entity("Part") {
@@ -190,14 +191,14 @@ class UnfilledAuctionTest {
             }
 
             override fun initialize() {
-                onShift = false
+                acceptingWork = false
                 activate(Part().p)
-                schedule(::shiftBeginsQuietly, 50.0)
+                schedule(::startsAcceptingQuietly, 50.0)
             }
 
             @Suppress("UNUSED_PARAMETER")
-            private fun shiftBeginsQuietly(event: KSLEvent<Nothing>) {
-                onShift = true      // and deliberately nothing else
+            private fun startsAcceptingQuietly(event: KSLEvent<Nothing>) {
+                acceptingWork = true      // and deliberately nothing else
             }
         }
         m.numberOfReplications = 1
