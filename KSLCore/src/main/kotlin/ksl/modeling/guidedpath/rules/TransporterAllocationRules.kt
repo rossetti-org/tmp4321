@@ -46,6 +46,17 @@ fun interface GuidedTransporterAllocationRuleIfc {
         pickup: GuidedPathNetwork.Intersection,
         candidates: List<GuidedTransporter>
     ): GuidedTransporter
+
+    /**
+     * Clears whatever the rule remembers between replications. Does nothing by default.
+     *
+     * Almost every rule here is a pure function of what it is given and needs this not at all. A
+     * rule that cycles, or that remembers who it chose last, is not -- and a rule carrying the end
+     * of one replication into the start of the next makes the second replication depend on the
+     * first, which is the one thing a replication may never do. The pool calls this as each
+     * replication begins, so a stateful rule is correct without its author having to remember.
+     */
+    fun reset() {}
 }
 
 /**
@@ -150,4 +161,47 @@ class RandomTransporterRule(private val stream: RNStreamIfc) : GuidedTransporter
     ): GuidedTransporter = candidates.randomlySelect(stream)
 
     override fun toString(): String = "RandomTransporterRule"
+}
+
+/**
+ * Sends idle transporters in rotation, beginning after whichever was chosen last.
+ *
+ * Arena's `CYC` selection rule, and it is here so that a guided-path model can be compared against
+ * one built there. It is a fair rule rather than an efficient one: it spreads work over the fleet
+ * without regard to where the work is, so on a one-way loop it will routinely send a transporter
+ * the long way round when a nearer one is standing idle. [LeastUsedTransporterRule] balances usage
+ * with the same indifference to distance but counts seizes instead of taking turns, so the two
+ * agree only when every transporter is always available.
+ *
+ * The rotation is over **declaration order**, taken from the model element identifiers the fleet
+ * was created with, so it is the order the modeller wrote and not an accident of which transporters
+ * happen to be idle. Busy transporters are skipped, as they are in Arena: the rule chooses the
+ * first candidate that follows the last one chosen, wrapping round to the start of the list.
+ *
+ * Stateful, and therefore [reset] between replications by the pool that owns it.
+ */
+class CyclicalTransporterRule : GuidedTransporterAllocationRuleIfc {
+
+    /** The identifier of the transporter chosen last, or null before the first choice. */
+    private var lastChosenId: Int? = null
+
+    override fun selectTransporter(
+        network: GuidedPathNetwork,
+        pickup: GuidedPathNetwork.Intersection,
+        candidates: List<GuidedTransporter>
+    ): GuidedTransporter {
+        val last = lastChosenId
+        // The first candidate declared after the last one chosen; failing that, back to the start.
+        // Candidates arrive in declaration order, so this is one pass rather than a sort.
+        val chosen = if (last == null) candidates.first()
+        else candidates.firstOrNull { it.id.toInt() > last } ?: candidates.first()
+        lastChosenId = chosen.id.toInt()
+        return chosen
+    }
+
+    override fun reset() {
+        lastChosenId = null
+    }
+
+    override fun toString(): String = "CyclicalTransporterRule"
 }

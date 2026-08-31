@@ -98,6 +98,15 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
         get() = myTransporters.any { it.hasAvailableUnits }
 
     /**
+     * Clears any state the allocation rule carries, so a replication cannot inherit the end of the
+     * one before it. Most rules do nothing here; a rule that takes turns does.
+     */
+    override fun initialize() {
+        super.initialize()
+        allocationRule.reset()
+    }
+
+    /**
      * Chooses an idle transporter to send to a pickup, or null when none is free.
      *
      * @param pickup where the transporter is wanted
