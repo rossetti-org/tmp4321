@@ -51,39 +51,63 @@ import kotlin.test.assertTrue
  *  `guidedTransport` precisely so that the instant of allocation is visible and the same three
  *  quantities can be formed here.
  *
- *  ## Where the comparison currently stands -- Gate B is NOT passed
+ *  ## Where the comparison stands -- Gate B is NOT passed, and the reason is now known
  *
- *  The two tools split cleanly into a half that agrees exactly and a half that does not.
+ *  The two tools split cleanly into a half that agrees exactly and a half that does not, and the
+ *  half that does not has a single identified cause.
  *
  *  **The fleet agrees exactly.** Total transporter busy time is 1.94791666666667 carts on average,
  *  matching Arena to 3.6e-15 -- 935 cart-minutes over a 480-minute run, to the last bit. Twenty
- *  parts arrive and twelve complete in both. For a deterministic model that is agreement, not
- *  coincidence, and it says the carts were allocated and freed on the same schedule.
+ *  parts arrive and twelve complete in both.
  *
  *  **The parts do not.** Mean time in system is 131.9 in Arena and 134.3 here; the wait for a cart
  *  is 59.667 against 61.417 and the transfer 32.233 against 32.883. The differences are internally
  *  consistent -- 2.4 = 1.75 + 0.65, and the WIP difference is exactly 12 x 2.4 / 480 -- so this is
  *  one discrepancy seen through several statistics rather than several faults.
  *
- *  The KSL timeline is perfectly regular and its arithmetic is legible: a steady-state cart cycle is
- *  71.2 minutes, being 40 of load and unload plus 20.4 carrying (204 units from I1 to I5 at velocity
- *  10) plus 10.8 returning empty (108 units from I5 back through I4 to I1). Arena's steady-state
- *  cycle is 0.6 shorter, which at velocity 10 is **exactly 6 distance units** -- one home-spur zone,
- *  or half a loop zone. The same 6 appears on the first cart's opening trip from I6.
+ *  ### The cause: Arena's transporter has a physical length, and this one does not
  *
- *  What makes it a puzzle rather than a bug to go and fix is that a uniformly shorter cycle should
- *  have completed *more* parts and shown *less* busy time, and neither happened. So the difference
- *  is more likely in what Arena counts than in how far its carts travel. Two candidates, both
- *  needing Arena knowledge rather than more KSL arithmetic: what Arena includes in an entity's
- *  Transfer state, and the transporter's Size in zones, which the Arena model report does not print.
+ *  The Arena transporter is sized with the **LENGTH** option at **6 feet**. A vehicle with a physical
+ *  extent that is parked at a dead end has already covered its own length of the spur, so **leaving
+ *  a spur costs its length less than the spur's declared distance, while entering costs the whole
+ *  of it**. That asymmetry, and only that, accounts for every number above:
  *
- *  One accounting difference is already established and is not a defect in either tool: the queue
- *  observation counts differ, 12 here against 14 in Arena, because an entity that finds a cart free
- *  never enters the KSL pool's queue while Arena records a queue observation for every request,
- *  including the zero-wait ones -- its reported minimum waiting time is 0. The two queue averages
- *  are therefore over different populations and are not directly comparable, which accounts for some
- *  of the gap on `requestQueueWaitingTime` and none of the gap on the entity statistics, which are
- *  over the same twelve completed parts in both tools.
+ *  - *Steady state.* A cart returns from I5 out of the 36-foot exit spur and round to I1. Arena
+ *    pays 30 + 72 = 102 units empty against this subsystem's 36 + 72 = 108, then both pay the full
+ *    204 loaded. Arena's cycle transfer is therefore 30.6 and this one's 31.2. **Arena's reported
+ *    minimum transfer time is 30.5999999999998.**
+ *  - *The opening trip.* Cart1 starts on the 6-foot home spur at I6, which its 6-foot body exactly
+ *    fills, so leaving costs nothing: 192 units empty against this subsystem's 198. Its first part
+ *    is delivered at 79.6 rather than 80.2. **Arena's reported minimum total time is 79.6.**
+ *
+ *  Two independent quantities predicted exactly from one mechanism, from data that was not used to
+ *  find it. Two rival explanations were tested and eliminated: the exit spur's zone structure
+ *  (Arena declares it as one zone of 36 where the KSL layout uses three of 12) changes nothing at
+ *  all, and simply shortening the spur by 6 over-corrects by exactly the same 6, because a cart
+ *  crosses the spur twice per cycle and only the outbound crossing is shortened.
+ *
+ *  ### What that means
+ *
+ *  It is a difference in what the two tools can express, not a defect in either. A
+ *  [GuidedTransporter] is `lengthInZones` zones long -- a whole number of them -- and its travel is
+ *  measured point to point along declared link lengths, with no notion of a body extending back
+ *  from where it stands. There is no configuration of this subsystem that reproduces Arena's
+ *  numbers, and distorting the network to compensate would be fitting the answer rather than
+ *  measuring it.
+ *
+ *  So Gate B stands unpassed with its discrepancy explained and quantified, and the decision it
+ *  waits on -- whether this subsystem should gain a physical transporter length -- belongs with the
+ *  plan. Recording the difference explicitly is what §8.5 asks for where the two tools genuinely
+ *  differ.
+ *
+ *  ### One further accounting difference, already settled
+ *
+ *  The queue observation counts differ, 12 here against 14 in Arena, because an entity that finds a
+ *  cart free never enters the KSL pool's queue while Arena records a queue observation for every
+ *  request, including the zero-wait ones -- its reported minimum waiting time is 0. The two queue
+ *  averages are therefore over different populations and are not directly comparable. It accounts
+ *  for some of the gap on `requestQueueWaitingTime` and none of the gap on the entity statistics,
+ *  which are over the same twelve completed parts in both tools.
  */
 class SimpleAgvArenaCrossCheckTest {
 
