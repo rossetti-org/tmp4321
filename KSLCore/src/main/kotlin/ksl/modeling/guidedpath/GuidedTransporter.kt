@@ -145,10 +145,36 @@ class GuidedTransporter @JvmOverloads constructor(
     velocity: RVariableIfc,
     val lengthInZones: Int = 1,
     val zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
-    name: String? = null
+    name: String? = null,
+    val physicalLength: Double? = null
 ) : Resource(system, name, 1) {
 
     init {
+        if (physicalLength != null) {
+            require(physicalLength > 0.0) {
+                "A transporter's physical length must be > 0.0, but ($name) was given $physicalLength."
+            }
+            require(lengthInZones == 1) {
+                "Transporter ($name) was given both a physical length ($physicalLength) and a size " +
+                        "of $lengthInZones zones. A transporter is sized one way or the other, as " +
+                        "Arena's ZONES and LENGTH options are alternatives, so that there is one " +
+                        "answer to how much of the guide path it covers."
+            }
+            // Deliberately narrow. A body longer than a zone raises questions this subsystem has no
+            // validated answer to -- how many zones it covers on a link discretized differently from
+            // the one it is leaving, and what its extent means while it spans two links at once --
+            // and guessing at them would ship semantics nothing has checked. A vehicle that fits a
+            // zone needs none of that: it covers exactly one everywhere, so the length changes only
+            // what it is here to change, which is the distance it owes itself when it backs out of a
+            // dead end. Longer vehicles are sized in zones, as they always were.
+            val smallest = system.network.links.minOf { it.zoneLength }
+            require(physicalLength <= smallest) {
+                "Transporter ($name) has a physical length of $physicalLength, which is longer than " +
+                        "the smallest zone on network (${system.network.name}) at $smallest. Size a " +
+                        "transporter by length only when it fits within a zone; a longer one is " +
+                        "sized in zones with the lengthInZones argument."
+            }
+        }
         require(lengthInZones >= 1) {
             "A transporter must cover at least one zone, but ($name) was given $lengthInZones."
         }
@@ -466,6 +492,7 @@ class GuidedTransporter @JvmOverloads constructor(
         travellingForward = true
         transporterState = TransporterState.IDLE
         stateBeforeBlocking = TransporterState.IDLE
+        lengthCreditRemaining = 0.0
         // After the state, so that a transporter still blocked when the previous replication ended
         // leaves that state through the setter above before its running totals are cleared.
         blockedSince = Double.NaN
@@ -497,6 +524,16 @@ class GuidedTransporter @JvmOverloads constructor(
      * True when the transporter covers more zones than it is long, so a zone at the rear is surplus
      * and may be given up. This is the test that applies once a zone has been entered.
      */
+    /**
+     * How much of this transporter's own length is still to be credited against the distance ahead.
+     *
+     * Zero except immediately after a reversal. A transporter with a [physicalLength] is a body
+     * rather than a point: standing at the end of a spur, it already covers its own length of that
+     * spur, so when it turns round the end that now leads is that much further along the way out.
+     * The credit is spent over the zones it re-crosses and is then done with.
+     */
+    internal var lengthCreditRemaining: Double = 0.0
+
     internal val hasSurplusZones: Boolean
         get() = myOccupiedZones.size > lengthInZones
 

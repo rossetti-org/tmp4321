@@ -86,6 +86,7 @@ internal class MovementEngine(
         transporter.currentVelocity = transporter.sampleVelocity()
         transporter.currentRoute =
             myNetwork.routeFrom(front, destination, transporter.travellingForward)
+        creditOwnLengthIfReversing(transporter, front)
         transporter.transporterState = movingState
         mySystem.refreshFleetCounts()
         advance(transporter)
@@ -129,7 +130,7 @@ internal class MovementEngine(
         if (transporter.velocitySampling == VelocitySampling.PER_ZONE) {
             transporter.currentVelocity = velocity
         }
-        val traversalTime = next.traversalTime(velocity)
+        val traversalTime = traversalTimeWithLengthCredit(transporter, next, velocity)
         when (val timing = transporter.zoneControlRule.releaseTiming(transporter, next)) {
             is ZoneReleaseTiming.AtStart -> releaseRearAtStart(transporter)
 
@@ -153,6 +154,78 @@ internal class MovementEngine(
             }
         }
         mySystem.scheduleTraversal(transporter, next, traversalTime)
+    }
+
+    /**
+     * Grants a reversing transporter credit for its own length against the way out.
+     *
+     * A transporter given a [GuidedTransporter.physicalLength] is a body rather than a point. One
+     * standing at the end of a spur has already covered its own length of that spur, so when it
+     * turns round, the end that now leads is that much nearer the way out and the journey back is
+     * shorter by exactly its length. A transporter sized in zones has no length to credit and this
+     * does nothing, which is why every model written before this behaves exactly as it did.
+     *
+     * Only a reversal earns it. Travelling on in the same direction, the leading end is the same end
+     * it always was and there is nothing to give back.
+     */
+    private fun creditOwnLengthIfReversing(transporter: GuidedTransporter, front: Zone) {
+        val length = transporter.physicalLength ?: return
+        val next = transporter.currentRoute?.nextZone ?: return
+        if (isReversing(transporter, front, next)) {
+            transporter.lengthCreditRemaining = length
+        }
+    }
+
+    /**
+     * Whether the first step of the new route sends the transporter back the way it came.
+     *
+     * Two shapes, and the second is the one a spur usually takes. Either the next zone lies behind
+     * the transporter on the link it is already on, or the next zone is the intersection it entered
+     * that link by -- which is how leaving a single-zone spur looks, there being no zone behind to
+     * step back into.
+     */
+    private fun isReversing(transporter: GuidedTransporter, front: Zone, next: Zone): Boolean {
+        // Standing at a dead end. There is one link in and the same link out, so leaving is always
+        // a reversal -- and this is the case the credit exists for, since a spur is where a body
+        // with length is obliged to back out of somewhere it has driven into. A transporter that
+        // has arrived at the far end of a spur stands on the terminal *intersection's* zone rather
+        // than on the link's last zone, because arriving at a link's far end means arriving at the
+        // junction beyond it, so this is the shape the common case actually takes.
+        if (front is IntersectionZone && front.intersection.incidentLinks.size == 1) return true
+        if (front !is LinkZone) return false
+        // Stopped part way along a link and sent back the way it came.
+        if (next is LinkZone && next.link === front.link) {
+            val goingUp = next.positionOnLink > front.positionOnLink
+            return goingUp != transporter.travellingForward
+        }
+        if (next is IntersectionZone) {
+            val enteredBy =
+                if (transporter.travellingForward) front.link.beginIntersection
+                else front.link.endIntersection
+            return next.intersection === enteredBy
+        }
+        return false
+    }
+
+    /**
+     * How long the next zone takes, less whatever of the transporter's own length is still owed to
+     * it after a reversal.
+     *
+     * The credit is spent zone by zone rather than all at once, because a transporter may be longer
+     * than the zone it is turning round in. A zone entirely covered by the credit costs no time at
+     * all, which is right: the leading end was already past it.
+     */
+    private fun traversalTimeWithLengthCredit(
+        transporter: GuidedTransporter,
+        next: Zone,
+        velocity: Double
+    ): Double {
+        if (transporter.lengthCreditRemaining <= 0.0) return next.traversalTime(velocity)
+        val credit = minOf(transporter.lengthCreditRemaining, next.length)
+        transporter.lengthCreditRemaining -= credit
+        val remaining = next.length - credit
+        if (remaining <= 0.0) return 0.0
+        return remaining / (velocity * next.velocityFactor)
     }
 
     /**

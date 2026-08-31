@@ -51,63 +51,63 @@ import kotlin.test.assertTrue
  *  `guidedTransport` precisely so that the instant of allocation is visible and the same three
  *  quantities can be formed here.
  *
- *  ## Where the comparison stands -- Gate B is NOT passed, and the reason is now known
+ *  ## Gate B passes
  *
- *  The two tools split cleanly into a half that agrees exactly and a half that does not, and the
- *  half that does not has a single identified cause.
+ *  Every quantity Arena reports is reproduced to floating-point noise -- the largest difference is
+ *  4e-13 on a mean of 131.9, and most are nearer 1e-15. Not "within a confidence interval": the same
+ *  numbers.
  *
- *  **The fleet agrees exactly.** Total transporter busy time is 1.94791666666667 carts on average,
- *  matching Arena to 3.6e-15 -- 935 cart-minutes over a 480-minute run, to the last bit. Twenty
- *  parts arrive and twelve complete in both.
+ *  | quantity | Arena | difference |
+ *  |---|---|---|
+ *  | mean time in system | 131.9 | -4.0e-13 |
+ *  | transfer time | 32.2333333333332 | -3.6e-14 |
+ *  | wait for a cart | 59.6666666666665 | -6.4e-14 |
+ *  | load and unload | 40 | 0 |
+ *  | work in process | 4.83916666666666 | -4.4e-15 |
+ *  | number waiting for a cart | 2.89124999999999 | 4.4e-16 |
+ *  | carts busy | 1.94791666666667 | -3.6e-15 |
+ *  | cart utilization | 0.973958333333333 | 2.2e-16 |
+ *  | total waiting time in the request queue | 982.8 | ~0 |
+ *  | parts in, parts out | 20, 12 | exact |
  *
- *  **The parts do not.** Mean time in system is 131.9 in Arena and 134.3 here; the wait for a cart
- *  is 59.667 against 61.417 and the transfer 32.233 against 32.883. The differences are internally
- *  consistent -- 2.4 = 1.75 + 0.65, and the WIP difference is exactly 12 x 2.4 / 480 -- so this is
- *  one discrepancy seen through several statistics rather than several faults.
+ *  ### What it took, and the one thing that had to be built
  *
- *  ### The cause: Arena's transporter has a physical length, and this one does not
+ *  The network was already identical -- the KSL layout was built from this model. Matching the
+ *  experiment needed `StartOfZoneControl` for Arena's `Zone Control Rule: Start`, `ParkInPlaceRule`
+ *  for `When Freed: Remain`, a `CyclicalTransporterRule` for the Request module's `Selection Rule:
+ *  CYC`, constant arrivals and delays, and the carts started on the I6 and I7 spurs -- which Arena's
+ *  documentation report does not record, since it prints `Home Station` but never a unit's initial
+ *  position, and which the model's author supplied.
  *
- *  The Arena transporter is sized with the **LENGTH** option at **6 feet**. A vehicle with a physical
- *  extent that is parked at a dead end has already covered its own length of the spur, so **leaving
- *  a spur costs its length less than the spur's declared distance, while entering costs the whole
- *  of it**. That asymmetry, and only that, accounts for every number above:
+ *  The one thing that could not be configured was the transporter's size. Arena sizes this one with
+ *  the **LENGTH** option at **6 feet**, and this subsystem had only a whole number of zones. A
+ *  vehicle with a physical extent that is parked at a dead end has already covered its own length of
+ *  the spur, so leaving costs its length less than the spur's declared distance while entering costs
+ *  the whole of it. That asymmetry -- and nothing else -- was the entire discrepancy:
  *
- *  - *Steady state.* A cart returns from I5 out of the 36-foot exit spur and round to I1. Arena
- *    pays 30 + 72 = 102 units empty against this subsystem's 36 + 72 = 108, then both pay the full
- *    204 loaded. Arena's cycle transfer is therefore 30.6 and this one's 31.2. **Arena's reported
- *    minimum transfer time is 30.5999999999998.**
- *  - *The opening trip.* Cart1 starts on the 6-foot home spur at I6, which its 6-foot body exactly
- *    fills, so leaving costs nothing: 192 units empty against this subsystem's 198. Its first part
- *    is delivered at 79.6 rather than 80.2. **Arena's reported minimum total time is 79.6.**
+ *  - a steady-state cart returns from I5 out of the 36-foot exit spur paying 30 + 72 rather than
+ *    36 + 72, so its cycle transfer is 30.6, which is Arena's reported minimum;
+ *  - Cart1 leaves the 6-foot home spur at I6, which its 6-foot body exactly fills, paying nothing,
+ *    so its first part is delivered at 79.6, which is Arena's reported minimum total time.
  *
- *  Two independent quantities predicted exactly from one mechanism, from data that was not used to
- *  find it. Two rival explanations were tested and eliminated: the exit spur's zone structure
- *  (Arena declares it as one zone of 36 where the KSL layout uses three of 12) changes nothing at
- *  all, and simply shortening the spur by 6 over-corrects by exactly the same 6, because a cart
- *  crosses the spur twice per cycle and only the outbound crossing is shortened.
+ *  [GuidedTransporter.physicalLength] now expresses it. It is optional and off by default, so every
+ *  model written before behaves exactly as it did.
  *
- *  ### What that means
+ *  Two rival explanations were tested and eliminated before that one was believed. The exit spur's
+ *  zone structure -- Arena declares one zone of 36 where the KSL layout uses three of 12 -- changes
+ *  nothing at all. And simply shortening the spur by 6 over-corrects by exactly 6, because a cart
+ *  crosses it twice per cycle and only the outbound crossing is shortened; that is what showed the
+ *  mechanism is asymmetric, which the first guess had wrong.
  *
- *  It is a difference in what the two tools can express, not a defect in either. A
- *  [GuidedTransporter] is `lengthInZones` zones long -- a whole number of them -- and its travel is
- *  measured point to point along declared link lengths, with no notion of a body extending back
- *  from where it stands. There is no configuration of this subsystem that reproduces Arena's
- *  numbers, and distorting the network to compensate would be fitting the answer rather than
- *  measuring it.
+ *  ### The one convention the two tools do not share
  *
- *  So Gate B stands unpassed with its discrepancy explained and quantified, and the decision it
- *  waits on -- whether this subsystem should gain a physical transporter length -- belongs with the
- *  plan. Recording the difference explicitly is what §8.5 asks for where the two tools genuinely
- *  differ.
- *
- *  ### One further accounting difference, already settled
- *
- *  The queue observation counts differ, 12 here against 14 in Arena, because an entity that finds a
- *  cart free never enters the KSL pool's queue while Arena records a queue observation for every
- *  request, including the zero-wait ones -- its reported minimum waiting time is 0. The two queue
- *  averages are therefore over different populations and are not directly comparable. It accounts
- *  for some of the gap on `requestQueueWaitingTime` and none of the gap on the entity statistics,
- *  which are over the same twelve completed parts in both tools.
+ *  Arena reports a mean queue waiting time of 70.2 over **14** observations; this subsystem reports
+ *  81.9 over **12**. Both are 982.8 in total. The difference is entirely in what counts as an
+ *  observation: Arena books one for a request served instantly -- its reported minimum waiting time
+ *  is 0 -- while an entity that finds a cart free never enters this subsystem's queue at all. So the
+ *  comparison above is made on the total, which is the same physical quantity without the counting
+ *  convention riding along, and the two observation counts are pinned by their own assertions so
+ *  that this stays the known difference rather than quietly becoming a different one.
  */
 class SimpleAgvArenaCrossCheckTest {
 
@@ -124,12 +124,12 @@ class SimpleAgvArenaCrossCheckTest {
 
         val cart1 = GuidedTransporter(
             system, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME),
-            ConstantRV(VELOCITY), 1, StartOfZoneControl(), "Cart1"
+            ConstantRV(VELOCITY), 1, StartOfZoneControl(), "Cart1", physicalLength = CART_LENGTH
         )
 
         val cart2 = GuidedTransporter(
             system, TransporterPlacement.At(SimpleAgvNetwork.AGV2_HOME),
-            ConstantRV(VELOCITY), 1, StartOfZoneControl(), "Cart2"
+            ConstantRV(VELOCITY), 1, StartOfZoneControl(), "Cart2", physicalLength = CART_LENGTH
         )
 
         val carts = GuidedTransporterPoolWithQ(
@@ -192,6 +192,9 @@ class SimpleAgvArenaCrossCheckTest {
 
         companion object {
             const val VELOCITY = 10.0
+
+            /** Arena sizes this transporter with the LENGTH option, at 6 feet. */
+            const val CART_LENGTH = 6.0
             const val LOAD_DELAY = 20.0
             const val UNLOAD_DELAY = 20.0
             const val TIME_BETWEEN_ARRIVALS = 25.0
@@ -211,7 +214,7 @@ class SimpleAgvArenaCrossCheckTest {
     }
 
     @Test
-    @DisplayName("KSL and Arena agree exactly on the fleet; the parts' timings are not yet reconciled")
+    @DisplayName("KSL reproduces Arena's deterministic run exactly, on every quantity it reports")
     fun kslComparedWithArena() {
         val arena = arenaFixture()
 
@@ -238,6 +241,12 @@ class SimpleAgvArenaCrossCheckTest {
             "queueObservations" to shop.carts.waitingQ.timeInQ.withinReplicationStatistic.count
         )
         ksl["transporterUtilization"] = ksl.getValue("transporterNumberBusy") / 2.0
+        // Mean times count, which is free of the observation-counting convention that the two tools
+        // differ on. See the KDoc: Arena books a queue observation for a request served instantly
+        // and this subsystem never queues one, so the two means are over different denominators
+        // while the quantity underneath them is the same.
+        ksl["requestQueueTotalWaitingTime"] =
+            ksl.getValue("requestQueueWaitingTime") * ksl.getValue("queueObservations")
 
         // Printed whether it passes or fails. A gate whose evidence is only visible when it breaks
         // is a gate nobody can check.
@@ -262,36 +271,44 @@ class SimpleAgvArenaCrossCheckTest {
         }
         println()
 
-        // ---- what this test asserts, and what it does not -------------------------------------
+        // ---- acceptance -----------------------------------------------------------------------
         //
-        // Two groups of quantities, and they behave completely differently. Asserting only the
-        // group that agrees would be self-serving, so the other is printed above, described in this
-        // class's KDoc, and left unasserted until it is understood. Gate B is NOT passed.
+        // Exact, because the model is deterministic. The tolerance below is floating-point noise
+        // over quantities of order a hundred, not a margin for disagreement: the largest observed
+        // difference is 4e-13 and the rest are nearer 1e-15.
+        val tolerance = 1.0e-9
 
-        // The fleet. These agree to floating-point noise, which for a deterministic model is
-        // agreement: the carts were allocated for the same total time, to the last bit, and the
-        // same number of parts got through.
         for (name in listOf("numberIn", "numberOut", "entityObservations")) {
             assertEquals(arena.getValue(name), ksl.getValue(name), "structural mismatch on $name")
         }
-        for (name in listOf("transporterNumberBusy", "transporterUtilization")) {
+
+        val compared = listOf(
+            "entityTotalTime", "entityTransferTime", "entityWaitTime", "entityOtherTime",
+            "entityWIP", "requestQueueNumberWaiting",
+            "transporterNumberBusy", "transporterUtilization",
+            "requestQueueTotalWaitingTime"
+        )
+        for (name in compared) {
+            val a = arena.getValue(name)
+            val k = ksl.getValue(name)
             assertTrue(
-                abs(ksl.getValue(name) - arena.getValue(name)) < 1.0e-9,
-                "$name: Arena ${arena.getValue(name)} against KSL ${ksl.getValue(name)}"
+                abs(k - a) / maxOf(1.0, abs(a)) < tolerance,
+                "$name: Arena $a against KSL $k"
             )
         }
 
-        // The parts. Unreconciled -- see the KDoc. Asserted only loosely, to catch a regression that
-        // moved the answer somewhere else entirely, and deliberately not to a threshold chosen to
-        // fit the difference that is there. Gate B's acceptance is a plan-level decision and belongs
-        // with the plan, not with whatever this run happened to produce.
-        val worst = arena.entries
-            .filter { ksl.containsKey(it.key) }
-            .maxByOrNull { abs(ksl.getValue(it.key) - it.value) / maxOf(1.0, abs(it.value)) }
-        checkNotNull(worst)
-        val relative = abs(ksl.getValue(worst.key) - worst.value) / maxOf(1.0, abs(worst.value))
-        println("  Largest relative difference: %.3e, on %s".format(relative, worst.key))
-        println()
-        assertTrue(relative < 0.5, "the two models are no longer describing the same run: ${worst.key}")
+        // The one quantity that is deliberately NOT compared as reported, and why. Asserting the
+        // means equal would be asserting that the two tools count observations the same way, which
+        // they do not and need not; asserting the totals equal -- which the loop above does -- is
+        // the same physical claim without that assumption riding along. Pinned here so that the
+        // difference stays the known one rather than quietly becoming a different one.
+        assertEquals(
+            14.0, arena.getValue("queueObservations"),
+            "Arena's queue observation count changed; the reconciliation below may no longer hold"
+        )
+        assertEquals(
+            12.0, ksl.getValue("queueObservations"),
+            "this subsystem's queue observation count changed; two of Arena's are zero-wait requests"
+        )
     }
 }
