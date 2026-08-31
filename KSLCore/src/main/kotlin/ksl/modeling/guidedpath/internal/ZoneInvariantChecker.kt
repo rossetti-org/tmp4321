@@ -82,6 +82,57 @@ internal class ZoneInvariantChecker(
     }
 
     /**
+     * Runs at the end of a replication, whether or not continuous checking was on.
+     *
+     * Everything [check] asserts is asserted here too, which is the point: a model that did not ask
+     * for the continuous walk still gets one look at its own state, at the moment there is most to
+     * find and least left to pay. It costs one pass over the guide path per replication.
+     *
+     * What it adds is the bookkeeping that has no instantaneous symptom -- a clock left running
+     * against a transporter that is not blocked accumulates silently and is only visible as a number
+     * that is wrong later, somewhere else.
+     */
+    fun checkClosing() {
+        check()
+        checkBlockedClocks()
+    }
+
+    /**
+     * The blocked-time clock runs exactly while a transporter is blocked, and what it has
+     * accumulated is a real, non-negative duration.
+     *
+     * This is the invariant behind a defect that cost a run: a replication ended with a transporter
+     * blocked, the reset cleared the start instant while the state was still `BLOCKED`, and the
+     * transition out then accumulated `time - NaN`. The NaN travelled into the first transport
+     * result of the *next* replication and failed it thousands of simulated minutes from its cause.
+     * Asserted here because the end of a replication is where the two can come apart.
+     */
+    private fun checkBlockedClocks() {
+        for (t in mySystem.transporters) {
+            val blocked = t.transporterState == TransporterState.BLOCKED
+            if (t.isBlockedClockRunning != blocked) {
+                violate(
+                    if (blocked) {
+                        "transporter (${t.name}) is blocked but its blocked-time clock is not " +
+                                "running, so this block will not be counted"
+                    } else {
+                        "transporter (${t.name}) is ${t.transporterState} but its blocked-time " +
+                                "clock is still running, so time it spends not blocked is being " +
+                                "counted as blocked"
+                    }
+                )
+            }
+            val accumulated = t.cumulativeBlockedTime
+            if (!accumulated.isFinite() || accumulated < 0.0) {
+                violate(
+                    "transporter (${t.name}) has accumulated a blocked time of $accumulated, " +
+                            "which is not a duration"
+                )
+            }
+        }
+    }
+
+    /**
      * A transporter is waiting for exactly one thing, and only while it is stopped.
      *
      * This is the invariant whose failure has no other symptom. A waiting transporter schedules

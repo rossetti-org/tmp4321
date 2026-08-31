@@ -435,6 +435,19 @@ class GuidedTransporter @JvmOverloads constructor(
         get() = if (blockedSince.isNaN()) myCumulativeBlockedTime
         else myCumulativeBlockedTime + (time - blockedSince)
 
+    /**
+     * Whether the blocked-time clock is running, which must be exactly while the transporter is
+     * blocked.
+     *
+     * Exposed for the closing audit rather than for modelling. The two can come apart -- a
+     * replication ending with a transporter blocked leaves the state `BLOCKED` while the reset
+     * clears the start instant -- and when they do, the blocked time is quietly wrong from then on
+     * rather than loudly wrong at the point of the mistake. The guard in [transporterState]'s
+     * setter is what stops that; this is what proves the guard is still there.
+     */
+    internal val isBlockedClockRunning: Boolean
+        get() = !blockedSince.isNaN()
+
     // ---- placement and movement ---------------------------------------------------------------
 
     /**

@@ -155,6 +155,16 @@ open class Dispatcher @JvmOverloads constructor(
                 )
             }
             state = next
+            if (next == TaskState.CANCELLED) {
+                // Counted where the task is cancelled rather than where someone asked for it,
+                // because two different callers can ask: the dispatcher's own `cancel`, and
+                // `TaskQ.removeAndTerminate`, which is the *only* way to withdraw a transport
+                // request. Counting at the call site meant every load withdrawn by termination left
+                // the accounts one short -- posted, and then neither completed, nor cancelled, nor
+                // waiting anywhere. A count of how many tasks ended cancelled must not depend on
+                // which route they took to get there.
+                myNumTasksCancelled.increment()
+            }
         }
 
         /** `QObject` supplies `id`, `name`, `priority` (a var, so a ranked discipline needs no
@@ -319,7 +329,6 @@ open class Dispatcher @JvmOverloads constructor(
         releaseAnyVehicleFrom(task)
         myTaskQ.remove(task, false)
         task.transitionTo(TaskState.CANCELLED)
-        myNumTasksCancelled.increment()
     }
 
     /**
@@ -351,6 +360,12 @@ open class Dispatcher @JvmOverloads constructor(
      */
     private fun releaseFrom(assignment: Assignment) {
         assignment.state = AssignmentState.REVOKED
+        // Counted here rather than in `revoke`, for the same reason cancellations are counted in
+        // `Task.transitionTo`: this is the one place an assignment becomes revoked, and two callers
+        // reach it -- a policy re-tasking a vehicle, and a task being abandoned under one. Counting
+        // only the first meant an assignment taken back because its task was withdrawn was made and
+        // then never accounted for anywhere.
+        myNumAssignmentsRevoked.increment()
         // Available again in the same breath, so a pass that releases and reassigns can do both
         // without an intervening wake.
         declareAvailable(assignment.vehicle)
@@ -387,7 +402,6 @@ open class Dispatcher @JvmOverloads constructor(
         assignment.task.transitionTo(TaskState.POSTED)
         assignment.task.assignedAt = Double.NaN
         (assignment.task as? TransportTask)?.let { it.numReassignments++ }
-        myNumAssignmentsRevoked.increment()
         releaseFrom(assignment)
     }
 

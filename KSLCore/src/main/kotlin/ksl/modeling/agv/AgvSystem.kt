@@ -7,8 +7,10 @@ import ksl.modeling.agv.policies.CallForProposals
 import ksl.modeling.agv.policies.DispatchContext
 import ksl.modeling.agv.policies.Disposition
 import ksl.modeling.agv.policies.NearestVehiclePolicy
+import ksl.modeling.agv.internal.DispatchAudit
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.KSLProcess
+import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.TransporterState
@@ -47,6 +49,37 @@ open class AgvSystem @JvmOverloads constructor(
 
     val dispatcher: Dispatcher = Dispatcher(this, assignmentPolicy, name = "${this.name}:Dispatcher")
 
+    private val myAudit = DispatchAudit(this)
+
+    /**
+     * Whether the space-exclusivity invariants are checked whenever the simulation clock advances.
+     *
+     * The same control the passive subsystem carries, and it has to be here as well as there: the
+     * guide path this system runs on is one it builds and owns, so without this a modeller has no
+     * way to reach it and an active model could not be checked at all. Off by default, and the
+     * initial value comes from the same system property, so switching checking on for a run switches
+     * it on for both paradigms rather than only for one of them.
+     */
+    var checkInvariants: Boolean
+        get() = spaceSystem.checkInvariants
+        set(value) {
+            spaceSystem.checkInvariants = value
+        }
+
+    /**
+     * Whether this system audits its own account of itself once, as each replication ends.
+     *
+     * On by default, and it covers the guide path underneath as well, because the two halves of an
+     * active model are not separately auditable in any useful sense: a vehicle that has lost track
+     * of its assignment and one that has lost track of the zone it is standing on are the same kind
+     * of failure seen from two sides.
+     */
+    var auditAtReplicationEnd: Boolean
+        get() = spaceSystem.auditAtReplicationEnd
+        set(value) {
+            spaceSystem.auditAtReplicationEnd = value
+        }
+
     private val myVehicles = mutableListOf<AgvVehicle>()
 
     /** In declaration order, which is the order ties are broken in. */
@@ -70,6 +103,14 @@ open class AgvSystem @JvmOverloads constructor(
     internal val inTransitHoldQ = HoldQueue(this, "${this.name}:InTransitHoldQ")
     internal val availabilityQ = HoldQueue(this, "${this.name}:AvailabilityQ")
     internal val dispatcherIdleQ = HoldQueue(this, "${this.name}:DispatcherIdleQ")
+
+    /** The loads suspended waiting to be collected. For the closing audit; the queues stay shut. */
+    internal val loadsAwaitingPickup: List<ProcessModel.Entity>
+        get() = awaitingPickupHoldQ.immutableList
+
+    /** The loads suspended aboard a vehicle. */
+    internal val loadsInTransit: List<ProcessModel.Entity>
+        get() = inTransitHoldQ.immutableList
 
     init {
         statisticalReportingForHoldQueues(false)
@@ -257,6 +298,11 @@ open class AgvSystem @JvmOverloads constructor(
         reportTasksNeverAssigned()
         reportEntitiesNeverResumed()
         reportAssignmentsStillOpen()
+        // After the diagnostics rather than before them: if the audit is about to raise, the three
+        // reports above are the context a reader will want, and they are already in the log.
+        if (auditAtReplicationEnd) {
+            myAudit.checkClosing()
+        }
         // Vehicles still blocked are reported by the space layer's own horizon diagnostic, which
         // this subsystem inherits. Repeating it would put two warnings in the log for one condition
         // and invite a reader to think they were two.

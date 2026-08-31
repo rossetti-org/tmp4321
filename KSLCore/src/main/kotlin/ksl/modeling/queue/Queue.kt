@@ -188,6 +188,43 @@ open class Queue<T : ModelElement.QObject> @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Whether the queue checks, as each replication ends, that its count and its contents agree.
+     *
+     * On by default. `numInQ` is maintained by incrementing and decrementing alongside the list
+     * rather than derived from it, which is the right choice -- a time-weighted statistic has to be
+     * told when the value changed, and asking the list would give the count without the instant --
+     * but it means there are two records of one quantity and they can come apart. A path that
+     * removes an item without decrementing, or decrements without removing, leaves every statistic
+     * this queue reports quietly wrong, with the queue itself behaving perfectly.
+     *
+     * The check is two comparisons per queue per replication. Switch it off only for a run where
+     * even that is being measured.
+     */
+    var auditAtReplicationEnd: Boolean = true
+
+    /**
+     * Checks that the count and the contents agree, while the replication is still running.
+     *
+     * Here rather than in [afterReplication], which clears the queue: by then there is nothing left
+     * to disagree with.
+     */
+    override fun replicationEnded() {
+        super.replicationEnded()
+        if (!auditAtReplicationEnd) return
+        val counted = myNumInQ.value
+        val held = myList.size.toDouble()
+        if (counted != held) {
+            throw QueueAccountingViolation(
+                "Queue ($name) reports $counted in queue at the end of replication " +
+                        "${model.currentReplicationNumber} but holds ${myList.size}. The count and " +
+                        "the contents are maintained separately and have come apart, so every " +
+                        "statistic this queue reports -- number in queue, time in queue, and " +
+                        "anything derived from them -- is wrong by the difference."
+            )
+        }
+    }
+
     override fun afterReplication() {
         super.afterReplication()
         clear()
@@ -975,3 +1012,11 @@ open class Queue<T : ModelElement.QObject> @JvmOverloads constructor(
         }
     }
 }
+/**
+ * A queue's count of what it holds disagrees with what it holds.
+ *
+ * Raised by the queue's own closing check, and never by ordinary operation: it says the library has
+ * a defect, not that a model does. Named rather than asserted quietly, because the symptom without
+ * it is a set of entirely plausible queueing statistics that are simply the wrong numbers.
+ */
+class QueueAccountingViolation(message: String) : IllegalStateException(message)

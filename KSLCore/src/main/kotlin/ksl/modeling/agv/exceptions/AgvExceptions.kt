@@ -44,3 +44,17 @@ class AgvAssignmentException(message: String) : RuntimeException(message)
  * appears far from the cause, so it is worth catching where it happens.
  */
 class AgvProtocolException(message: String) : RuntimeException(message)
+
+/**
+ * The subsystem's own account of itself does not add up.
+ *
+ * Raised by the closing audit, and never by ordinary operation: unlike the three exceptions above,
+ * which name things a *model* can do wrong, this one names something the subsystem has done wrong.
+ * A model that provokes it has found a defect, and the message says which record disagrees with
+ * which rather than merely that something is amiss -- because an audit that reports only that it
+ * failed costs more time than it saves.
+ *
+ * An `IllegalStateException` rather than a `RuntimeException`, matching the space layer's
+ * `ZoneInvariantViolation`: the two say the same kind of thing about the two halves of one model.
+ */
+class AgvInvariantViolation(message: String) : IllegalStateException(message)

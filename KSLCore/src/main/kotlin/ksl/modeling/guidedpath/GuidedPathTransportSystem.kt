@@ -82,7 +82,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
 
     internal val engine: MovementEngine = MovementEngine(this)
 
-    private var myInvariantChecker: ZoneInvariantChecker? = null
+    private val myInvariantChecker: ZoneInvariantChecker = ZoneInvariantChecker(this)
 
     /**
      * Whether the space-exclusivity invariants are checked whenever the simulation clock advances.
@@ -91,15 +91,36 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
      * correct pays for nothing. Tests turn it on: it is the standing proof that no transporter ever
      * shares space with another, ever covers a broken run of zones, or ever loses track of what it
      * holds.
+     *
+     * The initial value comes from the [CHECK_INVARIANTS_PROPERTY] system property, so that a whole
+     * suite -- or a whole model tree being debugged -- can be checked without every system in it
+     * being found and switched on by hand. Setting this explicitly still decides for itself.
      */
     @set:KSLControl(controlType = ControlType.BOOLEAN)
-    var checkInvariants: Boolean = false
+    var checkInvariants: Boolean = defaultCheckInvariants()
         set(value) {
             require(model.isNotRunning) {
                 "Invariant checking cannot be switched while the model is running."
             }
             field = value
         }
+
+    /**
+     * Whether the guide path audits itself once, as each replication ends.
+     *
+     * On by default, and unlike [checkInvariants] it is meant to stay on. The two differ in cost by
+     * the whole length of a run: the continuous check walks every zone at every clock advance, while
+     * this walks them once per replication, which no model will notice. What it buys is that a
+     * corruption which produced plausible-looking output announces itself at the end of the
+     * replication that caused it, rather than at some later replication or not at all.
+     *
+     * It audits what is true *while the replication is still running*, which is the state this hook
+     * sees. It is emphatically not a check that everything has been tidied away: a replication may
+     * legitimately end with a transporter blocked, a load aboard and a queue full of work. What must
+     * hold is that the model's account of that state is self-consistent.
+     */
+    @set:KSLControl(controlType = ControlType.BOOLEAN)
+    var auditAtReplicationEnd: Boolean = true
 
     /**
      * Whether the wait-for graph is walked when a transporter blocks.
@@ -737,6 +758,9 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
      * waiting for, which is what a modeler needs in order to see the cycle or the obstruction.
      */
     override fun replicationEnded() {
+        if (auditAtReplicationEnd) {
+            myInvariantChecker.checkClosing()
+        }
         val traversals = myNumZoneTraversals.value
         if (traversals > 0.0) {
             myEventsPerTraversal.value = myNumEventsScheduled.value / traversals
@@ -766,13 +790,25 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
 
     override fun registerConditionalActions() {
         if (!checkInvariants) return
-        val checker = ZoneInvariantChecker(this)
-        myInvariantChecker = checker
-        executive.register(checker)
+        executive.register(myInvariantChecker)
     }
 
     companion object {
         val logger: KLogger = KotlinLogging.logger {}
+
+        /**
+         * The system property that switches [checkInvariants] on for every guide path built in this
+         * JVM: `-Dksl.guidedpath.checkInvariants=true`.
+         *
+         * It exists because continuous checking is worth most exactly where it is least likely to be
+         * asked for -- every model in a test suite, including the ones written after whoever decided
+         * to check has stopped looking. Setting one flag on the command line covers models that do
+         * not exist yet, which no amount of editing existing tests can do.
+         */
+        const val CHECK_INVARIANTS_PROPERTY: String = "ksl.guidedpath.checkInvariants"
+
+        internal fun defaultCheckInvariants(): Boolean =
+            System.getProperty(CHECK_INVARIANTS_PROPERTY)?.toBooleanStrictOrNull() ?: false
     }
 
     override fun toString(): String = buildString {
