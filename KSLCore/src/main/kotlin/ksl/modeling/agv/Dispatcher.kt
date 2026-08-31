@@ -281,33 +281,64 @@ open class Dispatcher @JvmOverloads constructor(
     }
 
     /**
-     * Abandons a task, dequeuing it with no waiting statistics collected: a wait that was given up
-     * rather than served is not an observation of service.
+     * Abandons a task a vehicle raised for itself.
      *
-     * A vehicle already committed to the task is released first. Without that the vehicle goes on to
-     * the pickup and tries to collect a load whose task no longer exists, which surfaces much later
-     * as an illegal state transition from a place that has nothing to do with the cancellation.
+     * **A [TransportTask] cannot be cancelled**, and the refusal is deliberate rather than an
+     * omission. A load that asked for transport is suspended waiting for it, and there is no safe
+     * thing to do with that load: leaving it suspended strands it for the rest of the replication;
+     * terminating its process kills work that may have had nothing to do with the transport; and
+     * resuming it with an outcome only helps if the modeller handles that outcome, which Kotlin
+     * cannot oblige them to do -- a discarded return value is not a compile error, and the resulting
+     * model carries on as though the load had been delivered.
      *
-     * **The waiting entity is not resumed.** Cancelling a transport task abandons the *task*; the
-     * load that asked for it stays suspended, and unless the model does something about it, it waits
-     * out the run and is reported by the horizon diagnostics. That is deliberate — this subsystem
-     * cannot know what a load should do instead of being carried, and resuming it as though it had
-     * arrived would be a lie its process would act on. A model that wants the load to give up should
-     * use [TaskQ.removeAndTerminate], which ends its process, or cancel from within the load's own
-     * process where it can decide for itself.
+     * `MovableResource` declines to offer cancellation for the same reason, so a modeller learns one
+     * rule rather than two. If a load must give up entirely, [TaskQ.removeAndTerminate] ends its
+     * process outright -- blunt, but honest about being blunt, and it leaves nothing suspended.
      *
-     * @throws AgvAssignmentException when the load is already aboard: there is nowhere to put it
-     *   down, so the delivery must finish.
+     * A [ServiceTask] is different in the way that matters: a vehicle raised it for itself, so
+     * nothing is waiting on it and cancelling one strands nobody. "You were going to park, but work
+     * has arrived" is a real thing to want, and it is safe.
+     *
+     * A vehicle already committed to the task is released first, so it does not go on to a task that
+     * no longer exists.
+     *
+     * @throws AgvProtocolException when the task is a transport request.
      */
     fun cancel(task: Task) {
         require(task.dispatcher === this) { "Task (${task.name}) does not belong to ${this.name}." }
+        if (task is TransportTask) {
+            throw AgvProtocolException(
+                "Task (${task.name}) is a transport request and cannot be cancelled: entity " +
+                        "(${task.load.name}) is suspended waiting for it, and there is no outcome " +
+                        "this subsystem can give that entity which a model is obliged to handle. " +
+                        "MovableResource declines cancellation for the same reason. To make the " +
+                        "load give up entirely, use TaskQ.removeAndTerminate, which ends its " +
+                        "process and leaves nothing suspended."
+            )
+        }
+        releaseAnyVehicleFrom(task)
+        myTaskQ.remove(task, false)
+        task.transitionTo(TaskState.CANCELLED)
+        myNumTasksCancelled.increment()
+    }
+
+    /**
+     * Releases any vehicle committed to the task, so the task can be abandoned without the vehicle
+     * going on to collect a load that is no longer there.
+     *
+     * Called by [cancel] and by [TaskQ.removeAndTerminate]. Both abandon a task, and both would
+     * otherwise leave a vehicle en route to a pickup whose task has gone -- surfacing much later, and
+     * far from the cause, as an illegal state transition thrown from the control loop.
+     *
+     * @throws AgvAssignmentException when the load is already aboard. There is nowhere to set it
+     *   down, so the delivery must finish; abandoning the task at that point would leave a vehicle
+     *   carrying something that no longer exists.
+     */
+    internal fun releaseAnyVehicleFrom(task: Task) {
         assignmentFor(task)?.let { live ->
             live.requireRevocable()
             releaseFrom(live)
         }
-        myTaskQ.remove(task, false)
-        task.transitionTo(TaskState.CANCELLED)
-        myNumTasksCancelled.increment()
     }
 
     /**

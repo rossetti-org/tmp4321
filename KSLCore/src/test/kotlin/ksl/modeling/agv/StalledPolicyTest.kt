@@ -116,6 +116,9 @@ class StalledPolicyTest {
             "nothing was ever assigned, so no assignment can be open -- which is itself the tell: " +
                     "tasks stranded with no assignment open means the fleet never started, while " +
                     "tasks stranded with assignments open means it merely ran out of time")
+        // Every replication contributed an observation, and they all say the same thing. A horizon
+        // measurement recorded only in the replications where it was non-zero would give an average
+        // over the bad ones, which looks like a fleet's performance and is not.
         assertEquals(3.0, shop.agv.numTasksNeverAssigned.acrossReplicationStatistic.count)
         assertEquals(5.0, shop.agv.numTasksNeverAssigned.acrossReplicationStatistic.average, 1e-9,
             "the stall recurred in every replication and the across-replication statistic should say so")

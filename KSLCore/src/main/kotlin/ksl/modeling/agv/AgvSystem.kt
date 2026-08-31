@@ -14,8 +14,6 @@ import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
-import ksl.modeling.variable.Counter
-import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response
 import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
@@ -135,50 +133,30 @@ open class AgvSystem @JvmOverloads constructor(
     }
 
     // ---- horizon diagnostics -------------------------------------------------------------------
-    // Counters rather than flags, because "did this happen" is much less useful than "how often":
-    // one stranded task in a warm-up replication is noise, and the same number every replication is
-    // a fleet that cannot meet its demand.
+    //
+    // `Response`, not `Counter`, and the distinction is semantic rather than a workaround.
+    //
+    // A counter holds a running total whose value is only meaningful *while* a replication is
+    // running -- which is why it records itself in `replicationEnded`, infinitesimally before the
+    // replication ends and while it is still live. What is measured here is not a running total. It
+    // is a single observation, taken at the last instant of the replication, of a quantity that does
+    // not exist until then: how much work was left undone. That is what a `Response` is for, and a
+    // `Response` records itself in `afterReplication`, summarizing whatever was observed during the
+    // run -- including an observation made at the very end of it.
+    //
+    // Written unconditionally, including zero. A replication that stranded nothing is an observation
+    // of zero, not the absence of an observation; recording only the bad replications would make the
+    // across-replication average a mean over those, which is a number that looks like a fleet's
+    // performance and is not.
 
-    /**
-     * Runs the horizon diagnostics, and exists **only** to run them before the counters below
-     * observe themselves.
-     *
-     * `Counter.replicationEnded` is where a counter records its value for the across-replication
-     * statistics, and `ModelElement` runs `replicationEnded` for children before self. A count
-     * incremented in `AgvSystem.replicationEnded` is therefore incremented *after* every counter has
-     * already snapshotted: the within-replication value is right, the across-replication average is
-     * zero, and nothing says so. Every diagnostic here would have reported correctly on a single
-     * replication and silently reported nothing over many -- which is exactly the run where it
-     * matters.
-     *
-     * A child declared **before** the counters is visited before them, so its increments land in
-     * time. That is an ordering dependency, and an invisible one, so `HorizonCounterTimingTest`
-     * pins it: if this field is ever moved below the counters, or the framework's traversal order
-     * changes, a test fails rather than a statistic quietly becoming zero.
-     */
-    private inner class HorizonDiagnostics : ModelElement(this@AgvSystem, "${this@AgvSystem.name}:Diagnostics") {
-        override fun replicationEnded() {
-            super.replicationEnded()
-            // All pure reads of live state, and nothing is woken.
-            reportTasksNeverAssigned()
-            reportEntitiesNeverResumed()
-            reportAssignmentsStillOpen()
-            // Vehicles still blocked are reported by the space layer's own horizon diagnostic, which
-            // this subsystem inherits. Repeating it would put two warnings in the log for one
-            // condition and invite a reader to think they were two.
-        }
-    }
+    private val myNumTasksNeverAssigned = Response(this, "${this.name}:NumTasksNeverAssigned")
+    val numTasksNeverAssigned: ResponseCIfc get() = myNumTasksNeverAssigned
 
-    private val myDiagnostics = HorizonDiagnostics()
+    private val myNumEntitiesNeverResumed = Response(this, "${this.name}:NumEntitiesNeverResumed")
+    val numEntitiesNeverResumed: ResponseCIfc get() = myNumEntitiesNeverResumed
 
-    private val myNumTasksNeverAssigned = Counter(this, "${this.name}:NumTasksNeverAssigned")
-    val numTasksNeverAssigned: CounterCIfc get() = myNumTasksNeverAssigned
-
-    private val myNumEntitiesNeverResumed = Counter(this, "${this.name}:NumEntitiesNeverResumed")
-    val numEntitiesNeverResumed: CounterCIfc get() = myNumEntitiesNeverResumed
-
-    private val myNumAssignmentsStillOpen = Counter(this, "${this.name}:NumAssignmentsStillOpen")
-    val numAssignmentsStillOpen: CounterCIfc get() = myNumAssignmentsStillOpen
+    private val myNumAssignmentsStillOpen = Response(this, "${this.name}:NumAssignmentsStillOpen")
+    val numAssignmentsStillOpen: ResponseCIfc get() = myNumAssignmentsStillOpen
 
     /** Emits the one thing a viewer cannot infer from watching vehicles move: that a decision was
      *  made. Guarded, so it costs nothing when no animation sink is installed. */
@@ -272,7 +250,16 @@ open class AgvSystem @JvmOverloads constructor(
         myUnfinishedTasks = dispatcher.board.tasks.size
         myLoadsAwaitingPickup = awaitingPickupHoldQ.size
         myLoadsInTransit = inTransitHoldQ.size
-        // The counted diagnostics are NOT run here -- see HorizonDiagnostics for why.
+        // Pure reads of live state, and nothing is woken. This runs for every element before
+        // afterReplication runs for any, which is both the only window in which the state below
+        // still exists to be read and -- because a Response records itself in afterReplication --
+        // safely before these observations are summarized.
+        reportTasksNeverAssigned()
+        reportEntitiesNeverResumed()
+        reportAssignmentsStillOpen()
+        // Vehicles still blocked are reported by the space layer's own horizon diagnostic, which
+        // this subsystem inherits. Repeating it would put two warnings in the log for one condition
+        // and invite a reader to think they were two.
     }
 
     /**
@@ -286,8 +273,8 @@ open class AgvSystem @JvmOverloads constructor(
      */
     private fun reportTasksNeverAssigned() {
         val orphaned = dispatcher.board.tasks.filter { it.assignedAt.isNaN() }
+        myNumTasksNeverAssigned.value = orphaned.size.toDouble()
         if (orphaned.isEmpty()) return
-        myNumTasksNeverAssigned.increment(orphaned.size.toDouble())
         logger.warn {
             buildString {
                 append("AgvSystem ($name): ${orphaned.size} task(s) were posted and never assigned ")
@@ -314,8 +301,8 @@ open class AgvSystem @JvmOverloads constructor(
      */
     private fun reportEntitiesNeverResumed() {
         val stranded = awaitingPickupHoldQ.size + inTransitHoldQ.size
+        myNumEntitiesNeverResumed.value = stranded.toDouble()
         if (stranded == 0) return
-        myNumEntitiesNeverResumed.increment(stranded.toDouble())
         logger.warn {
             buildString {
                 append("AgvSystem ($name): $stranded entit(ies) were still suspended when ")
@@ -339,8 +326,8 @@ open class AgvSystem @JvmOverloads constructor(
      *  work can be told from one that was cut off in the middle of some. */
     private fun reportAssignmentsStillOpen() {
         val open = myVehicles.mapNotNull { v -> v.currentAssignment?.let { v to it } }
+        myNumAssignmentsStillOpen.value = open.size.toDouble()
         if (open.isEmpty()) return
-        myNumAssignmentsStillOpen.increment(open.size.toDouble())
         logger.warn {
             buildString {
                 append("AgvSystem ($name): ${open.size} assignment(s) were still open when ")

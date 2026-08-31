@@ -151,9 +151,9 @@ class LostWorkTest {
             "no load was delivered at all, so this is not the mid-tour case it claims to be")
     }
 
-    // ── cancelled while assigned ───────────────────────────────────────────────────────────
+    // ── giving up on a load ────────────────────────────────────────────────────────────────
 
-    private class CancellingShop(parent: ModelElement) : ProcessModel(parent, "Cancelling") {
+    private class GivingUpShop(parent: ModelElement) : ProcessModel(parent, "GivingUp") {
         val network = SimpleAgvNetwork.create()
 
         init {
@@ -165,51 +165,67 @@ class LostWorkTest {
             agv, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME), ConstantRV(10.0), name = "Cart1"
         ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME }
 
-        var cancelled = false
+        var refusal: String? = null
+        var terminated = false
+        var reachedEnd = false
 
         inner class Part : Entity("Part") {
             val p = process(isDefaultProcess = true) {
                 currentLocation = network.requireLocation(SimpleAgvNetwork.ENTRY_STATION)
                 transportByAgv(agv, SimpleAgvNetwork.EXIT_STATION, origin = SimpleAgvNetwork.ENTRY_STATION)
+                // Never reached: the load is terminated while it waits.
+                reachedEnd = true
             }
         }
 
         override fun initialize() {
-            cancelled = false
+            refusal = null
+            terminated = false
+            reachedEnd = false
             activate(Part().p)
-            schedule(::cancelIt, 8.0)
+            schedule(::tryBoth, 8.0)
         }
 
         @Suppress("UNUSED_PARAMETER")
-        private fun cancelIt(event: KSLEvent<Nothing>) {
+        private fun tryBoth(event: KSLEvent<Nothing>) {
             val task = agv.dispatcher.board.tasks.firstOrNull() ?: return
-            agv.dispatcher.cancel(task)
-            cancelled = true
+            // Cancelling a transport request is refused: there is no outcome this subsystem can
+            // give the suspended load that a model is obliged to handle.
+            refusal = runCatching { agv.dispatcher.cancel(task) }.exceptionOrNull()?.message
+            // The sanctioned alternative -- blunt, but it leaves nothing suspended.
+            (agv.dispatcher.taskQ as TaskQ).removeAndTerminate(task)
+            terminated = true
         }
     }
 
     @Test
-    @DisplayName("A task cancelled while assigned leaves its load counted, not silently abandoned")
-    fun cancellingAnAssignedTaskIsVisible() {
-        val m = Model("LostCancelled")
-        val shop = CancellingShop(m)
+    @DisplayName("Cancelling a transport request is refused; terminating the load is the alternative")
+    fun aLoadGivesUpByTerminationNotCancellation() {
+        val m = Model("LostGivingUp")
+        val shop = GivingUpShop(m)
         m.numberOfReplications = 1
         m.lengthOfReplication = 300.0
         m.simulate()
 
-        assertTrue(shop.cancelled, "the task was not cancelled, so nothing was tested")
-        assertEquals(1.0, shop.agv.dispatcher.numTasksCancelled.value)
-        assertEquals(0.0, shop.agv.dispatcher.numTasksCompleted.value,
-            "a cancelled task must not also be counted as completed")
+        // The refusal explains itself and names the load, because the modeller reaching for cancel
+        // has a real need and deserves to be told what to use instead.
+        val msg = requireNotNull(shop.refusal) { "cancelling a transport request was permitted" }
+        assertTrue(msg.contains("Part"), "the refusal should name the load: $msg")
+        assertTrue(msg.contains("cannot be cancelled"), "the refusal should say what was refused: $msg")
+        assertTrue(msg.contains("removeAndTerminate"),
+            "the refusal should say what to use instead: $msg")
 
-        // The load is still suspended: cancelling the task does not resume the entity waiting on it,
-        // and pretending otherwise would leave a modeller believing a load was delivered. The
-        // diagnostic is what makes that visible rather than a puzzle.
-        assertEquals(1.0, shop.agv.numEntitiesNeverResumed.value,
-            "the load whose task was cancelled was not reported as still suspended")
-        assertEquals(1, shop.agv.loadsAwaitingPickupAtHorizon)
+        // Termination is clean: the load's process ends, and nothing is left suspended or on the
+        // board. That is the whole reason it is the alternative on offer.
+        assertTrue(shop.terminated)
+        assertEquals(false, shop.reachedEnd, "a terminated load must not run the rest of its process")
+        assertEquals(0, shop.agv.dispatcher.taskQ.size, "the task was left on the board")
+        assertEquals(0, shop.agv.awaitingPickupHoldQ.size, "the load was left suspended")
+        assertEquals(0.0, shop.agv.numEntitiesNeverResumed.value,
+            "nothing should be reported as still suspended: it was terminated, not stranded")
+        assertEquals(0.0, shop.agv.dispatcher.numTasksCompleted.value)
 
-        // The cancelled wait is not an observation: the queue reports nothing rather than a zero.
+        // The abandoned wait is not an observation of service.
         assertEquals(0.0, shop.agv.dispatcher.taskQ.timeInQ.withinReplicationStatistic.count,
             "an abandoned wait was recorded as a served one")
     }

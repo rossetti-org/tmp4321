@@ -48,6 +48,11 @@ class TaskQ @JvmOverloads constructor(
         waitStats: Boolean = false,
         afterTermination: ((entity: ProcessModel.Entity) -> Unit)? = null
     ) {
+        // A vehicle already committed to this task is released first. Without that it goes on to the
+        // pickup and tries to collect a load that has been terminated -- which surfaces much later,
+        // from the control loop, as an illegal state transition with nothing pointing back here.
+        // Refuses if the load is aboard: there is nowhere to set it down.
+        task.dispatcher.releaseAnyVehicleFrom(task)
         remove(task, waitStats)
         task.transitionTo(TaskState.CANCELLED)
         val waiting = task.waitingEntity
