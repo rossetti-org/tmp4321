@@ -86,7 +86,13 @@ Four types carry the model:
   between replications, and reports congestion.
 - **`GuidedTransporter`** — a vehicle. It is a capacity-one `Resource`, so
   it is seized and released by the machinery you already know.
-- **`GuidedTransporterPoolWithQ`** — a fleet asked for by the group.
+- **`GuidedTransporterPoolWithQ`** — a fleet asked for by the group. It is
+  an `AbstractResourcePool` with a `RequestQ`, so it is seized exactly as
+  a resource pool or a movable resource pool is: a request is enqueued on
+  **every** call, whether or not it waits, and removed when a transporter
+  is allocated. An entity served immediately therefore records a wait of
+  **zero** rather than no observation at all, which is what `seize` has
+  always done and what the reported mean has to be over to mean anything.
 
 The network is fixed and the system is what varies, which is why they are
 two objects rather than one. (There is also a Kotlin reason: `SpatialModel`
@@ -261,6 +267,34 @@ This is the decision that most often decides whether a model works at all.
 See §6. Three rules ship: `ParkInPlaceRule` (the default, and the one to
 change), `ReturnToHomeBaseRule`, and `MoveToStagingAreaRule`.
 
+### …give a vehicle a physical length?
+
+Two ways, and they are not interchangeable. `lengthInZones` is the usual
+one: a vehicle two zones long covers two, and the network refuses a spur
+too short to hold it. `physicalLength` sizes the vehicle in the network's
+own length units instead, for a vehicle **shorter than a zone**:
+
+```kotlin
+GuidedTransporter(
+    system, TransporterPlacement.At("I6"), ConstantRV(10.0),
+    zoneControlRule = StartOfZoneControl(), name = "Cart", physicalLength = 6.0
+)
+```
+
+It cannot be combined with `lengthInZones`, and it must fit inside the
+smallest zone in the network — both are checked at construction.
+
+What it buys is one thing only, and it is worth knowing exactly what:
+a vehicle parked at a **dead end** has already covered its own length of
+the spur, so leaving costs `physicalLength` less than entering did. That
+asymmetry is real, it is what the reference tool does, and it is the
+difference between agreeing with that tool to thirteen decimal places and
+being visibly out. Generalising the credit to every junction was tried and
+is wrong — it overshoots badly, and the code records the measurement that
+rejected it.
+
+If your vehicles are a whole number of zones long, ignore this parameter.
+
 ### …change how closely carts may follow one another?
 
 The zone control rule decides when a transporter gives up the zone
@@ -308,6 +342,29 @@ Nothing to switch on. When an animation sink is active the system emits
 `GuidedPathDefined` once per replication and a `GuidedTransporterMoved`
 each time a transporter enters a zone. The guide path carries its own
 coordinates, so — unlike a conveyor — it needs no authored layout.
+
+### …check the subsystem's own bookkeeping?
+
+Two audits, at two costs:
+
+```kotlin
+system.checkInvariants = true          // every clock advance; expensive, for development
+system.auditAtReplicationEnd = true    // once per replication; on by default
+```
+
+`checkInvariants` re-establishes zone exclusivity whenever the clock
+advances: no zone held by two transporters, no transporter holding zones
+it does not cover, spur reservations consistent with occupancy. Its
+default comes from the `ksl.guidedpath.checkInvariants` system property,
+so a whole study can be run under checking without editing a model.
+
+The closing audit runs once as each replication ends and adds the blocked
+clocks to that: a blocked clock runs if and only if the transporter is
+blocked, and every cumulative blocked time is finite and non-negative. It
+is on by default because it costs one pass over the fleet per replication.
+
+Neither is a modelling check. They fail when the *subsystem* has got
+something wrong, which is why they raise rather than warn.
 
 ### …handle a deadlock in a parameter sweep?
 
@@ -417,6 +474,59 @@ Inbound  holds [B]          and awaits Both.Zone3
 The network warns at `build()` about every two-way link, and about any
 spur too short to contain the longest declared vehicle.
 
+### A staging area stages one vehicle
+
+`MoveToStagingAreaRule` names an intersection, and a zone holds one
+vehicle. Send three carts to one staging intersection and one parks there
+while the other two stop on the approach.
+
+That is sometimes exactly what a layout intends — a queue of idle vehicles
+waiting their turn — but it has a consequence worth being concrete about,
+because it is counter-intuitive. **A cart stopped on the approach is still
+available.** It is in the pool, it can be allocated, and on a one-way link
+it cannot leave until whatever is in the staging zone moves. Worse, a
+transporter part-way along a link reports its location as that link's
+*far end*, so a cart queued for the staging area is ranked by
+`ClosestByNetworkDistanceRule` exactly as the cart already sitting there
+is — and ties go to whichever was declared first. A dispatching rule can
+therefore commit a job to a cart that cannot start on it.
+
+Measure `fracTimeBlocked` across the fleet before believing a
+staging-area design. Where it matters, give each cart a spur of its own
+and use `ReturnToHomeBaseRule` instead.
+
+### How far this has been checked
+
+Four models built in a commercial guided-path tool have been reproduced
+here and compared statistic by statistic, with the fixtures and the
+comparisons kept as tests
+(`KSLCore/src/test/kotlin/ksl/modeling/guidedpath/*ArenaCrossCheckTest.kt`).
+Agreement is judged by `z = |difference| / sqrt(h1² + h2²)`, so **z ≤ 1 is
+agreement at 95%** for two independent estimates.
+
+| Model | Fleet | Result |
+|---|---|---|
+| Simple AGV shop, deterministic | 2 | All ten quantities agree; largest difference 4e-13 |
+| Test and repair, two-way aisles | 1 | Shop agrees, worst z = 0.89; aisle out by a third of a percent |
+| Test and repair, one-way aisles | 2 | Shop agrees, worst z = 0.84; aisle agrees, z = 0.11 |
+| Painting flow line, staging area | 3 | Shop agrees, worst z = 0.59; the fleet does not — see below |
+
+Two of these found something. The deterministic model agreed only after
+`physicalLength` was implemented, because the reference tool's vehicle was
+sized by length and gets its own length back when it reverses out of a
+dead end. The painting flow line does **not** agree on the fleet, and the
+cause is structural rather than numerical: that tool cannot move an
+unallocated vehicle, so its trip to the staging area is an ordinary
+transport made by a duplicated entity — the vehicle is *busy* and cannot
+be diverted, where here it is neither. Committed vehicle time agrees to
+2.3%; how that time is classified does not.
+
+The point of saying so here is that these are the terms on which the
+subsystem has been checked. The shop around a guide path reproduces to
+within sampling error in every case tried. The guide path itself
+reproduces where the two tools mean the same thing by a vehicle's time,
+and the one place they do not is written down rather than tuned away.
+
 ### Cells and zones
 
 `Conveyor.Cell` and `Zone` look alike and are not the same idea.
@@ -480,6 +590,11 @@ a performance defect that leaves every answer correct.
 
 ## 7. See also
 
+- [`ksl-agv`](ksl-agv.md) — the **active** paradigm over this same
+  physical world: vehicles that decide for themselves, a dispatcher with a
+  process of its own, and the batching, negotiation and re-tasking that a
+  pool's allocation rule cannot express. Everything in this guide is true
+  there.
 - [`ksl-spatial`](ksl-spatial.md) — `MovableResource` and `DistancesModel`:
   the free-path family this package sits beside. Start there if your
   vehicles do not contend for space.

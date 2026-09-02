@@ -140,6 +140,20 @@ private object GuidedPathGuideSnippets {
         ): GuidedTransporter = candidates.minByOrNull { it.name }!!
     }
 
+    // …give a vehicle a physical length?
+    fun sizedByLength(system: GuidedPathTransportSystem) {
+        GuidedTransporter(
+            system, TransporterPlacement.At("I6"), ConstantRV(10.0),
+            zoneControlRule = StartOfZoneControl(), name = "Cart", physicalLength = 6.0
+        )
+    }
+
+    // …check the subsystem's own bookkeeping?
+    fun audit(system: GuidedPathTransportSystem) {
+        system.checkInvariants = true          // every clock advance; expensive, for development
+        system.auditAtReplicationEnd = true    // once per replication; on by default
+    }
+
     // …change how closely carts may follow one another?
     fun followingClosely(system: GuidedPathTransportSystem) {
         GuidedTransporter(
