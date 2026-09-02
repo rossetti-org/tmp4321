@@ -65,7 +65,7 @@ class AgvReplicationCleanupTest {
                 "riding=${agv.inTransitHoldQ.size} " +
                 "dormantVehicles=${agv.availabilityQ.size} " +
                 "dispatcherIdle=${agv.dispatcherIdleQ.size} " +
-                "movementQ=${agv.spaceSystem.movementHoldQ.size} " +
+                "movementQ=${agv.spaceSystem.drivingHoldQ.size} " +
                 "cartBusy=${cart.body.numBusy} cartState=${cart.body.transporterState} " +
                 "assigned=${cart.currentAssignment != null}"
 

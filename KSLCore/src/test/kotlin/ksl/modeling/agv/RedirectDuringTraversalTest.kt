@@ -140,7 +140,7 @@ class RedirectDuringTraversalTest {
         // Nothing was left behind: no vehicle stuck waiting for a zone it no longer wants, and the
         // fleet ended idle with an empty board.
         assertEquals(0, shop.agv.dispatcher.taskQ.size, "a task was left on the board")
-        assertEquals(0, shop.agv.spaceSystem.movementHoldQ.size,
+        assertEquals(0, shop.agv.spaceSystem.drivingHoldQ.size,
             "a vehicle was left in the movement queue -- the symptom of a waiter list not given up")
         assertEquals(0, shop.cart.body.numBusy, "the body was left allocated")
     }

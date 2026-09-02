@@ -17,6 +17,7 @@
  */
 package ksl.modeling.guidedpath
 
+import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.Resource
 import ksl.modeling.guidedpath.exceptions.GuidedPathNetworkException
@@ -139,6 +140,17 @@ fun interface TransporterArrivalListenerIfc {
  * @param zoneControlRule when it gives up the zone behind it
  * @param name a name for it
  */
+/**
+ * Who is waiting on a transporter's journey, and the queue holding them.
+ *
+ * @param waiter the entity suspended until the journey ends
+ * @param queue the movement queue it is suspended in, which decides how the wait is described
+ */
+internal class JourneyWait(
+    val waiter: ProcessModel.Entity,
+    val queue: HoldQueue
+)
+
 class GuidedTransporter @JvmOverloads constructor(
     val system: GuidedPathTransportSystem,
     initialPlacement: TransporterPlacement,
@@ -326,13 +338,19 @@ class GuidedTransporter @JvmOverloads constructor(
     internal var pendingMovingState: TransporterState = TransporterState.RETURNING_HOME
 
     /**
-     * The entity suspended until this transporter finishes its current movement, or null.
+     * Who is suspended until this transporter finishes its current movement, and where, or null.
      *
      * A transporter travels over many events, so an entity riding it -- or waiting for it to come
-     * and collect it -- has to be held for the whole journey rather than for a single delay. This
-     * is who to wake when the journey ends.
+     * and collect it, or driving it -- has to be held for the whole journey rather than for a
+     * single delay. This is who to wake when the journey ends, and which queue to wake them from.
+     *
+     * The two are one object rather than two fields deliberately. The subsystem holds several
+     * movement queues, one per kind of wait, and an entity resumed out of the wrong one would be
+     * left enqueued for ever while its process ran on -- a failure that shows up as a queue that
+     * never empties, a long way from the line that caused it. Recording the pair together makes
+     * the two impossible to get out of step.
      */
-    internal var waitingEntity: ProcessModel.Entity? = null
+    internal var journeyWait: JourneyWait? = null
 
     /**
      * The spur this transporter has taken over, or null.
@@ -488,7 +506,7 @@ class GuidedTransporter @JvmOverloads constructor(
         awaitedZone = null
         awaitedLink = null
         reservedSpur = null
-        waitingEntity = null
+        journeyWait = null
         travellingForward = true
         transporterState = TransporterState.IDLE
         stateBeforeBlocking = TransporterState.IDLE

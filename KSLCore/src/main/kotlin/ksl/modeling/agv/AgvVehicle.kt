@@ -4,9 +4,11 @@ import ksl.modeling.agv.policies.BidPolicyIfc
 import ksl.modeling.agv.policies.DispositionPolicyIfc
 import ksl.modeling.agv.policies.NetworkDistanceBid
 import ksl.modeling.agv.policies.ReturnToHomeBaseDisposition
+import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.RequestQ
 import ksl.modeling.guidedpath.GuidedTransporter
+import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.EndOfZoneControl
@@ -187,13 +189,15 @@ open class AgvVehicle @JvmOverloads constructor(
      * @param waiter the vehicle's own agent, which is what arrival resumes. Never the load: the
      *   load waits in this subsystem's hold queue, and passing it here would produce a model that
      *   works while attributing the riding time to the space layer's queue instead.
-     * @return true when a journey began, false when the body was already there
+     * @return the movement queue to suspend the waiter in, or null when the body was already there
      */
     internal fun beginTravelTo(
         location: String,
         state: TransporterState,
         waiter: ProcessModel.Entity
-    ): Boolean = system.spaceSystem.beginJourney(body, location, state, waiter)
+    ): HoldQueue? = system.spaceSystem.beginJourney(
+        body, location, state, waiter, MovementWait.DRIVING
+    )
 
     override fun initialize() {
         myFracTimeOnTask.value = 0.0

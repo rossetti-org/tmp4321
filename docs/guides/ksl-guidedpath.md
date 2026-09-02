@@ -336,6 +336,34 @@ Always registered, whatever the network size: `numTransportersMoving`,
 `numDeadlocksDetected`, `numObstructionsDetected`, the six per-transport
 responses, and per transporter `fracTimeBlocked` and `numTimesBlocked`.
 
+### …find out who is suspended in the middle of a journey?
+
+Three queues hold them, split by what the wait *is*:
+
+```kotlin
+system.awaitingPickupHoldQ   // standing where they are, while a transporter comes for them
+system.ridingHoldQ           // aboard one
+system.drivingHoldQ          // driving one -- always empty under this paradigm; see below
+```
+
+**None of the three reports anything.** A hold queue is how a suspended
+entity is found again; it is not a waiting line, and letting it double as
+the statistic conflates a mechanism with a measurement. `RidingHoldQ`'s
+time in queue would be the mean length of a loaded move and its number in
+queue a count of moving carts — read by anybody scanning a report as a
+line of entities waiting for something. Both quantities are already
+reported properly by `emptyMoveTime` and `loadedMoveTime`, which is what to
+use. `Conveyor` makes the same call for the same three-way split.
+
+```kotlin
+system.statisticalReportingForHoldQueues(true)   // for debugging a model that stopped moving
+```
+
+`drivingHoldQ` is empty here and is not dead weight: it is where the
+[active subsystem's](ksl-agv.md) vehicle agents wait for their own body to
+finish a leg — including a leg with nothing aboard, which is a wait neither
+of the other two describes.
+
 ### …animate it?
 
 Nothing to switch on. When an animation sink is active the system emits
@@ -407,6 +435,7 @@ though it had worked.
 | `GuidedTransporterPoolWithQ` | A fleet asked for by the group, with the queue of entities waiting for one. |
 | `GuidedTransportRequest` | An entity's claim on a transporter. Inert after release. |
 | `GuidedTransportResult` | What a journey cost, including `blockedTime`. |
+| `awaitingPickupHoldQ` / `ridingHoldQ` / `drivingHoldQ` | Where a waiter on a journey is suspended, split by what the wait is. Mechanism, not measurement: none of them reports. |
 | `TransporterPlacement` | Where a transporter starts: `At(location)` or `OnZone(zoneName)`. Re-applied every replication. |
 | `GuidedPathDeadlockException` | A circular wait, carrying a `DeadlockReport` naming every participant. |
 | `IdleTransporterObstruction` | A transporter blocked behind one that will never move. Warned and counted, not thrown. |

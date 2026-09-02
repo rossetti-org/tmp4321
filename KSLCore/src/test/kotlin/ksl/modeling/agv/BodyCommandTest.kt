@@ -7,6 +7,7 @@ import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.RequestQ
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.GuidedTransporter
+import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.EndOfZoneControl
@@ -87,11 +88,12 @@ class BodyCommandTest {
                 log.add("departing at $time")
                 // `this@Driver` is the waiter: the AGENT sits in the space layer's movement queue,
                 // and the load stays in ours.
-                val moving = space.beginJourney(
-                    body, SimpleAgvNetwork.EXIT_STATION, TransporterState.MOVING_LOADED, this@Driver
+                val travelQ = space.beginJourney(
+                    body, SimpleAgvNetwork.EXIT_STATION, TransporterState.MOVING_LOADED, this@Driver,
+                    MovementWait.DRIVING
                 )
-                assertTrue(moving, "the body was already at the destination; the layout changed")
-                hold(space.movementHoldQueue, suspensionName = "travelling")
+                assertTrue(travelQ != null, "the body was already at the destination; the layout changed")
+                hold(travelQ!!, suspensionName = "travelling")
                 arrivedAt = time
                 log.add("arrived at $time")
 
@@ -102,7 +104,7 @@ class BodyCommandTest {
 
         @Suppress("UNUSED_PARAMETER")
         private fun sample(event: KSLEvent<Nothing>) {
-            movementQueueMidJourney = space.movementHoldQ.immutableList.map { it.name }
+            movementQueueMidJourney = space.drivingHoldQ.immutableList.map { it.name }
             loadQueueMidJourney = loadHoldQ.immutableList.map { it.name }
         }
 
@@ -158,12 +160,12 @@ class BodyCommandTest {
 
         // The division that matters: the AGENT rides the space layer's queue, the LOAD waits in ours.
         assertEquals(listOf("Driver"), depot.movementQueueMidJourney,
-            "the space layer's movement queue held the wrong waiter during the journey")
+            "the space layer's driving queue held the wrong waiter during the journey")
         assertEquals(listOf("Load"), depot.loadQueueMidJourney,
             "the load was not suspended in the subsystem's own queue during the journey")
 
         // Nothing left behind.
-        assertEquals(0, depot.space.movementHoldQ.size, "the movement queue was not emptied")
+        assertEquals(0, depot.space.drivingHoldQ.size, "the driving queue was not emptied")
         assertEquals(0, depot.loadHoldQ.size, "the load was left in the hold queue")
         assertEquals(0, depot.body.numBusy, "the body was left allocated")
     }

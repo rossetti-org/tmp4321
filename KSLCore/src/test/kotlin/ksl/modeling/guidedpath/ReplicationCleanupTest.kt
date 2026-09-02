@@ -56,7 +56,8 @@ class ReplicationCleanupTest {
         override fun initialize() {
             // Snapshot the state the previous replication left behind, BEFORE creating any work.
             observations.add("rep=${model.currentReplicationNumber} INIT " +
-                "movementHoldQ=${system.movementHoldQ.size} " +
+                "awaitingPickupQ=${system.awaitingPickupHoldQ.size} " +
+                "ridingQ=${system.ridingHoldQ.size} " +
                 "poolWaitingQ=${carts.waitingQ.size} " +
                 "cartNumBusy=${cart.numBusy} cartState=${cart.transporterState}")
             // Six parts, one every 5 minutes: the horizon lands mid-transport with others queued.
@@ -65,7 +66,8 @@ class ReplicationCleanupTest {
 
         override fun replicationEnded() {
             observations.add("rep=${model.currentReplicationNumber} ENDED " +
-                "movementHoldQ=${system.movementHoldQ.size} " +
+                "awaitingPickupQ=${system.awaitingPickupHoldQ.size} " +
+                "ridingQ=${system.ridingHoldQ.size} " +
                 "poolWaitingQ=${carts.waitingQ.size} " +
                 "cartNumBusy=${cart.numBusy} cartState=${cart.transporterState}")
         }
@@ -88,7 +90,10 @@ class ReplicationCleanupTest {
         // The hazard must actually be present, or the test proves nothing: every replication has to
         // end with an entity riding, entities queued, and the cart committed.
         for (e in ends) {
-            assertTrue(e.contains("movementHoldQ=1"), "a part must still be riding at the horizon: $e")
+            // The split says which wait, so this is now checked rather than inferred from the
+            // cart's state: exactly one part aboard, and nobody left standing to be collected.
+            assertTrue(e.contains("ridingQ=1"), "a part must still be riding at the horizon: $e")
+            assertTrue(e.contains("awaitingPickupQ=0"), "nobody should be awaiting collection: $e")
             assertTrue(e.contains("poolWaitingQ=5"), "parts must still be waiting for a cart: $e")
             assertTrue(e.contains("cartNumBusy=1"), "the cart must still be allocated: $e")
             assertTrue(e.contains("cartState=MOVING_LOADED"), "and still carrying: $e")
@@ -96,7 +101,8 @@ class ReplicationCleanupTest {
 
         // And every replication must nevertheless begin from nothing.
         for (i in inits) {
-            assertTrue(i.contains("movementHoldQ=0"), "the movement queue must be empty at initialize: $i")
+            assertTrue(i.contains("awaitingPickupQ=0"), "the pickup queue must be empty at initialize: $i")
+            assertTrue(i.contains("ridingQ=0"), "the riding queue must be empty at initialize: $i")
             assertTrue(i.contains("poolWaitingQ=0"), "the pool queue must be empty at initialize: $i")
             assertTrue(i.contains("cartNumBusy=0"), "the cart's allocation must not survive: $i")
             assertTrue(i.contains("cartState=IDLE"), "nor its state: $i")
@@ -117,7 +123,7 @@ class ReplicationCleanupTest {
         m.simulate()
         val ended = shop.observations.single { it.contains(" ENDED ") }
         assertTrue(
-            ended.contains("movementHoldQ=1"),
+            ended.contains("ridingQ=1"),
             "replicationEnded must observe the entity still suspended, not an already-cleared " +
                     "queue: $ended"
         )

@@ -552,10 +552,19 @@ thing you want is a longer deadline on the policy, not a suspending bid.
 
 Four hold queues carry suspensions — awaiting pickup, in transit,
 availability, dispatcher idle — and all four report nothing by default.
-Turn them on with `statisticalReportingForHoldQueues(true)` if you are
-debugging, and turn them off again: they will put rows on the report that
-look like waiting lines, one of which — riding — is not one. The queue to
-read is `dispatcher.taskQ`.
+`statisticalReportingForHoldQueues(true)` switches them on for debugging,
+and reaches down to the [space layer's three](ksl-guidedpath.md#find-out-who-is-suspended-in-the-middle-of-a-journey)
+as well, so a model being debugged shows all seven. Turn them off again:
+they put rows on the report that look like waiting lines, and two of them
+— riding, and the space layer's driving queue — are not. The queue to read
+is `dispatcher.taskQ`.
+
+Note which of the space layer's three the vehicles use. A vehicle agent
+waits in `drivingHoldQ` for its own body, never in `ridingHoldQ`: under
+this paradigm the load waits in *this* subsystem's `inTransitHoldQ` while
+the vehicle drives. Passing the load rather than the agent as the waiter
+would produce a model that runs and attributes the riding to the wrong
+layer.
 
 ### Troubleshooting
 

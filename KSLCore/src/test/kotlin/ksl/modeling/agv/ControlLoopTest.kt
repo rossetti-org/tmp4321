@@ -70,7 +70,7 @@ class ControlLoopTest {
 
         @Suppress("UNUSED_PARAMETER")
         private fun sample(event: KSLEvent<Nothing>) {
-            movementQueueMidRide = agv.spaceSystem.movementHoldQ.immutableList.map { it.name }
+            movementQueueMidRide = agv.spaceSystem.drivingHoldQ.immutableList.map { it.name }
             inTransitMidRide = agv.inTransitHoldQ.immutableList.map { it.name }
             awaitingMidRide = agv.awaitingPickupHoldQ.immutableList.map { it.name }
             taskQMidRide = agv.dispatcher.taskQ.size

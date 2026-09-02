@@ -13,6 +13,7 @@ import ksl.modeling.entity.KSLProcess
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
+import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
@@ -137,9 +138,11 @@ open class AgvSystem @JvmOverloads constructor(
      */
     fun statisticalReportingForHoldQueues(option: Boolean) {
         val queues = listOf(
-            awaitingPickupHoldQ, inTransitHoldQ, availabilityQ, dispatcherIdleQ,
-            spaceSystem.movementHoldQueue
+            awaitingPickupHoldQ, inTransitHoldQ, availabilityQ, dispatcherIdleQ
         )
+        // The space layer's three movement queues are switched through its own method rather than
+        // reached into from here, so that this system does not have to know how many there are.
+        spaceSystem.statisticalReportingForHoldQueues(option)
         for (q in queues) {
             q.waitTimeStatOption = option
             q.defaultReportingOption = option
@@ -239,12 +242,12 @@ open class AgvSystem @JvmOverloads constructor(
         }
         // Under way on a disposition. Turn it round.
         val pickup = assignment.task.pickupLocation
-        val moving = agent.vehicle.beginTravelTo(pickup, TransporterState.MOVING_EMPTY, agent)
-        if (!moving) {
+        val travelling = agent.vehicle.beginTravelTo(pickup, TransporterState.MOVING_EMPTY, agent)
+        if (travelling == null) {
             // Already standing where it is now needed. Its journey is over, so nothing will arrive
-            // to resume it; without this the agent would wait in the movement queue for an arrival
+            // to resume it; without this the agent would wait in the driving queue for an arrival
             // that has already happened.
-            spaceSystem.movementHoldQueue.removeAndResume(agent)
+            spaceSystem.holdQueueFor(MovementWait.DRIVING).removeAndResume(agent)
         }
     }
 
@@ -543,18 +546,18 @@ open class AgvSystem @JvmOverloads constructor(
                             is Disposition.ParkInPlace -> Unit
                             is Disposition.ReturnToHomeBase -> {
                                 val home = vehicle.homeBase
-                                if (home != null && vehicle.beginTravelTo(
-                                        home, TransporterState.RETURNING_HOME, this@VehicleAgent)
-                                ) {
-                                    hold(spaceSystem.movementHoldQueue,     // SUSPENDS
+                                val q = if (home == null) null else vehicle.beginTravelTo(
+                                    home, TransporterState.RETURNING_HOME, this@VehicleAgent)
+                                if (q != null) {
+                                    hold(q,                                 // SUSPENDS
                                         suspensionName = "${vehicle.name}:returningHome")
                                 }
                             }
                             is Disposition.MoveTo -> {
-                                if (vehicle.beginTravelTo(
-                                        d.locationName, TransporterState.RETURNING_HOME, this@VehicleAgent)
-                                ) {
-                                    hold(spaceSystem.movementHoldQueue,     // SUSPENDS
+                                val q = vehicle.beginTravelTo(
+                                    d.locationName, TransporterState.RETURNING_HOME, this@VehicleAgent)
+                                if (q != null) {
+                                    hold(q,                                 // SUSPENDS
                                         suspensionName = "${vehicle.name}:repositioning")
                                 }
                             }
@@ -575,13 +578,13 @@ open class AgvSystem @JvmOverloads constructor(
                     // beginTravelTo commands the body and returns whether a journey is under way.
                     // `this@VehicleAgent` is the waiter: the AGENT sits in the space layer's
                     // movement queue, never the load.
-                    val moving = vehicle.beginTravelTo(stop.location, movingStateFor(stop), this@VehicleAgent)
+                    val travelQ = vehicle.beginTravelTo(stop.location, movingStateFor(stop), this@VehicleAgent)
                     // Taken while the journey is still on the books. The route is cleared on
                     // arrival, so asking for it after the hold returns nothing and the leg appears
                     // to have covered no ground at all -- a silent zero rather than an error.
-                    val route = if (moving) vehicle.body.currentRoute else null
-                    if (moving) {
-                        hold(spaceSystem.movementHoldQueue,                 // SUSPENDS
+                    val route = if (travelQ != null) vehicle.body.currentRoute else null
+                    if (travelQ != null) {
+                        hold(travelQ,                                       // SUSPENDS
                             suspensionName = "${vehicle.name}:travellingTo:${stop.location}")
                     }
                     // The assignment can be revoked while we travel, and if it was, this stop

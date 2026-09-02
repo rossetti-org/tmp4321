@@ -43,6 +43,27 @@ import io.github.oshai.kotlinlogging.KotlinLogging
 import ksl.simulation.ModelElement
 
 /**
+ * What a waiter on a transporter's journey is waiting *for*, which decides the queue that holds it.
+ *
+ * Three kinds, and they are genuinely different situations rather than three phases of one. The
+ * first two are the passive paradigm's, and describe an entity that is not driving: it is standing
+ * somewhere while a transporter comes for it, or it is aboard one. The third is the active
+ * paradigm's, and describes the vehicle's own agent waiting for a leg its body is making -- which
+ * may have nothing aboard at all, and so is neither of the first two.
+ */
+internal enum class MovementWait {
+
+    /** Standing where it is, while a transporter travels to collect it. */
+    AWAITING_PICKUP,
+
+    /** Aboard a transporter that is carrying it. */
+    RIDING,
+
+    /** Driving a transporter, and waiting for the leg it is making to end. */
+    DRIVING
+}
+
+/**
  * The runtime half of a guide path: it owns everything about the network that changes during a run.
  *
  * The network describes the guide path and never changes. This owns which transporter holds which
@@ -473,20 +494,74 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
         myNumZoneTraversals.increment()
     }
 
-    private val myMovementHoldQ = HoldQueue(this, "${this.name}:MovementHoldQ")
+    // ---- the three movement queues -------------------------------------------------------------
+    //
+    // A journey spans many events, so whoever is waiting on one cannot simply be delayed for it:
+    // they are held here for the whole journey and woken when the transporter announces that it has
+    // arrived. Three queues rather than one, split by *what the wait is*, which is the division
+    // `Conveyor` makes between accessing, riding and exiting for the same reason: a single queue
+    // holding three unrelated kinds of waiter can be told apart only by reading a suspension name
+    // out of a trace, and its size answers no question anybody asks.
+    //
+    // All three report nothing, for the reason in `statisticalReportingForHoldQueues`.
+
+    private val myAwaitingPickupHoldQ = HoldQueue(this, "${this.name}:AwaitingPickupHoldQ")
+
+    /** Entities standing where they are while a transporter travels to collect them. */
+    val awaitingPickupHoldQ: QueueCIfc<ProcessModel.Entity>
+        get() = myAwaitingPickupHoldQ
+
+    private val myRidingHoldQ = HoldQueue(this, "${this.name}:RidingHoldQ")
+
+    /** Entities aboard a transporter that is carrying them. */
+    val ridingHoldQ: QueueCIfc<ProcessModel.Entity>
+        get() = myRidingHoldQ
+
+    private val myDrivingHoldQ = HoldQueue(this, "${this.name}:DrivingHoldQ")
 
     /**
-     * Entities suspended while a transporter carries them, or fetches them.
+     * Entities waiting on a transporter they are *driving* rather than riding.
      *
-     * A journey spans many events, so an entity cannot simply be delayed for it: it is held here
-     * for the whole journey and woken when the transporter announces that it has arrived.
+     * Empty under the passive paradigm, where nobody drives: a transporter fetches and carries on
+     * an entity's behalf and the entity is in one of the two queues above. It is the active
+     * paradigm's vehicle agents that wait here, for their own body to finish a leg -- including a
+     * leg with nothing aboard, which is a wait neither of the other two describes.
      */
-    val movementHoldQ: QueueCIfc<ProcessModel.Entity>
-        get() = myMovementHoldQ
+    val drivingHoldQ: QueueCIfc<ProcessModel.Entity>
+        get() = myDrivingHoldQ
 
-    /** The queue itself, for the process verbs that suspend an entity in it. */
-    internal val movementHoldQueue: HoldQueue
-        get() = myMovementHoldQ
+    init {
+        statisticalReportingForHoldQueues(false)
+    }
+
+    /**
+     * Switches reporting for the three movement queues. **Off by default.**
+     *
+     * A hold queue is how a suspended entity is found again; it is not a waiting line, and letting
+     * it double as the statistic conflates a mechanism with a measurement. Left on, `RidingHoldQ`
+     * would put a row on the report whose "time in queue" is the mean length of a loaded move and
+     * whose "number in queue" is a count of moving carts -- read by anybody scanning the report as
+     * a line of entities waiting for something. Both quantities are already reported properly and
+     * separately, by [emptyMoveTime] and [loadedMoveTime], which is what a modeller should read.
+     *
+     * `Conveyor` makes the same call for the same three-way split, and turning these on is for
+     * debugging a model that has stopped moving, not for analysis.
+     *
+     * @param option true means the three movement queues appear on the summary report
+     */
+    fun statisticalReportingForHoldQueues(option: Boolean) {
+        for (q in listOf(myAwaitingPickupHoldQ, myRidingHoldQ, myDrivingHoldQ)) {
+            q.waitTimeStatOption = option
+            q.defaultReportingOption = option
+        }
+    }
+
+    /** Which movement queue a waiter belongs in, and therefore what its wait is called. */
+    internal fun holdQueueFor(wait: MovementWait): HoldQueue = when (wait) {
+        MovementWait.AWAITING_PICKUP -> myAwaitingPickupHoldQ
+        MovementWait.RIDING -> myRidingHoldQ
+        MovementWait.DRIVING -> myDrivingHoldQ
+    }
 
     internal fun addTransporter(transporter: GuidedTransporter) {
         require(model.isNotRunning) {
@@ -505,27 +580,35 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
      * order they are in today.
      */
     internal fun transporterArrived(transporter: GuidedTransporter) {
-        val waiting = transporter.waitingEntity ?: return
-        transporter.waitingEntity = null
-        myMovementHoldQ.removeAndResume(waiting)
+        val wait = transporter.journeyWait ?: return
+        transporter.journeyWait = null
+        wait.queue.removeAndResume(wait.waiter)
     }
 
     /**
      * Sets a transporter travelling and returns whether it actually has to go anywhere.
      *
-     * @return true when a journey began, false when the transporter was already there
+     * Returning the queue rather than a flag is what keeps the two ends of a wait in agreement.
+     * The caller has to be told whether to suspend at all, and it also has to suspend in the queue
+     * this journey will be resumed from; making that one answer means a caller cannot suspend in
+     * one queue while the arrival wakes it from another.
+     *
+     * @param waiter who to suspend for the journey: the entity being fetched or carried under the
+     *   passive paradigm, and the vehicle's own agent under the active one
+     * @param wait what kind of wait it is, which decides the queue
+     * @return the queue to suspend the waiter in, or null when the transporter was already there
      */
     internal fun beginJourney(
         transporter: GuidedTransporter,
         destinationName: String,
         movingState: TransporterState,
-        entity: ProcessModel.Entity
-    ): Boolean {
-        val moving = startMove(transporter, destinationName, movingState)
-        if (moving) {
-            transporter.waitingEntity = entity
-        }
-        return moving
+        waiter: ProcessModel.Entity,
+        wait: MovementWait
+    ): HoldQueue? {
+        if (!startMove(transporter, destinationName, movingState)) return null
+        val queue = holdQueueFor(wait)
+        transporter.journeyWait = JourneyWait(waiter, queue)
+        return queue
     }
 
     /**

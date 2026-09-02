@@ -148,6 +148,15 @@ private object GuidedPathGuideSnippets {
         )
     }
 
+    // …find out who is suspended in the middle of a journey?
+    fun whoIsSuspended(system: GuidedPathTransportSystem) {
+        system.awaitingPickupHoldQ   // standing where they are, while a transporter comes for them
+        system.ridingHoldQ           // aboard one
+        system.drivingHoldQ          // driving one -- always empty under this paradigm; see below
+
+        system.statisticalReportingForHoldQueues(true)   // for debugging a model that stopped moving
+    }
+
     // …check the subsystem's own bookkeeping?
     fun audit(system: GuidedPathTransportSystem) {
         system.checkInvariants = true          // every clock advance; expensive, for development
