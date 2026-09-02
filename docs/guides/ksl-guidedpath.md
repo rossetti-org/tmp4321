@@ -579,7 +579,41 @@ transport made by a duplicated entity — the vehicle is *busy* and cannot
 be diverted, where here it is neither. Committed vehicle time agrees to
 2.3%; how that time is classified does not.
 
-The point of saying so here is that these are the terms on which the
+### And against arithmetic that predates it
+
+Every check above compares the subsystem with *something* — with itself, with the other paradigm,
+or with another tool. All of those can be defeated by one consistent error, and reproducing a
+reference implementation's mistake passes them all. `QueueingLimitsTest` cannot be defeated that
+way: it arranges the guide path so that it provably degenerates to a system with a closed-form
+answer, then checks the closed form.
+
+**One cart on a one-way loop is exactly M/D/1.** No contention, and the cart can only reach the
+pickup again by completing the lap, so service is deterministic. Arrivals are Poisson. Both
+paradigms are measured, from different instruments — the pool's queue on one side, the dispatcher's
+wait decomposition on the other:
+
+| ρ | Pollaczek–Khinchine | passive | active |
+|---|---|---|---|
+| 0.5 | 10.0000 | 10.0705 ± 0.1246 | 10.0703 ± 0.1242 |
+| 0.7 | 23.3333 | 23.4007 ± 0.3591 | 23.4007 ± 0.3590 |
+
+and the service itself is exactly the lap time, asserted as an identity rather than through an
+interval because it is deterministic.
+
+**A one-zone bottleneck caps throughput at one over its ride time.** Below the ceiling the fleet is
+what limits and throughput is exactly the free-flow rate; above it, the neck binds exactly:
+
+```
+carts    1      2      4      8     12     16     24
+thru  .0100  .0200  .0400  .0800  .1000  .1000  .1000
+free  .0100  .0200  .0400  .0800  .1200  .1600  .2400
+```
+
+Both acceptance conditions are enforced, and the second is the one usually left out: the analytic
+value must lie inside the 95% interval **and** the interval must be a small fraction of it. An
+interval wide enough to admit anything passes the first without being evidence of anything.
+
+The point of saying all of this here is that these are the terms on which the
 subsystem has been checked. The shop around a guide path reproduces to
 within sampling error in every case tried. The guide path itself
 reproduces where the two tools mean the same thing by a vehicle's time,
