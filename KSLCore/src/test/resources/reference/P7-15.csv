@@ -1,13 +1,13 @@
-# Arena results for Exercise 7.15: the two-colour painting flow line of Exercise 5.180 with three
+# Reference-implementation results for Exercise 7.15: the two-colour painting flow line of Exercise 5.180 with three
 # AGVs on a one-way guided path and a staging area at intersection 12.
 #
-# Source model: P7-15New.doe, run as P7-15New.p on 2026-08-31; report and results are from the same
+# Source model: P7-15New, run on 2026-08-31; report and results are from the same
 # file. Exported from P7-15New_rpt.xlsm, archived on branch agv-files of rossetti-org/tmp4321.
 #
 # 10 replications of 600,000 minutes with a 50,000 minute warm-up, so each reported figure is over
 # 550,000 minutes. Reports are in minutes.
 #
-# Two of Arena's own entity statistics are deliberately NOT taken from that report. Its model moves
+# Two of the reference implementation's own entity statistics are deliberately NOT taken from that report. Its model moves
 # an idle vehicle to the staging area by duplicating the entity that has just been set down and
 # having the copy ride the vehicle there, so its per-entity Total, Transfer, Wait, VA and Other
 # times are averages over roughly 2.86 entity instances per part -- most of them short-lived copies

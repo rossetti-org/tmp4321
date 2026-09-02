@@ -14,12 +14,13 @@ import kotlin.test.assertTrue
 /**
  *  Sizing a transporter by its physical length rather than by a count of zones.
  *
- *  Arena offers both -- ZONES and LENGTH -- and they are not two spellings of one thing. A vehicle
+ *  The reference implementation offers both -- sizing by whole zones and sizing by length -- and
+ *  they are not two spellings of one thing. A vehicle
  *  sized in zones is a token that occupies whole cells of the guide path and travels from point to
  *  point. A vehicle sized by length is a **body**: parked at a dead end it has already covered its
  *  own length of the spur, so backing out is that much shorter than driving in. That asymmetry is
- *  the whole of what this adds, and it is what let the cross-check against Arena close exactly (see
- *  [SimpleAgvArenaCrossCheckTest]).
+ *  the whole of what this adds, and it is what let the cross-check against the reference implementation close exactly (see
+ *  [SimpleAgvCrossCheckTest]).
  *
  *  The most important property asserted here is the negative one: with no physical length given,
  *  nothing changes at all. Every model written before this, and the paradigm-equivalence gate and

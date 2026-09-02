@@ -404,8 +404,9 @@ class PaintingFlowLineWithAgvs @JvmOverloads constructor(
             val askedAt = time
             outstandingRequests++
             val request = requestGuidedTransporter(agvs, pickupLocation = from)
-            // Given up once the vehicle is standing here, which is where Arena's own counter of
-            // pending requests is decremented: the request module does not finish until then.
+            // Given up once the vehicle is standing here, which is where the reference
+            // implementation's own counter of pending requests is decremented: its transport
+            // request does not finish until then.
             outstandingRequests--
             requestWait.value = request.timeAllocated - askedAt
             val leg = transportBy(

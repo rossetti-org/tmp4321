@@ -17,7 +17,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- *  The same shop, in KSL and in Arena, compared number by number.
+ *  The same shop, in KSL and in the reference implementation, compared number by number.
  *
  *  This is the cross-check the guided-path plan called Gate B, and it is the only evidence in the
  *  repository that this subsystem means the same thing by an automated guided vehicle as the tool
@@ -25,39 +25,41 @@ import kotlin.test.assertTrue
  *
  *  ## Why it can be exact
  *
- *  The Arena model is deterministic: parts are created every 25 minutes from time zero, the load and
- *  unload delays are 20 minutes apiece, and the carts travel at a constant 10. There is nothing
- *  random in it, so there is no confidence interval to hide inside. Either the two tools produce the
- *  same timeline or they do not, and a discrepancy is a discrepancy rather than sampling noise. That
- *  is a much stronger gate than the plan's original "within one standard error", and it is available
- *  only because the source model happens to have been built without randomness.
+ *  The reference model is deterministic: parts are created every 25 minutes from time zero, the
+ *  load and unload delays are 20 minutes apiece, and the carts travel at a constant 10. There is
+ *  nothing random in it, so there is no confidence interval to hide inside. Either the two tools
+ *  produce the same timeline or they do not, and a discrepancy is a discrepancy rather than
+ *  sampling noise. That is a much stronger gate than the plan's original "within one standard
+ *  error", and it is available only because the source model happens to have been built without
+ *  randomness.
  *
  *  ## What had to be matched
  *
  *  The network was already identical -- the KSL layout was built from this model -- so what needed
- *  matching was the experiment: `StartOfZoneControl` for Arena's `Zone Control Rule: Start`,
- *  `ParkInPlaceRule` for `When Freed: Remain`, [CyclicalTransporterRule] for the Request module's
- *  `Selection Rule: CYC`, and constant arrivals and delays in place of the exponential ones the
- *  KSL example ships with. The carts start on the I6 and I7 spurs, which the Arena documentation
- *  report does not record -- it prints `Home Station` but never a unit's initial position -- and
- *  which had to be supplied by the model's author.
+ *  matching was the experiment: `StartOfZoneControl` for its release-at-start zone control,
+ *  `ParkInPlaceRule` for its leave-a-freed-vehicle-where-it-stands rule, [CyclicalTransporterRule]
+ *  for its cyclical unit selection, and constant arrivals and delays in place of the exponential
+ *  ones the KSL example ships with. The carts start on the I6 and I7 spurs, which the reference
+ *  documentation does not record -- it prints a home station but never a unit's initial position --
+ *  and which had to be supplied by the model's author.
  *
- *  ## Arena's timing categories, and how they are reproduced
+ *  ## The reference implementation's timing categories, and how they are reproduced
  *
- *  An Arena entity accrues **Wait** while queued for a transporter, **Transfer** from the instant one
- *  is allocated until it is freed, and **Other** during a Delay declared with `Allocation = Other`,
- *  which is what both 20-minute delays are. So `Total = Wait + Transfer + Other`, and the fixture
- *  satisfies that identity exactly. The process below is written in the decomposed verbs rather than
+ *  A reference-model entity accrues **Wait** while queued for a transporter, **Transfer** from the
+ *  instant one is allocated until it is freed, and **Other** during a delay the model
+ *  declares as neither value-added nor waiting, which is what both 20-minute delays are. So `Total = Wait + Transfer +
+ *  Other`, and the fixture satisfies that identity exactly. The process below is written in the
+ *  decomposed verbs rather than
  *  `guidedTransport` precisely so that the instant of allocation is visible and the same three
  *  quantities can be formed here.
  *
  *  ## Gate B passes
  *
- *  Every quantity Arena reports is reproduced to floating-point noise -- the largest difference is
- *  4e-13 on a mean of 131.9, and most are nearer 1e-15. Not "within a confidence interval": the same
- *  numbers.
+ *  Every quantity the reference implementation reports is reproduced to floating-point noise -- the
+ *  largest difference is 4e-13 on a mean of 131.9, and most are nearer 1e-15. Not "within a
+ *  confidence interval": the same numbers.
  *
- *  | quantity | Arena | difference |
+ *  | quantity | reference | difference |
  *  |---|---|---|
  *  | mean time in system | 131.9 | -4.0e-13 |
  *  | transfer time | 32.2333333333332 | -3.6e-14 |
@@ -73,46 +75,50 @@ import kotlin.test.assertTrue
  *  ### What it took, and the one thing that had to be built
  *
  *  The network was already identical -- the KSL layout was built from this model. Matching the
- *  experiment needed `StartOfZoneControl` for Arena's `Zone Control Rule: Start`, `ParkInPlaceRule`
- *  for `When Freed: Remain`, a `CyclicalTransporterRule` for the Request module's `Selection Rule:
- *  CYC`, constant arrivals and delays, and the carts started on the I6 and I7 spurs -- which Arena's
- *  documentation report does not record, since it prints `Home Station` but never a unit's initial
- *  position, and which the model's author supplied.
+ *  experiment needed `StartOfZoneControl` for its release-at-start zone control, `ParkInPlaceRule`
+ *  for its leave-a-freed-vehicle-where-it-stands rule, a `CyclicalTransporterRule` for its cyclical
+ *  unit selection, constant arrivals and delays, and the carts started on the I6 and I7 spurs --
+ *  which the reference documentation does not record, since it prints a home station but never a
+ *  unit's initial position, and which the model's author supplied.
  *
- *  The one thing that could not be configured was the transporter's size. Arena sizes this one with
- *  the **LENGTH** option at **6 feet**, and this subsystem had only a whole number of zones. A
- *  vehicle with a physical extent that is parked at a dead end has already covered its own length of
- *  the spur, so leaving costs its length less than the spur's declared distance while entering costs
- *  the whole of it. That asymmetry -- and nothing else -- was the entire discrepancy:
+ *  The one thing that could not be configured was the transporter's size. The reference
+ *  implementation sizes this one with the **LENGTH** option at **6 feet**, and this subsystem had
+ *  only a whole number of zones. A vehicle with a physical extent that is parked at a dead end has
+ *  already covered its own length of the spur, so leaving costs its length less than the spur's
+ *  declared distance while entering costs the whole of it. That asymmetry -- and nothing else --
+ *  was the entire discrepancy:
  *
  *  - a steady-state cart returns from I5 out of the 36-foot exit spur paying 30 + 72 rather than
- *    36 + 72, so its cycle transfer is 30.6, which is Arena's reported minimum;
+ *    36 + 72, so its cycle transfer is 30.6, which is the reference implementation's reported
+ *    minimum;
  *  - Cart1 leaves the 6-foot home spur at I6, which its 6-foot body exactly fills, paying nothing,
- *    so its first part is delivered at 79.6, which is Arena's reported minimum total time.
+ *    so its first part is delivered at 79.6, which is the reference implementation's reported
+ *    minimum total time.
  *
  *  [GuidedTransporter.physicalLength] now expresses it. It is optional and off by default, so every
  *  model written before behaves exactly as it did.
  *
  *  Two rival explanations were tested and eliminated before that one was believed. The exit spur's
- *  zone structure -- Arena declares one zone of 36 where the KSL layout uses three of 12 -- changes
- *  nothing at all. And simply shortening the spur by 6 over-corrects by exactly 6, because a cart
- *  crosses it twice per cycle and only the outbound crossing is shortened; that is what showed the
- *  mechanism is asymmetric, which the first guess had wrong.
+ *  zone structure -- the reference implementation declares one zone of 36 where the KSL layout uses
+ *  three of 12 -- changes nothing at all. And simply shortening the spur by 6 over-corrects by
+ *  exactly 6, because a cart crosses it twice per cycle and only the outbound crossing is
+ *  shortened; that is what showed the mechanism is asymmetric, which the first guess had wrong.
  *
  *  ### Every quantity, including the queue
  *
- *  An earlier version of this test could not compare the mean queue wait directly. Arena reported
- *  70.2 over 14 observations and this subsystem 81.9 over 12, and the comparison was made on the
- *  total instead, on the reasoning that the two tools counted observations differently. That
- *  reasoning was wrong: Arena counts the way `seize` counts, and it was the guided-path pool that
- *  departed from the library by parking entities in a hold queue only when the fleet was busy. The
- *  pool is now seized like any other resource pool, so a request served instantly records a wait of
- *  zero, the counts agree at 14, and the mean is compared like everything else.
+ *  An earlier version of this test could not compare the mean queue wait directly. The reference
+ *  implementation reported 70.2 over 14 observations and this subsystem 81.9 over 12, and the
+ *  comparison was made on the total instead, on the reasoning that the two tools counted
+ *  observations differently. That reasoning was wrong: The reference implementation counts the way
+ *  `seize` counts, and it was the guided-path pool that departed from the library by parking
+ *  entities in a hold queue only when the fleet was busy. The pool is now seized like any other
+ *  resource pool, so a request served instantly records a wait of zero, the counts agree at 14, and
+ *  the mean is compared like everything else.
  */
-class SimpleAgvArenaCrossCheckTest {
+class SimpleAgvCrossCheckTest {
 
-    /** Arena's experiment, in KSL. Every constant here is read off the Arena model report. */
-    private class ArenaShop(parent: ModelElement) : ProcessModel(parent, "ArenaShop") {
+    /** The reference implementation's experiment, in KSL. Every constant here is read off the reference model's report. */
+    private class ReferenceShop(parent: ModelElement) : ProcessModel(parent, "ReferenceShop") {
 
         val network = SimpleAgvNetwork.create()
 
@@ -157,8 +163,8 @@ class SimpleAgvArenaCrossCheckTest {
                 numberIn++
                 wip.increment()
                 entity.currentLocation = network.requireLocation(SimpleAgvNetwork.ENTRY_STATION)
-                // Returns once a cart has been allocated *and* has arrived, which is what Arena's
-                // Request module does.
+                // Returns once a cart has been allocated *and* has arrived, which is what the
+                // reference implementation's transport request does.
                 val request = requestGuidedTransporter(carts, SimpleAgvNetwork.ENTRY_STATION)
                 val allocatedAt = request.timeAllocated
                 delay(LOAD_DELAY)
@@ -181,7 +187,7 @@ class SimpleAgvArenaCrossCheckTest {
         override fun initialize() {
             numberIn = 0
             numberOut = 0
-            // Arena: Create, Type Constant, Value 25, First Creation 0.0, Max Arrivals Infinite.
+            // Reference model: Create, Type Constant, Value 25, First Creation 0.0, Max Arrivals Infinite.
             // Over a 480-minute horizon that is exactly twenty parts, at 0, 25, ..., 475.
             var t = 0.0
             while (t < HORIZON) {
@@ -193,7 +199,7 @@ class SimpleAgvArenaCrossCheckTest {
         companion object {
             const val VELOCITY = 10.0
 
-            /** Arena sizes this transporter with the LENGTH option, at 6 feet. */
+            /** The reference implementation sizes this transporter by length, at 6 feet. */
             const val CART_LENGTH = 6.0
             const val LOAD_DELAY = 20.0
             const val UNLOAD_DELAY = 20.0
@@ -202,9 +208,9 @@ class SimpleAgvArenaCrossCheckTest {
         }
     }
 
-    private fun arenaFixture(): Map<String, Double> {
-        val text = checkNotNull(javaClass.getResourceAsStream("/arena/SimpleAGVExample.csv")) {
-            "the Arena fixture is missing from the test resources"
+    private fun referenceFixture(): Map<String, Double> {
+        val text = checkNotNull(javaClass.getResourceAsStream("/reference/SimpleAGVExample.csv")) {
+            "the reference fixture is missing from the test resources"
         }.bufferedReader().readText()
         return text.lineSequence()
             .map { it.trim() }
@@ -214,14 +220,14 @@ class SimpleAgvArenaCrossCheckTest {
     }
 
     @Test
-    @DisplayName("KSL reproduces Arena's deterministic run exactly, on every quantity it reports")
-    fun kslComparedWithArena() {
-        val arena = arenaFixture()
+    @DisplayName("KSL reproduces the reference implementation's deterministic run exactly, on every quantity it reports")
+    fun kslComparedWithReference() {
+        val reference = referenceFixture()
 
-        val m = Model("ArenaCrossCheck")
-        val shop = ArenaShop(m)
+        val m = Model("ReferenceCrossCheck")
+        val shop = ReferenceShop(m)
         m.numberOfReplications = 1
-        m.lengthOfReplication = ArenaShop.HORIZON
+        m.lengthOfReplication = ReferenceShop.HORIZON
         m.simulate()
 
         val ksl = linkedMapOf(
@@ -254,17 +260,17 @@ class SimpleAgvArenaCrossCheckTest {
         println("  queue observations: ksl=%.0f".format(
             shop.carts.waitingQ.timeInQ.withinReplicationStatistic.count))
         println()
-        println("Gate B: the simple AGV example, KSL against Arena (deterministic, 1 rep of 480)")
+        println("Gate B: the simple AGV example, KSL against the reference implementation (deterministic, 1 rep of 480)")
         println()
-        println("  %-28s %20s %20s %14s".format("quantity", "Arena", "KSL", "difference"))
-        for ((name, arenaValue) in arena) {
+        println("  %-28s %20s %20s %14s".format("quantity", "reference", "KSL", "difference"))
+        for ((name, referenceValue) in reference) {
             val kslValue = ksl[name]
             if (kslValue == null) {
-                println("  %-28s %20.10f %20s".format(name, arenaValue, "not measured"))
+                println("  %-28s %20.10f %20s".format(name, referenceValue, "not measured"))
                 continue
             }
             println(
-                "  %-28s %20.10f %20.10f %14.2e".format(name, arenaValue, kslValue, kslValue - arenaValue)
+                "  %-28s %20.10f %20.10f %14.2e".format(name, referenceValue, kslValue, kslValue - referenceValue)
             )
         }
         println()
@@ -277,7 +283,7 @@ class SimpleAgvArenaCrossCheckTest {
         val tolerance = 1.0e-9
 
         for (name in listOf("numberIn", "numberOut", "entityObservations", "queueObservations")) {
-            assertEquals(arena.getValue(name), ksl.getValue(name), "structural mismatch on $name")
+            assertEquals(reference.getValue(name), ksl.getValue(name), "structural mismatch on $name")
         }
 
         val compared = listOf(
@@ -287,11 +293,11 @@ class SimpleAgvArenaCrossCheckTest {
             "requestQueueTotalWaitingTime"
         )
         for (name in compared) {
-            val a = arena.getValue(name)
+            val a = reference.getValue(name)
             val k = ksl.getValue(name)
             assertTrue(
                 abs(k - a) / maxOf(1.0, abs(a)) < tolerance,
-                "$name: Arena $a against KSL $k"
+                "$name: reference $a against KSL $k"
             )
         }
     }

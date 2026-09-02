@@ -17,6 +17,7 @@ import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
+import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response
 import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
@@ -192,6 +193,56 @@ open class AgvSystem @JvmOverloads constructor(
     // of zero, not the absence of an observation; recording only the bad replications would make the
     // across-replication average a mean over those, which is a number that looks like a fleet's
     // performance and is not.
+
+    // ---- what the guide path underneath costs ---------------------------------------------------
+    //
+    // Delegated rather than re-derived. The space layer registers all of these already, and they
+    // appear on the report under this system's `:Space` child either way -- but a study that wants
+    // to *read* one has no route to it, because the runtime that owns it is internal. That
+    // asymmetry is not a modelling difference between the two paradigms and should not read as one:
+    // the same questions are worth asking of a fleet whichever way it is dispatched, and an active
+    // model that could not answer "how much of the time was somebody blocked" would be the poorer
+    // of the two for a reason that is purely an accident of ownership.
+
+    /** How many zones the fleet entered, which is very nearly the engine's event count. */
+    val numZoneTraversals: CounterCIfc get() = spaceSystem.numZoneTraversals
+
+    /** Events the guide path put on the calendar: traversals, rear releases, and retries. */
+    val numEventsScheduled: CounterCIfc get() = spaceSystem.numEventsScheduled
+
+    /** Events scheduled per zone entered. One is the floor; much above two is wake-and-refuse. */
+    val eventsPerZoneTraversal: ResponseCIfc get() = spaceSystem.eventsPerZoneTraversal
+
+    /** Circular waits found. At most one per replication, since finding one ends it. */
+    val numDeadlocksDetected: CounterCIfc get() = spaceSystem.numDeadlocksDetected
+
+    /** Times a vehicle stopped behind an idle one that will not move on its own. */
+    val numObstructionsDetected: CounterCIfc get() = spaceSystem.numObstructionsDetected
+
+    /** How many vehicles are travelling. Distinct from [numVehiclesOnTask]: a vehicle
+     *  repositioning is moving and is on no task. */
+    val numVehiclesMoving: TWResponseCIfc get() = spaceSystem.numTransportersMoving
+
+    /** How many vehicles cannot claim the space ahead. The figure a free-path model cannot produce. */
+    val numVehiclesBlocked: TWResponseCIfc get() = spaceSystem.numTransportersBlocked
+
+    /** The fraction of the guide path's zones that are held. */
+    val zoneUtilization: TWResponseCIfc get() = spaceSystem.zoneUtilization
+
+    /** Per completed carry: time spent travelling out empty to collect the load. */
+    val emptyMoveTime: ResponseCIfc get() = spaceSystem.emptyMoveTime
+
+    /** Per completed carry: time spent travelling with the load aboard. */
+    val loadedMoveTime: ResponseCIfc get() = spaceSystem.loadedMoveTime
+
+    /** Per completed carry: time unable to claim the space ahead. */
+    val transportBlockedTime: ResponseCIfc get() = spaceSystem.transportBlockedTime
+
+    /** Per completed carry: zones entered. */
+    val zonesTraversedPerTransport: ResponseCIfc get() = spaceSystem.zonesTraversedPerTransport
+
+    /** Per completed carry: distance covered along the guide path. */
+    val routeLengthPerTransport: ResponseCIfc get() = spaceSystem.routeLengthPerTransport
 
     private val myNumTasksNeverAssigned = Response(this, "${this.name}:NumTasksNeverAssigned")
     val numTasksNeverAssigned: ResponseCIfc get() = myNumTasksNeverAssigned

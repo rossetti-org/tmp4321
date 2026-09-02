@@ -166,8 +166,9 @@ class RandomTransporterRule(private val stream: RNStreamIfc) : GuidedTransporter
 /**
  * Sends idle transporters in rotation, beginning after whichever was chosen last.
  *
- * Arena's `CYC` selection rule, and it is here so that a guided-path model can be compared against
- * one built there. It is a fair rule rather than an efficient one: it spreads work over the fleet
+ * The cyclical unit-selection rule of the reference implementation this subsystem is validated
+ * against, and it is here so that a guided-path model can be compared with one built there. It is a
+ * fair rule rather than an efficient one: it spreads work over the fleet
  * without regard to where the work is, so on a one-way loop it will routinely send a transporter
  * the long way round when a nearer one is standing idle. [LeastUsedTransporterRule] balances usage
  * with the same indifference to distance but counts seizes instead of taking turns, so the two
@@ -175,7 +176,7 @@ class RandomTransporterRule(private val stream: RNStreamIfc) : GuidedTransporter
  *
  * The rotation is over **declaration order**, taken from the model element identifiers the fleet
  * was created with, so it is the order the modeller wrote and not an accident of which transporters
- * happen to be idle. Busy transporters are skipped, as they are in Arena: the rule chooses the
+ * happen to be idle. Busy transporters are skipped, as they are there: the rule chooses the
  * first candidate that follows the last one chosen, wrapping round to the start of the list.
  *
  * Stateful, and therefore [reset] between replications by the pool that owns it.

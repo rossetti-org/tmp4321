@@ -1,14 +1,14 @@
-# Arena results for the simple AGV example of the chapter on entity movement.
+# Reference-implementation results for the simple AGV example of the chapter on entity movement.
 #
-# Source model: SimpleAGVExample.doe, re-saved as SimpleAGVExampleNew.p under a newer Arena and run
-# 2026-08-31; both are the same model. Exported from Arena's statistics workbook,
+# Source model: SimpleAGVExample, re-saved under a newer version of that tool and run
+# 2026-08-31; both are the same model. Exported from the reference implementation's statistics workbook,
 # SimpleAGVExampleNew_rpt.xlsm, archived with the model on branch agv-files of rossetti-org/tmp4321.
 #
 # One replication of 480 minutes, no warm-up. The model is deterministic -- constant arrivals every
 # 25 minutes from time 0, constant load and unload delays of 20, constant velocity 10 -- so these
 # are exact values and not estimates. There is no confidence interval to quote and none is wanted.
 #
-# Arena's timing categories: an entity is in Wait while queued for a transporter, in Transfer from
+# the reference implementation's timing categories: an entity is in Wait while queued for a transporter, in Transfer from
 # the instant one is allocated until it is freed, and in Other during a Delay declared with
 # Allocation = Other, which is what the two 20-minute delays are. Hence
 # Total = Wait + Transfer + Other, which these values satisfy exactly.

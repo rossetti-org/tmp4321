@@ -201,10 +201,10 @@ internal class MovementEngine(
         // Deliberately **not** extended to a reversal at an ordinary junction, though the physics
         // reads the same way: a body there also extends back along the link it came in on. Crediting
         // those was tried against Exercise 7.13(a), whose single vehicle turns round constantly on
-        // two-way aisles, and it overshot -- mean transfer time went from 0.03 minutes above Arena's
-        // to 0.10 below it. Whatever Arena does at a junction, it is not this, and shipping a wider
-        // rule that a measurement contradicts would be worse than shipping the narrow one that two
-        // independent measurements confirm.
+        // two-way aisles, and it overshot -- mean transfer time went from 0.03 minutes above the
+        // reference implementation's to 0.10 below it. Whatever that implementation does at a
+        // junction, it is not this, and shipping a wider rule that a measurement contradicts would
+        // be worse than shipping the narrow one that two independent measurements confirm.
         if (front is IntersectionZone && front.intersection.incidentLinks.size == 1) return true
         if (front !is LinkZone) return false
         // Stopped part way along a link and sent back the way it came.

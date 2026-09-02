@@ -1,8 +1,8 @@
-# Arena results for Exercise 7.13(b): the same Test and Repair shop with TWO AGVs on a guided path
+# Reference-implementation results for Exercise 7.13(b): the same Test and Repair shop with TWO AGVs on a guided path
 # made ONE-WAY, which is what the exercise prescribes to avoid the deadlock two vehicles could
 # otherwise reach on two-way aisles.
 #
-# Source model: P7-13bNew.doe, run as P7-13bNew.p on 2026-08-31; report and results are from the
+# Source model: P7-13bNew, run on 2026-08-31; report and results are from the
 # same file. Exported from P7-13bNew_rpt.xlsm, archived on branch agv-files of rossetti-org/tmp4321.
 #
 # 10 replications of 4160 hours = 249,600 minutes, no warm-up. Reports are in minutes.

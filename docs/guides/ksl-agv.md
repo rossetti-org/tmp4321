@@ -518,6 +518,38 @@ The one thing that changes is that a vehicle now has a `DispositionPolicyIfc`
 rather than the pool having an `IdleDispositionRuleIfc`, and it is per
 vehicle rather than per fleet.
 
+### What the dispatcher costs
+
+More machinery than a pool's allocation rule, so the honest thing is to measure it rather than
+assert it is cheap. `./gradlew :KSLExamples:agvBenchmark` runs the reference configuration — a
+twenty-intersection, forty-link torus of 420 zones carrying twenty vehicles under saturated demand —
+**both ways on one layout**, imported from the passive benchmark rather than restated so the two
+cannot drift apart:
+
+```
+                                     active            passive
+  zone traversals                 4,379,794          4,379,615
+  events scheduled                4,412,310          4,412,312
+  events / traversal                  1.007              1.007
+  wall clock (s)                       5.06               4.77
+  traversals / minute            51,964,070         55,041,395
+  tasks completed                    55,564                 --
+
+  JVM: OpenJDK 21.0.10, Linux amd64, 4 processors
+```
+
+Two things to read from it. The traversal counts agree to **0.004%**, which is the check that the
+two subsystems are moving the same vehicles over the same aisles — if they diverged here, every
+other comparison between the paradigms would be suspect. And **events per traversal is 1.007 in
+both**: deciding costs nothing in engine events, because a dispatching pass is not a zone traversal.
+The ~6% in wall clock is the dispatcher's and the vehicle agents' coroutines, which is what an
+object that can hold an opinion costs.
+
+Saturation is expressed differently on the two sides, necessarily. The passive benchmark re-dispatches
+each vehicle the instant it arrives, which it can do because a transporter is a thing you command.
+Here nobody commands a vehicle, so the load side saturates instead: forty loads that ask again on
+arrival, against twenty vehicles, so the board is never empty.
+
 ### A staging area stages one vehicle
 
 `MoveToStagingDisposition` names an intersection, and a zone holds one

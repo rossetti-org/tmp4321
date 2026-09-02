@@ -295,6 +295,35 @@ rejected it.
 
 If your vehicles are a whole number of zones long, ignore this parameter.
 
+### …model a system on more than one floor?
+
+Nothing special, and that is the point. A guide path routes on **declared link lengths**, never on
+coordinates, so nothing in the network knows or cares that two of its intersections are one above
+the other. A lift is therefore expressible as exactly what it physically is — a link of a single
+zone:
+
+```kotlin
+// Two shafts joining the floors, each one zone long. The rest of the builder is ordinary corridors.
+.link("ShaftUp", "Ground3", "First1", length = 40.0, zoneLength = 40.0, beginDirection = 90.0)
+.link("ShaftDown", "First3", "Ground1", length = 40.0, zoneLength = 40.0, beginDirection = 270.0)
+```
+
+One zone admits one vehicle, so the shaft excludes everybody else for the duration of a ride without
+a line being written to make it do so. There is no lift class, no floor concept, and no special case
+anywhere in the engine — the exclusion is the zone rule you already have. Give the shaft its own
+`velocityFactor` if a lift is slower than the corridors.
+
+Two things to know before trusting a two-floor model. Ask a shaft zone `isHeld`, **not**
+`isOccupied`: a link's last zone is never occupied, because arriving at its far end means arriving
+at the junction beyond, so `isOccupied` reports an idle single-zone lift and `isHeld` reports the
+truth. And give the intersections honest `x`/`y` coordinates anyway — the engine never reads them,
+but an animation does, and two floors drawn on top of each other are unreadable. Offsetting one
+floor is a layout decision, not a modelling one.
+
+`ksl.examples.general.agv.MultiFloorHospitalExample` is a worked two-floor system; it uses the
+active subsystem, but the network idiom above is the whole of what makes the floors work and applies
+here unchanged.
+
 ### …change how closely carts may follow one another?
 
 The zone control rule decides when a transporter gives up the zone
@@ -529,7 +558,7 @@ and use `ReturnToHomeBaseRule` instead.
 Four models built in a commercial guided-path tool have been reproduced
 here and compared statistic by statistic, with the fixtures and the
 comparisons kept as tests
-(`KSLCore/src/test/kotlin/ksl/modeling/guidedpath/*ArenaCrossCheckTest.kt`).
+(`KSLCore/src/test/kotlin/ksl/modeling/guidedpath/*CrossCheckTest.kt`).
 Agreement is judged by `z = |difference| / sqrt(h1² + h2²)`, so **z ≤ 1 is
 agreement at 95%** for two independent estimates.
 

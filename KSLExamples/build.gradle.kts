@@ -285,6 +285,15 @@ tasks.register<JavaExec>("guidedPathBenchmark") {
     classpath = sourceSets["main"].runtimeClasspath
 }
 
+// The same benchmark for the active paradigm, which also re-runs the passive one and prints the
+// two side by side. A task rather than a test, for the same reason.
+tasks.register<JavaExec>("agvBenchmark") {
+    group = "verification"
+    description = "Run the AGV throughput benchmark, active against passive, on one layout."
+    mainClass.set("ksl.examples.general.agv.AgvThroughputBenchmark")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
 // Runs the simple AGV example of the guided-path guide, twice: as the source text designs it, and
 // with the idle carts left where they stop so the failure mode is visible side by side.
 tasks.register<JavaExec>("simpleAgvExample") {

@@ -140,6 +140,20 @@ private object GuidedPathGuideSnippets {
         ): GuidedTransporter = candidates.minByOrNull { it.name }!!
     }
 
+    // …model a system on more than one floor?
+    fun twoFloors(): GuidedPathNetwork = GuidedPathNetwork.builder("Hospital")
+        // Ground floor, one way round.
+        .link("G1", "Ground1", "Ground2", length = 60.0, zoneLength = 10.0, beginDirection = 0.0)
+        .link("G2", "Ground2", "Ground3", length = 60.0, zoneLength = 10.0, beginDirection = 0.0)
+        // First floor, one way round.
+        .link("F1", "First1", "First2", length = 60.0, zoneLength = 10.0, beginDirection = 0.0)
+        .link("F2", "First2", "First3", length = 60.0, zoneLength = 10.0, beginDirection = 0.0)
+        // Two shafts joining the floors, each one zone long. The rest of the builder is ordinary
+        // corridors.
+        .link("ShaftUp", "Ground3", "First1", length = 40.0, zoneLength = 40.0, beginDirection = 90.0)
+        .link("ShaftDown", "First3", "Ground1", length = 40.0, zoneLength = 40.0, beginDirection = 270.0)
+        .build()
+
     // …give a vehicle a physical length?
     fun sizedByLength(system: GuidedPathTransportSystem) {
         GuidedTransporter(

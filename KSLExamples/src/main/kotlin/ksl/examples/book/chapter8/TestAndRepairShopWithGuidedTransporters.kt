@@ -143,7 +143,8 @@ class TestAndRepairShopWithGuidedTransporters @JvmOverloads constructor(
     /**
      *  The aisle the workers walk. Defaults to this chapter's own layout; a caller may supply
      *  another, which is how the same shop is compared against the guided-path model of the same
-     *  system built in Arena. The process below is untouched by the choice: what changes is the
+     *  system built in the reference implementation. The process below is untouched by the choice:
+     *  what changes is the
      *  space, which is the whole point of comparing.
      */
     val network: GuidedPathNetwork = aisleNetwork ?: createNetwork(numTransporters)
@@ -251,7 +252,8 @@ class TestAndRepairShopWithGuidedTransporters @JvmOverloads constructor(
 
     /**
      *  How long a part spent aboard a worker, summed over its journeys: from the instant a worker
-     *  was allocated to it until it was set down, which is what Arena books as an entity's transfer
+     *  was allocated to it until it was set down, which is what the reference implementation books
+     *  as an entity's transfer
      *  time. The wait *for* a worker is not part of it -- that is queueing, and is measured by the
      *  transport pool's own queue.
      */

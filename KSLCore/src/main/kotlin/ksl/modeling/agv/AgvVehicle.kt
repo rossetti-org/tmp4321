@@ -11,6 +11,7 @@ import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.TransporterState
+import ksl.modeling.guidedpath.VelocitySampling
 import ksl.modeling.guidedpath.rules.EndOfZoneControl
 import ksl.modeling.guidedpath.rules.ZoneControlRuleIfc
 import ksl.modeling.variable.Counter
@@ -39,7 +40,8 @@ open class AgvVehicle @JvmOverloads constructor(
     velocity: RVariableIfc,
     lengthInZones: Int = 1,
     zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
-    name: String? = null
+    name: String? = null,
+    physicalLength: Double? = null
 ) : ModelElement(system, name) {
 
     /**
@@ -49,7 +51,7 @@ open class AgvVehicle @JvmOverloads constructor(
      */
     internal val body: GuidedTransporter = GuidedTransporter(
         system.spaceSystem, initialPlacement, velocity, lengthInZones, zoneControlRule,
-        "${this.name}:Body"
+        "${this.name}:Body", physicalLength
     )
 
     /**
@@ -62,6 +64,31 @@ open class AgvVehicle @JvmOverloads constructor(
     init {
         system.addVehicle(this)
     }
+
+    /**
+     * How much of the guide path the vehicle covers, in the network's own length units, when it is
+     * sized by length rather than by whole zones. Null means it is sized in zones.
+     *
+     * Passed straight through to the body. It is here for the same reason the passive transporter
+     * has it -- a vehicle that fits inside a zone gets its own length back when it reverses out of a
+     * dead end -- and it is here at all so that the two paradigms can model the same vehicle. A
+     * feature only one of them had would make any comparison between them a comparison of the
+     * feature.
+     */
+    val physicalLength: Double?
+        get() = body.physicalLength
+
+    /**
+     * How often the velocity is drawn when it is random: once per movement, or once per zone.
+     *
+     * Delegated to the body, which owns the movement. `PER_MOVE` by default, matching the passive
+     * transporter and `MovableResource`.
+     */
+    var velocitySampling: VelocitySampling
+        get() = body.velocitySampling
+        set(value) {
+            body.velocitySampling = value
+        }
 
     /** Where the vehicle waits when it has nothing to do, or null to wait where it stops. */
     var homeBase: String? = null

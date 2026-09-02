@@ -1,14 +1,14 @@
-# Arena results for Exercise 7.13(a): the Test and Repair shop served by ONE AGV on a guided path
+# Reference-implementation results for Exercise 7.13(a): the Test and Repair shop served by ONE AGV on a guided path
 # whose links are bidirectional -- which is safe only because there is one vehicle, and which is
 # what makes this case worth having: nothing else in the suite validates the direction lock against
 # anything but itself.
 #
-# Source model: P7-13aNew.doe, run as P7-13aNew.p on 2026-08-31; report and results are from the
+# Source model: P7-13aNew, run on 2026-08-31; report and results are from the
 # same file. Exported from P7-13aNew_rpt.xlsm, archived on branch agv-files of rossetti-org/tmp4321.
 #
 # 10 replications of 4160 hours = 249,600 minutes, no warm-up. Reports are in minutes. Unlike the
 # simple AGV example this model is stochastic, so the comparison is statistical: half-widths are
-# Arena's own 95% figures and are carried here so the test can say what "agrees" means.
+# the reference implementation's own 95% figures and are carried here so the test can say what "agrees" means.
 #
 # The quantities split into two groups that are worth reading separately. The service statistics --
 # value-added time, the machine utilizations, the queue waits -- test whether the two models are the

@@ -168,9 +168,9 @@ class GuidedTransporter @JvmOverloads constructor(
             }
             require(lengthInZones == 1) {
                 "Transporter ($name) was given both a physical length ($physicalLength) and a size " +
-                        "of $lengthInZones zones. A transporter is sized one way or the other, as " +
-                        "Arena's ZONES and LENGTH options are alternatives, so that there is one " +
-                        "answer to how much of the guide path it covers."
+                        "of $lengthInZones zones. A transporter is sized one way or the other -- by " +
+                        "whole zones or by length -- so that there is one answer to how much of the " +
+                        "guide path it covers."
             }
             // Deliberately narrow. A body longer than a zone raises questions this subsystem has no
             // validated answer to -- how many zones it covers on a link discretized differently from
