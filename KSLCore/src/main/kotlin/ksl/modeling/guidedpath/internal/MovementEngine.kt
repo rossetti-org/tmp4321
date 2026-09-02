@@ -63,10 +63,12 @@ internal class MovementEngine(
         destination: GuidedPathNetwork.Intersection,
         movingState: TransporterState
     ): Boolean {
-        val front = transporter.frontZone
-            ?: throw IllegalStateException(
-                "Transporter (${transporter.name}) has not been placed and cannot be moved."
-            )
+        // The outstanding claim is settled before anything is asked about where the transporter
+        // stands, because a transporter part way into a zone may legitimately be standing nowhere.
+        // Under release-at-start a transporter as long as one zone gives that zone up the instant
+        // it begins to leave it, so for the whole of the traversal it covers no zone at all and
+        // holds only its claim. Reading its front zone first would call that unplaced and refuse a
+        // redirection the next branch is there to accept.
         if (transporter.claimedZone != null) {
             // Already travelling into a zone. A vehicle between two places cannot stop and turn
             // round, so the redirection waits for the boundary. The reservation it holds is
@@ -76,6 +78,10 @@ internal class MovementEngine(
             transporter.pendingMovingState = movingState
             return true
         }
+        val front = transporter.frontZone
+            ?: throw IllegalStateException(
+                "Transporter (${transporter.name}) has not been placed and cannot be moved."
+            )
         // A blocked transporter holds no claim, so it may be sent somewhere else -- and it is
         // worth being able to, since a cart stopped on its way back to a parking spur is doing
         // work nobody needs while an entity waits for one. But it is on a waiter list, and that

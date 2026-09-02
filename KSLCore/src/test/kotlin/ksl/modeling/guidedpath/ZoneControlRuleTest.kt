@@ -63,9 +63,16 @@ class ZoneControlRuleTest {
 
         var probeTimes: List<Double> = emptyList()
 
+        /** When to send the cart somewhere else, and where, or null for a single uninterrupted run. */
+        var redirectAt: Double? = null
+        var redirectTo: String = "B"
+
         override fun initialize() {
             probes.clear()
             schedule({ _: KSLEvent<Nothing> -> cart.sendTo("C") }, 0.0)
+            redirectAt?.let { at ->
+                schedule({ _: KSLEvent<Nothing> -> cart.sendTo(redirectTo) }, at)
+            }
             for (t in probeTimes) {
                 schedule({ _: KSLEvent<Nothing> ->
                     probes[t] = network.zones.associate { it.name to it.state }
@@ -78,11 +85,15 @@ class ZoneControlRuleTest {
         rule: ZoneControlRuleIfc,
         probeTimes: List<Double>,
         lengthInZones: Int = 1,
-        placement: TransporterPlacement = TransporterPlacement.At("A")
+        placement: TransporterPlacement = TransporterPlacement.At("A"),
+        redirectAt: Double? = null,
+        redirectTo: String = "B"
     ): Straight {
         val m = Model("ZoneControl")
         val s = Straight(m, rule, lengthInZones, placement)
         s.probeTimes = probeTimes
+        s.redirectAt = redirectAt
+        s.redirectTo = redirectTo
         s.system.checkInvariants = true
         m.numberOfReplications = 1
         m.lengthOfReplication = 100.0
@@ -206,6 +217,27 @@ class ZoneControlRuleTest {
         assertEquals("C", ends.cart.frontZone?.name)
         assertEquals("C", starts.cart.frontZone?.name)
         assertEquals("C", distance.cart.frontZone?.name)
+    }
+
+    @Test
+    fun `a one zone transporter under start control can be redirected while under way`() {
+        // Under release-at-start a transporter as long as one zone gives up the zone behind it the
+        // instant it begins to leave, so for the whole of a traversal it covers no zone at all and
+        // holds only its claim. Asked where it stands, it answers nowhere -- which is a true answer
+        // about a vehicle that is between two places, and is not the same thing as never having
+        // been placed. The redirection below is given at 0.6 minutes, half way through the 1.2
+        // minute first traversal, which is exactly that state.
+        //
+        // This is the case Exercise 7.15 runs into continually: three one-zone vehicles under start
+        // control, being sent to a staging area and re-tasked on the way.
+        val s = run(StartOfZoneControl(), listOf(0.6), redirectAt = 0.6, redirectTo = "B")
+        assertEquals(
+            0, s.probes[0.6]!!.values.count { it == ZoneState.OCCUPIED },
+            "at 0.6 minutes the cart should cover no zone, which is what makes this the case of interest"
+        )
+        // The redirection takes effect at the next zone boundary, so the cart finishes the zone it
+        // was entering and then stops at B rather than carrying on to C.
+        assertEquals("B", s.cart.frontZone?.name)
     }
 
     @Test
