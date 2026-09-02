@@ -61,6 +61,10 @@ class ZoneControlRuleTest {
         /** What was true of the guide path at each probed instant. */
         val probes = linkedMapOf<Double, Map<String, ZoneState>>()
 
+        /** How much of itself the cart was accounting for: zones covered, and whether a claim was
+         *  outstanding. Recorded at the same instants as [probes]. */
+        val coverage = linkedMapOf<Double, Pair<Int, Boolean>>()
+
         var probeTimes: List<Double> = emptyList()
 
         /** When to send the cart somewhere else, and where, or null for a single uninterrupted run. */
@@ -76,6 +80,7 @@ class ZoneControlRuleTest {
             for (t in probeTimes) {
                 schedule({ _: KSLEvent<Nothing> ->
                     probes[t] = network.zones.associate { it.name to it.state }
+                    coverage[t] = cart.occupiedZones.size to (cart.claimedZone != null)
                 }, t)
             }
         }
@@ -206,6 +211,44 @@ class ZoneControlRuleTest {
             assertTrue(occupied <= 3, "at $t the cart covered $occupied zones")
         }
         assertEquals(3, s.cart.occupiedZones.size)
+    }
+
+    @Test
+    fun `a multi zone transporter is never partially on the guide path`() {
+        // Open issue OI-6 asked whether a vehicle longer than one zone can be caught covering fewer
+        // zones than its length -- the state a progressive entry onto the network would create, and
+        // the one `releaseRearAtStart`'s `isFullyOnPath` guard exists to refuse.
+        //
+        // It cannot, and the reason is that there is no such thing as entering the network. A
+        // transporter is placed, and both forms of placement put it on fully: `At` refuses a vehicle
+        // longer than one zone outright, and `OnZone` requires its front to be far enough along the
+        // link to fit the whole body. From then on a traversal removes one zone and adds one, so the
+        // count is only ever the length or one short of it while a claim stands in for the missing
+        // one.
+        //
+        // Asserted here over all three control rules, densely sampled, because the guard reads like
+        // a case that happens and is in fact unreachable -- and a reader who assumes the opposite
+        // will design for a state the subsystem does not have.
+        val probeTimes = (1..80).map { it * 0.15 }
+        for (rule in listOf(EndOfZoneControl(), StartOfZoneControl(), DistanceIntoZoneControl(6.0))) {
+            val s = run(
+                rule, probeTimes, lengthInZones = 3,
+                placement = TransporterPlacement.OnZone("L1.Zone3")
+            )
+            for ((t, seen) in s.coverage) {
+                val (covered, claiming) = seen
+                assertTrue(
+                    covered >= 2,
+                    "under $rule at $t the cart covered $covered zones, fewer than its length less one"
+                )
+                if (!claiming) {
+                    assertEquals(
+                        3, covered,
+                        "under $rule at $t the cart held no claim, so it should cover its whole length"
+                    )
+                }
+            }
+        }
     }
 
     @Test
