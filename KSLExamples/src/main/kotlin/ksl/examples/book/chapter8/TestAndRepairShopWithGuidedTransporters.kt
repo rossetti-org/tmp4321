@@ -3,6 +3,7 @@ package ksl.examples.book.chapter8
 import ksl.modeling.elements.EventGeneratorRVCIfc
 import ksl.modeling.elements.REmpiricalList
 import ksl.modeling.entity.*
+import ksl.modeling.queue.QueueCIfc
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.GuidedTransporter
@@ -10,10 +11,14 @@ import ksl.modeling.guidedpath.GuidedTransporterPoolWithQ
 import ksl.modeling.guidedpath.LinkType
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.rules.ClosestByNetworkDistanceRule
+import ksl.modeling.guidedpath.rules.EndOfZoneControl
+import ksl.modeling.guidedpath.rules.IdleDispositionRuleIfc
 import ksl.modeling.guidedpath.rules.ReturnToHomeBaseRule
+import ksl.modeling.guidedpath.rules.ZoneControlRuleIfc
 import ksl.modeling.variable.*
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.random.rvariable.RVariableIfc
 import ksl.utilities.random.rvariable.LognormalRV
 import ksl.utilities.random.rvariable.TriangularRV
 
@@ -48,11 +53,17 @@ import ksl.utilities.random.rvariable.TriangularRV
  *  @param numTransporters how many carts to run, which is the parameter worth sweeping
  *  @param name a name for the model
  */
-class TestAndRepairShopWithGuidedTransporters(
+class TestAndRepairShopWithGuidedTransporters @JvmOverloads constructor(
     parent: ModelElement,
     numTransporters: Int = 3,
     timeBtwArrivals: Double = 20.0,
-    name: String? = null
+    name: String? = null,
+    aisleNetwork: GuidedPathNetwork? = null,
+    transporterVelocity: RVariableIfc? = null,
+    transporterHomes: List<String>? = null,
+    transporterPhysicalLength: Double? = null,
+    zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
+    idleDispositionRule: IdleDispositionRuleIfc = ReturnToHomeBaseRule()
 ) : ProcessModel(parent, name) {
 
     // test plan 1, distribution j
@@ -129,7 +140,13 @@ class TestAndRepairShopWithGuidedTransporters(
         }
     }
 
-    val network: GuidedPathNetwork = createNetwork(numTransporters)
+    /**
+     *  The aisle the workers walk. Defaults to this chapter's own layout; a caller may supply
+     *  another, which is how the same shop is compared against the guided-path model of the same
+     *  system built in Arena. The process below is untouched by the choice: what changes is the
+     *  space, which is the whole point of comparing.
+     */
+    val network: GuidedPathNetwork = aisleNetwork ?: createNetwork(numTransporters)
 
     init {
         spatialModel = network
@@ -137,16 +154,28 @@ class TestAndRepairShopWithGuidedTransporters(
 
     val transportSystem = GuidedPathTransportSystem(this, network, name = "ShopTransport")
 
+    /** Where each worker starts, and returns to when the idle rule says so. */
+    private val homes: List<String> =
+        transporterHomes ?: (1..numTransporters).map { "Park$it" }
+
+    init {
+        require(homes.size == numTransporters) {
+            "There are $numTransporters transporters but ${homes.size} home locations were given."
+        }
+    }
+
     private val carts: List<GuidedTransporter> = (1..numTransporters).map { i ->
         GuidedTransporter(
-            transportSystem, TransporterPlacement.At("Park$i"), myWalkingSpeedRV, 1, name = "Worker$i"
-        ).apply { homeBase = "Park$i" }
+            transportSystem, TransporterPlacement.At(homes[i - 1]),
+            transporterVelocity ?: myWalkingSpeedRV, 1, zoneControlRule, name = "Worker$i",
+            physicalLength = transporterPhysicalLength
+        ).apply { homeBase = homes[i - 1] }
     }
 
     /** The fleet, asked for by the group rather than by name, as in the free-path model. */
     val transportWorkers = GuidedTransporterPoolWithQ(
         this, transportSystem, carts,
-        ClosestByNetworkDistanceRule(), ReturnToHomeBaseRule(), "TransportWorkerPool"
+        ClosestByNetworkDistanceRule(), idleDispositionRule, "TransportWorkerPool"
     )
 
     private val diagnosticWorkers: ResourceWithQ = ResourceWithQ(this, "DiagnosticWorkers", capacity = 2)
@@ -154,6 +183,20 @@ class TestAndRepairShopWithGuidedTransporters(
     private val myTest2: ResourceWithQ = ResourceWithQ(this, "Test2")
     private val myTest3: ResourceWithQ = ResourceWithQ(this, "Test3")
     private val repairWorkers: ResourceWithQ = ResourceWithQ(this, "RepairWorkers", capacity = 3)
+
+    // Readable so that a study can ask what each station cost, which a model whose resources are
+    // all private cannot be asked at all.
+    val diagnostics: ResourceCIfc get() = diagnosticWorkers
+    val test1: ResourceCIfc get() = myTest1
+    val test2: ResourceCIfc get() = myTest2
+    val test3: ResourceCIfc get() = myTest3
+    val repair: ResourceCIfc get() = repairWorkers
+
+    val diagnosticsQ: QueueCIfc<ProcessModel.Entity.Request> get() = diagnosticWorkers.waitingQ
+    val test1Q: QueueCIfc<ProcessModel.Entity.Request> get() = myTest1.waitingQ
+    val test2Q: QueueCIfc<ProcessModel.Entity.Request> get() = myTest2.waitingQ
+    val test3Q: QueueCIfc<ProcessModel.Entity.Request> get() = myTest3.waitingQ
+    val repairQ: QueueCIfc<ProcessModel.Entity.Request> get() = repairWorkers.waitingQ
 
     /** One step of a test plan: which machine, how long, and where it is on the aisle. */
     inner class TestPlanStep(
@@ -206,6 +249,23 @@ class TestAndRepairShopWithGuidedTransporters(
     val probWithinLimit: ResponseCIfc
         get() = myContractLimit
 
+    /**
+     *  How long a part spent aboard a worker, summed over its journeys: from the instant a worker
+     *  was allocated to it until it was set down, which is what Arena books as an entity's transfer
+     *  time. The wait *for* a worker is not part of it -- that is queueing, and is measured by the
+     *  transport pool's own queue.
+     */
+    private val myTransferTime: Response = Response(this, "TransferTime")
+    val transferTime: ResponseCIfc
+        get() = myTransferTime
+
+    private val myNumberIn: Counter = Counter(this, "NumberIn")
+    val numberIn: CounterCIfc
+        get() = myNumberIn
+    private val myNumberOut: Counter = Counter(this, "NumberOut")
+    val numberOut: CounterCIfc
+        get() = myNumberOut
+
     private inner class Part : Entity() {
         val plan: List<TestPlanStep> = planList.randomElement
 
@@ -214,18 +274,26 @@ class TestAndRepairShopWithGuidedTransporters(
             // named junction, and the part is not carried from wherever it happens to be but from
             // the station it is standing at.
             var at = DIAGNOSTIC
+            var carried = 0.0
             currentLocation = network.requireLocation(DIAGNOSTIC)
             wip.increment()
+            myNumberIn.increment()
             timeStamp = time
             use(diagnosticWorkers, delayDuration = diagnosticTime)
             for (tp in plan) {
-                guidedTransport(transportWorkers, destination = tp.testStation, pickupLocation = at)
+                val leg = guidedTransport(
+                    transportWorkers, destination = tp.testStation, pickupLocation = at
+                )
+                carried += leg.emptyMoveTime + leg.loadedMoveTime
                 at = tp.testStation
                 use(tp.testMachine, delayDuration = tp.processTime)
             }
-            guidedTransport(transportWorkers, destination = REPAIR, pickupLocation = at)
+            val lastLeg = guidedTransport(transportWorkers, destination = REPAIR, pickupLocation = at)
+            carried += lastLeg.emptyMoveTime + lastLeg.loadedMoveTime
             use(repairWorkers, delayDuration = repairTimes[plan]!!)
+            myTransferTime.value = carried
             timeInSystem.value = time - timeStamp
+            myNumberOut.increment()
             wip.decrement()
         }
     }
