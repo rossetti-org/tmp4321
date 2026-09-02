@@ -353,9 +353,11 @@ class PaintingFlowLineWithAgvs @JvmOverloads constructor(
     private val myTransferTime = Response(this, "TransferTime")
     val transferTime: ResponseCIfc get() = myTransferTime
 
-    /** The part of that spent travelling empty to collect the part. */
-    private val myEmptyMoveTime = Response(this, "EmptyMoveTime")
-    val emptyMoveTime: ResponseCIfc get() = myEmptyMoveTime
+    // The empty-move time is deliberately *not* declared here. The transport system already reports
+    // it, and its own loaded counterpart, from every completed journey -- see
+    // `transportSystem.emptyMoveTime`. A second response fed from the same `GuidedTransportResult`
+    // would be the same number under a second name, which is the duplication the guide warns about
+    // one paragraph after the one that would have suggested writing it.
 
     private inner class Part : Entity() {
 
@@ -411,7 +413,6 @@ class PaintingFlowLineWithAgvs @JvmOverloads constructor(
                 loadingDelay = loadUnload, unLoadingDelay = loadUnload
             )
             releaseGuidedTransporter(request, agvs)
-            myEmptyMoveTime.value = leg.emptyMoveTime
             carried += leg.emptyMoveTime + leg.loadedMoveTime + 2.0 * LOAD_UNLOAD_MINUTES
         }
     }
