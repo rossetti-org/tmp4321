@@ -619,6 +619,38 @@ within sampling error in every case tried. The guide path itself
 reproduces where the two tools mean the same thing by a vehicle's time,
 and the one place they do not is written down rather than tuned away.
 
+### And against relations that need no answer at all
+
+Both of the checks above need somebody to know the right answer, which
+limits them to layouts a person can solve -- and those are the layouts
+least likely to be hiding anything. `MetamorphicRelationTest` needs no
+answer at all. It generates two hundred guide paths nobody designed,
+transforms each in a way whose effect on the output is known *by
+construction*, and checks the relation between the two runs rather than
+either run.
+
+| Transformation | What must hold | Result |
+|---|---|---|
+| the same specification, run again | nothing changes | identical to the bit, 200 networks |
+| every length and velocity × a | no time moves, distances scale | held, 200 networks |
+| velocities × b, input durations ÷ b | every time scales, no count moves | held, 200 networks |
+| links and carts built in a shuffled order | nothing changes | identical to the bit, 200 networks |
+| every element renamed, reversing their order | nothing changes | identical to the bit, 200 networks |
+| an unused spur and station spliced in | nothing changes | identical to the bit, 200 networks |
+| the same network modelled both ways, one cart | the paradigms agree | all 60 agreed **exactly** |
+
+The corpus varies three to eight junctions, four link lengths, two zone
+sizes, an optional chord, one to three carts, and all three zone control
+rules, so each relation is checked under each rule. Every link is one-way
+and every cart has a private spur, which is what rules out the
+stalls that would otherwise falsify these relations for reasons that are
+correct behaviour.
+
+The last row is worth a second look. `GateAEquivalenceTest` compares the
+two paradigms on one hand-built shop and accepts agreement within 2%.
+Over sixty generated networks with a single cart, they agree to the
+digit.
+
 ### Cells and zones
 
 `Conveyor.Cell` and `Zone` look alike and are not the same idea.
@@ -666,6 +698,27 @@ transporter with a clear path ahead schedules a single event per zone.
 `DistanceIntoZoneControl` adds a second by design and lands near two.
 Anything much above that is transporters being woken and refused, which is
 a performance defect that leaves every answer correct.
+
+**Zone size is also a dispatching choice, which is less obvious.**
+`ClosestByNetworkDistanceRule` reads a cart's position at zone
+resolution, so refining the zones refines what the rule sees -- and a
+greedy choice made on better information is not always a better choice.
+Over sixty generated networks, splitting every zone in two made the
+makespan longer on three and shorter on four. On one of them the finer
+run had *no* blocking where the coarser run had some, and was still
+twelve units slower, with the whole difference sitting in empty travel:
+a different cart won the distance comparison and had further to come.
+Substituting a rule that reads no position at all makes the two runs
+identical again.
+
+Where nothing contends, refining the zones changes no journey time at
+all, and that is asserted over the same corpus. So the practical warning
+is not about the movement engine but about the two terms' relative size.
+On those networks mean blocked time per transport ran 0.01 to 0.04
+against journey times of six to nine, so **blocking is usually the
+smaller term**. Tuning zone size to shave blocking is tuning the smaller
+of the two things that decide throughput; the empty travel that
+dispatching moves around is the larger.
 
 ### Troubleshooting
 
