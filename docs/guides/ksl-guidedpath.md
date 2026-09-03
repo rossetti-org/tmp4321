@@ -313,12 +313,31 @@ a line being written to make it do so. There is no lift class, no floor concept,
 anywhere in the engine — the exclusion is the zone rule you already have. Give the shaft its own
 `velocityFactor` if a lift is slower than the corridors.
 
-Two things to know before trusting a two-floor model. Ask a shaft zone `isHeld`, **not**
-`isOccupied`: a link's last zone is never occupied, because arriving at its far end means arriving
-at the junction beyond, so `isOccupied` reports an idle single-zone lift and `isHeld` reports the
-truth. And give the intersections honest `x`/`y` coordinates anyway — the engine never reads them,
-but an animation does, and two floors drawn on top of each other are unreadable. Offsetting one
-floor is a layout decision, not a modelling one.
+One thing to know before trusting a two-floor model: ask a shaft zone `isHeld`, **not**
+`isOccupied`. A link's last zone is never occupied, because arriving at its far end means
+arriving at the junction beyond, so `isOccupied` reports an idle single-zone lift and `isHeld`
+reports the truth.
+
+For the picture, give each floor its own height. An intersection carries `z` as well as `x`
+and `y`:
+
+```kotlin
+.intersection("Ground3", x = 80.0, y = 0.0)             // z defaults to 0.0
+.intersection("First1", x = 80.0, y = 0.0, z = 40.0)    // directly above it
+```
+
+A height is **layout and nothing else**, exactly as `x` and `y` are: the engine never reads
+any of the three, and `IntersectionHeightTest` holds the same circuit built flat and built on
+two floors to bit-identical routing and arrival times. What it buys is that the two floors no
+longer have to be pulled apart in `y` to be drawn, so a junction can sit at the same plan
+position as the one below it, which is where it actually is. Nothing else needs a height: a
+transporter is reported to the animation by zone, and the renderer interpolates between a
+link's two ends, so a cart on a lift climbs for the same reason a cart on an aisle moves
+sideways.
+
+Unlike `x` and `y`, `z` defaults to `0.0` rather than to not-a-number. A guide path with no
+layout is a flat one at ground level, which is a meaningful position, where "no planar
+coordinate" and "at the origin" are genuinely different things a renderer must tell apart.
 
 `ksl.examples.general.agv.MultiFloorHospitalExample` is a worked two-floor system; it uses the
 active subsystem, but the network idiom above is the whole of what makes the floors work and applies

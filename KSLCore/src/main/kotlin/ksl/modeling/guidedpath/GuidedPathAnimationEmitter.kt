@@ -60,7 +60,7 @@ class GuidedPathAnimationEmitter(private val system: GuidedPathSpace) {
                 simTime = system.time,
                 networkName = network.name,
                 intersections = network.intersections.map {
-                    GuidedPathIntersectionDef(it.name, it.x, it.y)
+                    GuidedPathIntersectionDef(it.name, it.x, it.y, it.z)
                 },
                 links = network.links.map {
                     GuidedPathLinkDef(

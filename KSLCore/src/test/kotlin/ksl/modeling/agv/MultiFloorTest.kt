@@ -21,9 +21,11 @@ import kotlin.test.assertTrue
  *  link of a single zone, which by the zone rules already admits one vehicle at a time and makes
  *  everyone else wait. No elevator class, no floor concept, no special case in the control loop.
  *
- *  The one real gap is cosmetic and belongs to the space layer rather than here: an intersection
- *  does not override `LocationIfc.z`, so an animated multi-floor network draws flat. Everything
- *  *behaves* correctly, which is what this asserts.
+ *  The first floor is placed at a real height rather than offset in `y`, which is what an
+ *  intersection's `z` is for and what this layout had to work around before it existed: `F3` now sits
+ *  directly above `G1`, where it is. That is layout only -- `IntersectionHeightTest` holds a circuit
+ *  built flat and built on two floors to bit-identical arrival times -- so none of the assertions
+ *  below moved when it changed, which is itself the point.
  */
 class MultiFloorTest {
 
@@ -43,9 +45,10 @@ class MultiFloorTest {
             .intersection("G1", x = 0.0, y = 0.0)
             .intersection("G2", x = 40.0, y = 0.0)
             .intersection("G3", x = 80.0, y = 0.0)      // foot of the lift
-            .intersection("F1", x = 80.0, y = 40.0)     // head of the lift
-            .intersection("F2", x = 40.0, y = 40.0)
-            .intersection("F3", x = 0.0, y = 40.0)
+            // The first floor, directly above the ground floor rather than beside it.
+            .intersection("F1", x = 80.0, y = 0.0, z = 12.0)   // head of the lift
+            .intersection("F2", x = 40.0, y = 0.0, z = 12.0)
+            .intersection("F3", x = 0.0, y = 0.0, z = 12.0)
             .link("GroundOut", "G1", "G2", length = 40.0, zoneLength = 10.0, beginDirection = 0.0)
             .link("GroundIn", "G2", "G3", length = 40.0, zoneLength = 10.0, beginDirection = 0.0)
             // The elevator: one zone, so exactly one vehicle may be inside it at a time.

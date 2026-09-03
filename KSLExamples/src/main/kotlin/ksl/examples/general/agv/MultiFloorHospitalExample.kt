@@ -119,9 +119,13 @@ object MultiFloorHospitalExample {
             .intersection("G1", x = 0.0, y = 0.0)
             .intersection("G2", x = 60.0, y = 0.0)
             .intersection("G3", x = 60.0 + corridor, y = 0.0)
-            .intersection("F1", x = 60.0 + corridor, y = shaftLength)
-            .intersection("F2", x = 60.0, y = shaftLength)
-            .intersection("F3", x = 0.0, y = shaftLength)
+            // The first floor sits directly above the ground floor. Before an intersection carried
+            // a height this layout had to offset the upper floor in y to be drawable at all, which
+            // put the wards somewhere they are not. The heights are layout only: routing reads
+            // declared link lengths and never a coordinate.
+            .intersection("F1", x = 60.0 + corridor, y = 0.0, z = shaftLength)
+            .intersection("F2", x = 60.0, y = 0.0, z = shaftLength)
+            .intersection("F3", x = 0.0, y = 0.0, z = shaftLength)
             .link("GroundA", "G1", "G2", length = 60.0, zoneLength = 10.0, beginDirection = 0.0)
             .link("GroundB", "G2", "G3", length = corridor, zoneLength = 10.0, beginDirection = 0.0)
             // The lift: one zone, so exactly one porter may be inside it at a time.
@@ -408,9 +412,8 @@ object MultiFloorHospitalExample {
         println()
         println("  What none of this needed: an elevator object, a floor attribute, a capacity")
         println("  semaphore, or a branch anywhere in the dispatcher or the vehicle control loop. A")
-        println("  lift is a one-way link of a single zone. The one genuine gap is cosmetic and")
-        println("  belongs to the space layer rather than to this subsystem - an intersection has no")
-        println("  z coordinate, so an animated multi-floor network draws flat even though it")
-        println("  behaves correctly.")
+        println("  lift is a one-way link of a single zone. The floors are placed at their own")
+        println("  heights, so the picture is right as well as the behaviour - and because a height")
+        println("  is layout and nothing else, placing them changed not one number above.")
     }
 }

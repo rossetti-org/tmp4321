@@ -192,8 +192,14 @@ class AnimationEmissionTest {
         // AnimationEvent's own documentation calls these tags stable and says they should not be
         // changed casually. The Kotlin class names may be refactored freely; these strings may not,
         // because an existing recording is written in terms of them.
+        //
+        // The intersection gained `"z":0.0` when junctions gained a height. That is additive rather
+        // than a broken promise: the tags are unchanged, the format writes defaulted fields by
+        // design -- `encodeDefaults = true`, whose own KDoc names `z = 0.0` as the example -- and a
+        // recording made before heights existed still decodes, which `IntersectionHeightTest`
+        // asserts against this same writer.
         assertEquals(
-            """{"event":"GuidedPathDefined","simTime":0.0,"networkName":"N","intersections":[{"name":"A","x":1.0,"y":2.0}],"links":[{"name":"L","from":"A","to":"B","numZones":3,"bidirectional":false,"spur":true}]}""",
+            """{"event":"GuidedPathDefined","simTime":0.0,"networkName":"N","intersections":[{"name":"A","x":1.0,"y":2.0,"z":0.0}],"links":[{"name":"L","from":"A","to":"B","numZones":3,"bidirectional":false,"spur":true}]}""",
             AnimationEvent.encodeToLine(
                 AnimationEvent.GuidedPathDefined(
                     0.0, "N",

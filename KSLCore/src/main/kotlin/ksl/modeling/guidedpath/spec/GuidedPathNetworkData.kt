@@ -35,6 +35,12 @@ import ksl.utilities.math.KSLMath
  * @param velocityFactor multiplies transporter velocity while crossing, strictly positive
  * @param x layout abscissa, or not-a-number when no layout was supplied
  * @param y layout ordinate, or not-a-number when no layout was supplied
+ * @param z layout height, defaulting to zero rather than to not-a-number. A guide path with no
+ *   layout at all is a flat one at ground level, which is a meaningful position; a height of
+ *   not-a-number would be a third way of saying "unspecified" that every reader would have to
+ *   handle, and would poison any renderer that added it to a camera. The two planar coordinates keep
+ *   not-a-number because *there* it distinguishes "no layout" from "the origin", and a reader
+ *   testing `x.isNaN()` for that still gets the right answer.
  */
 @Serializable
 data class IntersectionData(
@@ -42,7 +48,8 @@ data class IntersectionData(
     var length: Double = 0.0,
     var velocityFactor: Double = 1.0,
     var x: Double = Double.NaN,
-    var y: Double = Double.NaN
+    var y: Double = Double.NaN,
+    var z: Double = 0.0
 ) {
     init {
         if (name.isBlank()) {

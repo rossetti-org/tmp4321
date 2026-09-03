@@ -980,11 +980,21 @@ internal val AnimationEvent.entityIdOrNull: Long?
     }
 
 /**
- * An intersection of a [AnimationEvent.GuidedPathDefined]: [name] at world position ([x],[y]).
+ * An intersection of a [AnimationEvent.GuidedPathDefined]: [name] at world position ([x],[y],[z]).
  * Coordinates come from the guide path itself, which carries them for exactly this purpose.
+ *
+ * [z] defaults to zero, so a payload recorded before heights existed decodes as the flat network it
+ * described. Nothing else needs a height: a transporter is reported by zone rather than by position,
+ * and the renderer interpolates between the two ends of a link -- so a cart on a lift climbs for the
+ * same reason a cart on an aisle moves sideways, and there is no second place to get it wrong.
  */
 @Serializable
-data class GuidedPathIntersectionDef(val name: String, val x: Double, val y: Double)
+data class GuidedPathIntersectionDef(
+    val name: String,
+    val x: Double,
+    val y: Double,
+    val z: Double = 0.0
+)
 
 /**
  * A link of a [AnimationEvent.GuidedPathDefined], running from intersection [from] to [to] and

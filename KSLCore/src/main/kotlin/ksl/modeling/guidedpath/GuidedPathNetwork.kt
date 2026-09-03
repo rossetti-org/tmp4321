@@ -438,7 +438,7 @@ class GuidedPathNetwork private constructor(
             )
         },
         intersections = myIntersections.map {
-            IntersectionData(it.name, it.length, it.velocityFactor, it.x, it.y)
+            IntersectionData(it.name, it.length, it.velocityFactor, it.x, it.y, it.z)
         },
         stationAliases = myStationAliases.mapValues { (_, v) -> v.name }
     )
@@ -476,7 +476,8 @@ class GuidedPathNetwork private constructor(
         val length: Double,
         val velocityFactor: Double,
         override val x: Double,
-        override val y: Double
+        override val y: Double,
+        override val z: Double
     ) : AbstractLocation(aName) {
 
         override val spatialModel: SpatialModel = this@GuidedPathNetwork
@@ -532,7 +533,7 @@ class GuidedPathNetwork private constructor(
     private fun addIntersection(data: IntersectionData): Intersection {
         requireNotBuilt()
         myIntersectionsByName[data.name]?.let { return it }
-        val i = Intersection(data.name, data.length, data.velocityFactor, data.x, data.y)
+        val i = Intersection(data.name, data.length, data.velocityFactor, data.x, data.y, data.z)
         myIntersections.add(i)
         myIntersectionsByName[data.name] = i
         myZones.add(i.zone)
@@ -664,19 +665,28 @@ class GuidedPathNetwork private constructor(
 
         private val myNetwork = GuidedPathNetwork(networkName)
 
-        /** Gives a junction a length, a velocity factor, or layout coordinates. */
+        /**
+         * Gives a junction a length, a velocity factor, or layout coordinates.
+         *
+         * [z] is layout only, exactly as [x] and [y] are. Putting a junction on another floor does
+         * not make anything take longer to reach: this is a **network** spatial model, so every
+         * distance comes from the routing matrix and every travel time from a link's length. A lift
+         * is a link whose length is the height of the shaft, and giving its two ends different
+         * heights is what makes a renderer draw the cart climbing rather than sliding.
+         */
         @JvmOverloads
         fun intersection(
             name: String,
             length: Double = 0.0,
             velocityFactor: Double = 1.0,
             x: Double = Double.NaN,
-            y: Double = Double.NaN
+            y: Double = Double.NaN,
+            z: Double = 0.0
         ): Builder {
             if (myNetwork.myIntersectionsByName.containsKey(name)) {
                 throw GuidedPathNetworkException.duplicateName("intersection", name)
             }
-            myNetwork.addIntersection(IntersectionData(name, length, velocityFactor, x, y))
+            myNetwork.addIntersection(IntersectionData(name, length, velocityFactor, x, y, z))
             return this
         }
 
@@ -779,7 +789,7 @@ class GuidedPathNetwork private constructor(
         fun fromData(data: GuidedPathNetworkData): GuidedPathNetwork {
             val b = Builder(data.name)
             for (i in data.intersections) {
-                b.intersection(i.name, i.length, i.velocityFactor, i.x, i.y)
+                b.intersection(i.name, i.length, i.velocityFactor, i.x, i.y, i.z)
             }
             for (l in data.links) {
                 b.link(l)
