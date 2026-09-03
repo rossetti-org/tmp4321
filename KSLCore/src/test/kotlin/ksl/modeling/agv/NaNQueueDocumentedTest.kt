@@ -73,7 +73,7 @@ class NaNQueueDocumentedTest {
                     "at all -- the most flattering possible reading of a fleet that served nobody.")
 
         // The same holds for the transport time, which observed nothing either.
-        val transport = shop.agv.transportTime.withinReplicationStatistic
+        val transport = shop.agv.timeAboard.withinReplicationStatistic
         assertEquals(0.0, transport.count)
         assertTrue(transport.weightedAverage.isNaN(), "transport time should be NaN, not ${transport.weightedAverage}")
 

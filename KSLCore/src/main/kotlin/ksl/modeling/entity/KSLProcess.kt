@@ -2550,7 +2550,7 @@ interface KSLProcessBuilder {
         hold(system.inTransitHoldQ, suspensionName = "$suspensionName:riding")
         // The vehicle resumed us, having set currentLocation before doing so.
         val delivered = system.time
-        system.recordTransportTime(delivered - pickedUp)
+        system.recordTimeAboard(delivered - pickedUp)
         // What the carry cost the guide path, reported to the layer that owns those five responses
         // so that an active model publishes them as a passive one does. The vehicle recorded the
         // pieces on the task as it went; nothing is recomputed here.
@@ -2562,7 +2562,7 @@ interface KSLProcessBuilder {
             totalTime = delivered - posted,
             waitForAssignment = task.assignedAt - posted,
             waitForArrival = pickedUp - task.assignedAt,
-            transportTime = delivered - pickedUp,
+            timeAboard = delivered - pickedUp,
             blockedTime = task.blockedTime,
             routeLength = task.loadedRouteLength,
             vehicleName = task.carriedBy?.name ?: "",

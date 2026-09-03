@@ -90,11 +90,11 @@ class ControlLoopTest {
         val r = assertNotNull(shop.result, "the entity was never delivered")
 
         // The three durations partition the total, and none is degenerate.
-        assertEquals(r.totalTime, r.waitForAssignment + r.waitForArrival + r.transportTime, 1e-9,
+        assertEquals(r.totalTime, r.waitForAssignment + r.waitForArrival + r.timeAboard, 1e-9,
             "the three durations do not partition the total: $r")
         assertTrue(r.waitForAssignment >= 0.0, "negative wait for assignment: $r")
         assertTrue(r.waitForArrival > 0.0, "the cart was already at the pickup; the layout changed: $r")
-        assertTrue(r.transportTime > 0.0, "the ride took no time: $r")
+        assertTrue(r.timeAboard > 0.0, "the ride took no time: $r")
         assertTrue(r.routeLength > 0.0, "the loaded leg covered no ground: $r")
         assertEquals("Cart1", r.vehicleName, "the wrong vehicle carried the load: $r")
         assertEquals(0, r.numReassignments, "nothing revoked, yet a reassignment was counted: $r")

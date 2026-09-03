@@ -120,7 +120,7 @@ class AgvDeterminismTest {
         return mapOf(
             "tasksCompleted" to shop.agv.dispatcher.numTasksCompleted.acrossReplicationStatistic.average,
             "waitForAssignment" to shop.agv.dispatcher.waitForAssignment.acrossReplicationStatistic.average,
-            "transportTime" to shop.agv.transportTime.acrossReplicationStatistic.average,
+            "timeAboard" to shop.agv.timeAboard.acrossReplicationStatistic.average,
             "timeInQ" to shop.agv.dispatcher.taskQ.timeInQ.acrossReplicationStatistic.average,
             "numInQ" to shop.agv.dispatcher.taskQ.numInQ.acrossReplicationStatistic.average
         )

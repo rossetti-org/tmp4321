@@ -133,10 +133,22 @@ class StatisticParityTest {
 
         // And the active subsystem reports things the passive one has no concept of -- which is the
         // point of it, and is why the mapping is one-way rather than a bijection.
+        //
+        // These are compared by full name, and that is a weaker check than it looks: the two systems
+        // are different model elements, so any "Agv:..." row is absent from a model whose system is
+        // called "Sys" whatever either of them measures. It says these rows exist on one side and are
+        // not literally present on the other; it cannot say that no *name* means two things.
+        //
+        // It could not, and did not. `Agv:TransportTime` sat opposite the passive `Sys:TransportTime`
+        // -- one name, two intervals, request-to-set-down against aboard-to-set-down -- while this
+        // loop appeared to rule it out. Comparing leaf names instead does not fix it either, because
+        // leaves like `NumInQ` are generic to every queue in the library and would conflate all of
+        // them. The check that actually holds is structural and lives in `StatisticNamingTest`: the
+        // two subsystems' *own* rows, in one model containing both, must have disjoint names.
         for (extra in listOf(
             "Agv:Dispatcher:TaskQ:NumInQ",
             "Agv:Dispatcher:WaitForAssignment",
-            "Agv:TransportTime",
+            "Agv:TimeAboard",
             "Cart1:FracTimeOnTask"
         )) {
             assertTrue(extra in active, "the active subsystem should report $extra")

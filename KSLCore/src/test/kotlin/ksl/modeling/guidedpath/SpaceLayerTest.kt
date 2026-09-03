@@ -155,9 +155,12 @@ class SpaceLayerTest {
             "an active model still registers the passive paradigm's transport time, which nothing " +
                     "in an active run ever writes to: $active"
         )
+        // Its own is `TimeAboard`, not `TransportTime`: the two paradigms measure different intervals
+        // and must not share a row name in a model that contains both. `StatisticNamingTest` is where
+        // that rule is asserted; here it is only being read correctly.
         assertTrue(
-            active.any { it.endsWith("Agv:TransportTime") },
-            "the active subsystem's own transport time is missing: $active"
+            active.any { it.endsWith("Agv:TimeAboard") },
+            "the active subsystem's own aboard-to-set-down interval is missing: $active"
         )
     }
 

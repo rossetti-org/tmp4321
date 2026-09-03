@@ -100,7 +100,7 @@ class StalledPolicyTest {
         // A reader glancing at them sees a fleet with no waiting and no blocking.
         assertEquals(0.0, shop.agv.dispatcher.taskQ.timeInQ.withinReplicationStatistic.count,
             "there should be no completed waits to report")
-        assertEquals(0.0, shop.agv.transportTime.withinReplicationStatistic.count)
+        assertEquals(0.0, shop.agv.timeAboard.withinReplicationStatistic.count)
         for (cart in shop.carts) {
             assertEquals(0.0, cart.numTasksCompleted.value)
             assertEquals(0.0, cart.fracTimeBlocked.withinReplicationStatistic.weightedAverage, 1e-9,

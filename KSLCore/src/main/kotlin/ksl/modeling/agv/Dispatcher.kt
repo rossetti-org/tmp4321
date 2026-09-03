@@ -200,7 +200,7 @@ open class Dispatcher @JvmOverloads constructor(
          * and the leg that ended at its set-down, each taken before the loading or unloading delay
          * that follows it. That is what the passive subsystem means by the same two names, and the
          * point of recording them here is that the two paradigms then report the same quantity.
-         * `waitForArrival` and `transportTime` on the result are the wider intervals that include
+         * `waitForArrival` and `timeAboard` on the result are the wider intervals that include
          * those delays, and neither is derivable from the other.
          */
         internal var carriedBy: AgvVehicle? = null

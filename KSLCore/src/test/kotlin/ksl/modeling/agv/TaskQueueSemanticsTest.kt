@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
  *
  *  The subsystem reports one queue and two responses, and they measure disjoint intervals: the task
  *  queue runs from posting to pickup, `waitForAssignment` from posting to the moment a vehicle
- *  committed, and `transportTime` from pickup to delivery. None can be derived from another, which
+ *  committed, and `timeAboard` from pickup to delivery. None can be derived from another, which
  *  is the reason all three are measured rather than two being computed from the third.
  *
  *  That makes them exactly the kind of thing that silently stops agreeing. The run is arranged so
@@ -102,7 +102,7 @@ class TaskQueueSemanticsTest {
             // other. A decomposition checked only against its own total is checked against nothing.
             assertEquals(t.deliveredAt - t.postedAt, r.totalTime, 1e-9,
                 "totalTime is not posting to delivery: $label")
-            assertEquals(r.totalTime, r.waitForAssignment + r.waitForArrival + r.transportTime, 1e-9,
+            assertEquals(r.totalTime, r.waitForAssignment + r.waitForArrival + r.timeAboard, 1e-9,
                 "the three durations do not partition the total: $label")
 
             // The queue measures posting to PICKUP -- not to assignment, and not to delivery. This
@@ -119,10 +119,10 @@ class TaskQueueSemanticsTest {
         }
 
         // The system's transport-time response saw exactly the two rides, and nothing else.
-        val tt = shop.agv.transportTime.withinReplicationStatistic
+        val tt = shop.agv.timeAboard.withinReplicationStatistic
         assertEquals(2.0, tt.count, "the transport time response should have one observation per ride")
         assertEquals(
-            (first.result.transportTime + second.result.transportTime) / 2.0,
+            (first.result.timeAboard + second.result.timeAboard) / 2.0,
             tt.weightedAverage, 1e-9,
             "the transport time response disagrees with what the verbs reported"
         )

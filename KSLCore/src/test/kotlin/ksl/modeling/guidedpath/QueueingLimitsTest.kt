@@ -200,7 +200,7 @@ class QueueingLimitsTest {
                 currentLocation = network.requireLocation("P")
                 val r = transportByAgv(agv, destination = "Q", origin = "P")
                 waitForVehicle.value = r.waitForAssignment
-                service.value = r.waitForArrival + r.transportTime
+                service.value = r.waitForArrival + r.timeAboard
             }
         }
 

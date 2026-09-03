@@ -150,7 +150,7 @@ class MultiFloorTest {
         assertEquals(2, h.deliveries.size, "a cross-floor delivery did not complete: ${h.deliveries}")
         for (d in h.deliveries) {
             assertTrue(d.routeLength > 0.0, "a cross-floor journey covered no ground: $d")
-            assertTrue(d.transportTime > 0.0, "a cross-floor journey took no time: $d")
+            assertTrue(d.timeAboard > 0.0, "a cross-floor journey took no time: $d")
         }
 
         // The lift did its job: it was used, and never by two vehicles at once. That exclusion is

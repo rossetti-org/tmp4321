@@ -151,7 +151,7 @@ private object AgvGuideSnippets {
                 val result = awaitAgvTransport(task)
                 val waited = result.waitForAssignment
                 val fetched = result.waitForArrival
-                val rode = result.transportTime
+                val rode = result.timeAboard
                 val who = result.vehicleName
                 val turnedRound = result.numReassignments
             }

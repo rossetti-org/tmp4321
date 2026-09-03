@@ -52,7 +52,7 @@ import kotlin.test.assertTrue
  *  loads:
  *
  *  ```
- *  transportTime (own)          count=    74
+ *  timeAboard (own)             count=    74
  *  emptyMoveTime                count=     0
  *  loadedMoveTime               count=     0
  *  transportBlockedTime         count=     0
@@ -75,7 +75,7 @@ import kotlin.test.assertTrue
  *  both, the difference of the means is exactly one delay:
  *
  *  - `mean(waitForArrival) - mean(emptyMoveTime)` must be exactly the loading delay;
- *  - `mean(transportTime) - mean(loadedMoveTime)` must be exactly the unloading delay.
+ *  - `mean(timeAboard) - mean(loadedMoveTime)` must be exactly the unloading delay.
  *
  *  Either would fail on an off-by-one-delay, and neither would be satisfied by a response that
  *  merely had observations in it.
@@ -182,7 +182,7 @@ class PerCarryStatisticsTest {
 
         /** The wider intervals the active result reports, kept so the boundary can be checked. */
         val waitForArrival = Statistic("waitForArrival")
-        val transportTime = Statistic("transportTime")
+        val timeAboard = Statistic("timeAboard")
         var completions = 0.0
 
         private inner class Part : Entity() {
@@ -193,7 +193,7 @@ class PerCarryStatisticsTest {
                     loadingDelay = ConstantRV(LOADING), unLoadingDelay = ConstantRV(UNLOADING)
                 )
                 waitForArrival.collect(r.waitForArrival)
-                transportTime.collect(r.transportTime)
+                timeAboard.collect(r.timeAboard)
                 completions++
             }
         }
@@ -203,7 +203,7 @@ class PerCarryStatisticsTest {
 
         override fun initialize() {
             waitForArrival.reset()
-            transportTime.reset()
+            timeAboard.reset()
             completions = 0.0
         }
     }
@@ -289,9 +289,9 @@ class PerCarryStatisticsTest {
                     "the loading delay $LOADING"
         )
         assertEquals(
-            UNLOADING, shop.transportTime.average - mean(carry.loadedMove), 1.0e-9,
+            UNLOADING, shop.timeAboard.average - mean(carry.loadedMove), 1.0e-9,
             "the carry exceeds the loaded run by " +
-                    "${shop.transportTime.average - mean(carry.loadedMove)}, which should be exactly " +
+                    "${shop.timeAboard.average - mean(carry.loadedMove)}, which should be exactly " +
                     "the unloading delay $UNLOADING"
         )
     }

@@ -165,11 +165,24 @@ open class AgvSystem @JvmOverloads constructor(
     private val myNumVehiclesIdle = TWResponse(
         this, "${this.name}:NumVehiclesIdle", allowedDomain = ksl.utilities.Interval(0.0, Double.MAX_VALUE)
     )
+
+    /**
+     * How many vehicles carry no task: **idle to the dispatcher**.
+     *
+     * Not the same question as the space layer's `numTransportersIdle`, which counts vehicles
+     * standing still, and the two rows appear together on an active model's report. A vehicle
+     * repositioning to its home base is the case that separates them: it is moving, so it is not
+     * idle in the space layer's sense, and it carries no task, so it is idle in this one. Each row
+     * uses the word of the layer that owns it -- transporter for the shared space, vehicle here --
+     * because renaming either would make the shared layer speak one consumer's dialect.
+     */
     val numVehiclesIdle: TWResponseCIfc get() = myNumVehiclesIdle
 
     private val myNumVehiclesOnTask = TWResponse(
         this, "${this.name}:NumVehiclesOnTask", allowedDomain = ksl.utilities.Interval(0.0, Double.MAX_VALUE)
     )
+
+    /** How many vehicles are working a task. The complement of [numVehiclesIdle] over the fleet. */
     val numVehiclesOnTask: TWResponseCIfc get() = myNumVehiclesOnTask
 
     /**
@@ -177,12 +190,20 @@ open class AgvSystem @JvmOverloads constructor(
      *
      * A `Response`, so warm-up handles it. Not derivable from the task queue, which measures the
      * disjoint interval that ends where this one begins.
+     *
+     * **Named for the interval and not for the journey**, because the passive subsystem reports a
+     * `TransportTime` of its own and means something else by it: request to set-down, the whole
+     * story including the wait for a cart. This one is a strict sub-interval of that. Two rows in one
+     * model wearing the same name while measuring different things is a trap for exactly the study
+     * most likely to meet both -- a paradigm comparison, which lines rows up by name -- and it would
+     * give a wrong answer rather than an obviously missing one. `StatisticNamingTest` holds the two
+     * subsystems' own row names disjoint so this cannot recur.
      */
-    private val myTransportTime = Response(this, "${this.name}:TransportTime")
-    val transportTime: ResponseCIfc get() = myTransportTime
+    private val myTimeAboard = Response(this, "${this.name}:TimeAboard")
+    val timeAboard: ResponseCIfc get() = myTimeAboard
 
-    internal fun recordTransportTime(value: Double) {
-        myTransportTime.value = value
+    internal fun recordTimeAboard(value: Double) {
+        myTimeAboard.value = value
     }
 
     /**

@@ -271,7 +271,7 @@ object TwoParadigmsExample {
         )
         println(
             "  time aboard a vehicle %15.4f".format(
-                active.agv.transportTime.acrossReplicationStatistic.average
+                active.agv.timeAboard.acrossReplicationStatistic.average
             )
         )
         println(

@@ -225,7 +225,7 @@ Both verbs return an `AgvTransportResult`:
 ```kotlin
 val waited = result.waitForAssignment
 val fetched = result.waitForArrival
-val rode = result.transportTime
+val rode = result.timeAboard
 val who = result.vehicleName
 val turnedRound = result.numReassignments
 ```
@@ -253,7 +253,7 @@ result's. The two move times are **travel only**: `emptyMoveTime` runs
 from the instant a vehicle was committed to the load until it reaches
 it, and `loadedMoveTime` from there until it is set down -- each
 stopping short of the loading or unloading delay that follows.
-`waitForArrival` and `transportTime` on the result are the wider
+`waitForArrival` and `timeAboard` on the result are the wider
 intervals that include those delays, which is why neither pair is
 derivable from the other. Measured this way the two paradigms report the
 same numbers for the same shop, which `PerCarryStatisticsTest` holds
@@ -263,6 +263,59 @@ One consequence worth knowing: after a re-tasking, `emptyMoveTime` runs
 from the **last** assignment, not the first. The abandoned approach is
 not empty travel on this load's behalf, and `numReassignments` on the
 result is what says it happened.
+### …compare a passive model with an active one?
+
+Put both in one model and the reports sit side by side, but three
+differences in how rows are named will meet you. Two are informative and
+one was a trap that has been removed.
+
+
+| Passive row | Active row | Why |
+|---|---|---|
+| `Sys:NumZoneTraversals` | `Agv:Space:NumZoneTraversals` | One segment, applied to all thirteen shared rows |
+| `Cart1:FracTimeBlocked` | `Cart1:Body:FracTimeBlocked` | One segment, applied to all nine physical rows |
+| `Sys:TransportTime` | *(no counterpart)* | Different intervals — see below |
+
+**The `:Space:` segment** appears because a passive transport system
+*is* a guide path space, so its space rows sit at its own level, while
+an active system *has* one, so they sit under it. The mapping is one
+segment applied mechanically, which `StatisticNamingTest` asserts over
+the whole set rather than over a hand-kept list.
+
+**The `:Body` segment** is the same idea one level down: an `AgvVehicle`
+composes a `GuidedTransporter` that carries the physical statistics, and
+model element names are unique, so the body cannot share the vehicle's
+name. `StatisticParityTest` asserts that mapping.
+
+**`TransportTime` has no active counterpart, and this is the one to be
+careful about.** The passive row runs from the entity's request to it
+being set down — the whole story, including the wait for a cart. The
+active subsystem decomposes that wait deliberately, so what corresponds
+to it is a sum, not a row:
+
+
+```kotlin
+// Sys:TransportTime  ==  WaitForAssignment + (waiting for arrival) + TimeAboard
+val whole = agv.dispatcher.waitForAssignment.withinReplicationStatistic.weightedAverage +
+        agv.timeAboard.withinReplicationStatistic.weightedAverage
+// ... or read it per load, where the result gives you the total directly:
+val total = result.totalTime
+```
+
+The active row that measures aboard-to-set-down is called `TimeAboard`
+rather than `TransportTime` for exactly this reason. Both systems used
+to call it `TransportTime`, at the same depth in one report, meaning
+different intervals — which a study lining rows up by name would have
+compared, getting a wrong answer rather than an obviously missing one.
+
+One last pair worth reading carefully: an active model reports both
+`Agv:Space:NumTransportersIdle` and `Agv:NumVehiclesIdle`, and they
+answer different questions. The first counts vehicles **standing
+still**; the second counts vehicles **carrying no task**. A vehicle
+repositioning to its home base satisfies the second and not the first.
+Each row uses the word of the layer that owns it — transporter for the
+shared space, vehicle for this subsystem — because renaming either would
+make the shared layer speak one consumer's dialect.
 ### …change the dispatching rule?
 
 ```kotlin
