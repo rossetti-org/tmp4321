@@ -2,6 +2,7 @@ package ksl.modeling.agv
 
 import ksl.modeling.agv.exceptions.AgvInvariantViolation
 import ksl.modeling.entity.ProcessModel
+import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.simulation.KSLEvent
@@ -225,8 +226,8 @@ class ClosingAuditTest {
         // anything in this class asking for it. That is the coverage this control exists to give:
         // before it, no test of this subsystem ran under the space checker at all.
         assertTrue(
-            GuidedPathTransportSystem.defaultCheckInvariants(),
-            "the suite is expected to run with ${GuidedPathTransportSystem.CHECK_INVARIANTS_PROPERTY} set"
+            GuidedPathSpace.defaultCheckInvariants(),
+            "the suite is expected to run with ${GuidedPathSpace.CHECK_INVARIANTS_PROPERTY} set"
         )
         assertTrue(shop.agv.checkInvariants, "an active model did not inherit the suite's default")
 

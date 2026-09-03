@@ -2295,7 +2295,7 @@ interface KSLProcessBuilder {
         // committed to a particular transporter before a nearer one comes back.
         val allocation = seize(pool, pickup, requestPriority, suspensionName)
         val chosen = allocation.myResource as GuidedTransporter
-        val request = GuidedTransportRequest(chosen, entity, allocation, pool.time)
+        val request = GuidedTransportRequest(chosen, entity, pool, allocation, pool.time)
         request.requestedAt = requestedAt
         // Taken before the empty move, so that blocking on the way to collect the entity counts
         // against the journey it belongs to.
@@ -2344,6 +2344,9 @@ interface KSLProcessBuilder {
                     "(${request.entity.name})."
         }
         val transporter = request.transporter
+        // The space layer, for the journey; the pool's transport system, for the total. They are the
+        // same object in a passive model -- a transport system *is* a space -- but only the second
+        // has the figure this paradigm reports.
         val system = transporter.system
         if (loadingDelay != ConstantRV.ZERO) {
             delay(loadingDelay, loadingPriority, "$suspensionName:loading")
@@ -2377,7 +2380,7 @@ interface KSLProcessBuilder {
         )
         // Reported to the process and accumulated for the fleet, so that neither a per-entity
         // tabulation nor a fleet summary needs an observer written for it.
-        system.collectTransportResult(result)
+        request.pool.system.collectTransportResult(result)
         return result
     }
 

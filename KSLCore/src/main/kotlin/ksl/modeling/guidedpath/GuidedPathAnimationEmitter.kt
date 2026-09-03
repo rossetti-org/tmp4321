@@ -45,7 +45,7 @@ import ksl.animation.GuidedPathLinkDef
  *
  * @param system the runtime whose guide path and fleet are being animated
  */
-class GuidedPathAnimationEmitter(private val system: GuidedPathTransportSystem) {
+class GuidedPathAnimationEmitter(private val system: GuidedPathSpace) {
 
     /**
      * Emits the static guide path. Called from the system's `initialize()`, once per replication,

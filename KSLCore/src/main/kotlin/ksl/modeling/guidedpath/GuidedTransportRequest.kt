@@ -70,12 +70,18 @@ enum class GuidedTransportRequestState {
  *
  * @param transporter the transporter allocated to the entity
  * @param entity the entity it is allocated to
+ * @param pool the pool the transporter came from, and the passive transport system it belongs to.
+ *   Carried because a transporter knows only the *space* it moves through: `transporter.system` is
+ *   a [GuidedPathSpace], shared with the active subsystem, and the request-to-set-down total is
+ *   this paradigm's own figure. Threading it here keeps `transportBy` usable with nothing but a
+ *   request, as its signature promises.
  * @param allocation the underlying resource allocation, released at the end
  * @param timeAllocated when the transporter was allocated
  */
 class GuidedTransportRequest internal constructor(
     val transporter: GuidedTransporter,
     val entity: ProcessModel.Entity,
+    internal val pool: GuidedTransporterPoolWithQ,
     internal val allocation: Allocation,
     val timeAllocated: Double
 ) {

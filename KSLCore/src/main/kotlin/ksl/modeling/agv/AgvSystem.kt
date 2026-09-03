@@ -12,7 +12,7 @@ import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.KSLProcess
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
-import ksl.modeling.guidedpath.GuidedPathTransportSystem
+import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
@@ -45,9 +45,17 @@ open class AgvSystem @JvmOverloads constructor(
     name: String? = null
 ) : AgentModel(parent, name) {
 
-    /** The space layer's runtime. It owns zone occupancy; this subsystem owns nothing physical. */
-    internal val spaceSystem: GuidedPathTransportSystem =
-        GuidedPathTransportSystem(this, network, zoneContentionRule, name = "${this.name}:Space")
+    /**
+     * The space layer's runtime. It owns zone occupancy; this subsystem owns nothing physical.
+     *
+     * A [GuidedPathSpace] and not a `GuidedPathTransportSystem`: the difference between the two is
+     * the passive protocol's own transport time, which this subsystem does not use and publishes its
+     * own version of. Composing the whole transport system, as this did before the space layer was
+     * lifted out, meant an active model instantiated a *transport system* it never used as one and
+     * carried a report row that no active run could ever fill.
+     */
+    internal val spaceSystem: GuidedPathSpace =
+        GuidedPathSpace(this, network, zoneContentionRule, name = "${this.name}:Space")
 
     val dispatcher: Dispatcher = Dispatcher(this, assignmentPolicy, name = "${this.name}:Dispatcher")
 

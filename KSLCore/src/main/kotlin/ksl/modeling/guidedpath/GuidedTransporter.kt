@@ -152,7 +152,7 @@ internal class JourneyWait(
 )
 
 class GuidedTransporter @JvmOverloads constructor(
-    val system: GuidedPathTransportSystem,
+    val system: GuidedPathSpace,
     initialPlacement: TransporterPlacement,
     velocity: RVariableIfc,
     val lengthInZones: Int = 1,

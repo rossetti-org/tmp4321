@@ -17,7 +17,7 @@
  */
 package ksl.modeling.guidedpath.internal
 
-import ksl.modeling.guidedpath.GuidedPathTransportSystem
+import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.IntersectionZone
 import ksl.modeling.guidedpath.LinkZone
@@ -56,7 +56,7 @@ class ZoneInvariantViolation(message: String) : IllegalStateException(message)
  * asks for it.
  */
 internal class ZoneInvariantChecker(
-    private val mySystem: GuidedPathTransportSystem
+    private val mySystem: GuidedPathSpace
 ) : ConditionalAction() {
 
     /**

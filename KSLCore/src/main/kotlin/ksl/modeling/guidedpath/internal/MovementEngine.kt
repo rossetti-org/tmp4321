@@ -19,7 +19,7 @@ package ksl.modeling.guidedpath.internal
 
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
-import ksl.modeling.guidedpath.GuidedPathTransportSystem
+import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.IntersectionZone
 import ksl.modeling.guidedpath.Link
@@ -47,7 +47,7 @@ import ksl.modeling.guidedpath.rules.ZoneReleaseTiming
  * blockage travels backwards along the line.
  */
 internal class MovementEngine(
-    private val mySystem: GuidedPathTransportSystem
+    private val mySystem: GuidedPathSpace
 ) {
 
     private val myNetwork: GuidedPathNetwork

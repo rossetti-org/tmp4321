@@ -193,7 +193,11 @@ class AgvShop(parent: ModelElement) : ProcessModel(parent, "AgvShop") {
 ```
 
 There is no `GuidedPathTransportSystem` in that model, and no pool. The
-`AgvSystem` builds and owns the space layer itself.
+`AgvSystem` builds and owns the space layer itself -- a
+`GuidedPathSpace`, which is the zones, the movement engine and the
+congestion statistics without either paradigm's protocol. Both
+subsystems run on one, and the statistics `AgvSystem` delegates are that
+layer's.
 
 ---
 

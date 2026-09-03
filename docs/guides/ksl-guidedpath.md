@@ -459,7 +459,8 @@ though it had worked.
 | `GuidedPathNetwork.Intersection` | A junction, and a `LocationIfc`. Station names are aliases for intersections. |
 | `Link` | A one-way, two-way, or spur aisle between two intersections, divided into zones. |
 | `Zone` | The atom of contended space: `LinkZone` along a link, `IntersectionZone` at a junction. Holds at most one transporter. |
-| `GuidedPathTransportSystem` | The `ModelElement` operating a network. Owns zone occupancy, resets between replications, reports congestion. |
+| `GuidedPathSpace` | The `ModelElement` operating a network. Owns zone occupancy, resets between replications, reports congestion. Knows nothing about how a vehicle is asked for, which is why the AGV subsystem runs on it too. |
+| `GuidedPathTransportSystem` | A `GuidedPathSpace` plus this paradigm's own transport time, request to set-down. What a passive model constructs. |
 | `GuidedTransporter` | A vehicle; a capacity-one `Resource`. |
 | `GuidedTransporterPoolWithQ` | A fleet asked for by the group, with the queue of entities waiting for one. |
 | `GuidedTransportRequest` | An entity's claim on a transporter. Inert after release. |
@@ -468,6 +469,16 @@ though it had worked.
 | `TransporterPlacement` | Where a transporter starts: `At(location)` or `OnZone(zoneName)`. Re-applied every replication. |
 | `GuidedPathDeadlockException` | A circular wait, carrying a `DeadlockReport` naming every participant. |
 | `IdleTransporterObstruction` | A transporter blocked behind one that will never move. Warned and counted, not thrown. |
+
+The first two are one object in a passive model: a transport system
+**is** a space. The distinction matters only when you are writing
+something that is neither paradigm -- a rail network, a stacker crane,
+an AS/RS aisle -- in which case build a `GuidedPathSpace`, put
+`GuidedTransporter`s on it, and drive them with `sendTo` and an arrival
+listener. You get zone exclusivity, blocking, deadlock detection, the
+invariant harness, replication reset and every congestion statistic, and
+you write no protocol at all. `SpaceLayerTest` does exactly that in
+twenty lines and is the worked example.
 
 The five replaceable policies: `RouteSelectionRuleIfc` (on the network),
 `ZoneContentionRuleIfc` (on the system), `ZoneControlRuleIfc` (per

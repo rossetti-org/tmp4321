@@ -17,7 +17,7 @@
  */
 package ksl.modeling.guidedpath.internal
 
-import ksl.modeling.guidedpath.GuidedPathTransportSystem
+import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.LinkZone
 import ksl.modeling.guidedpath.TransporterState
@@ -46,7 +46,7 @@ import java.util.IdentityHashMap
  *
  * @param system the runtime whose fleet is being examined
  */
-internal class DeadlockDetector(private val system: GuidedPathTransportSystem) {
+internal class DeadlockDetector(private val system: GuidedPathSpace) {
 
     /**
      * The transporters standing between this one and where it wants to go.
