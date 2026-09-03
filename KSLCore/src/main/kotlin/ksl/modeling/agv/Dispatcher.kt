@@ -192,11 +192,33 @@ open class Dispatcher @JvmOverloads constructor(
         var numReassignments: Int = 0
             internal set
 
-        /** Set by the carrying vehicle so the load's result can report what the journey cost. */
+        /**
+         * Set by the carrying vehicle so the load's result, and the guide path's per-carry
+         * statistics, can report what the journey cost.
+         *
+         * The two move times are the **travel legs only**: the leg that ended at this task's pickup
+         * and the leg that ended at its set-down, each taken before the loading or unloading delay
+         * that follows it. That is what the passive subsystem means by the same two names, and the
+         * point of recording them here is that the two paradigms then report the same quantity.
+         * `waitForArrival` and `transportTime` on the result are the wider intervals that include
+         * those delays, and neither is derivable from the other.
+         */
         internal var carriedBy: AgvVehicle? = null
         internal var blockedAtPickup: Double = 0.0
         internal var loadedRouteLength: Double = 0.0
         internal var blockedWhileLoaded: Double = 0.0
+        internal var emptyMoveTime: Double = 0.0
+        internal var loadedMoveTime: Double = 0.0
+        internal var loadedZonesTraversed: Int = 0
+
+        /**
+         * How much of the journey the vehicle spent unable to claim the space ahead.
+         *
+         * Computed here rather than at each of the two places that want it, so that the load's
+         * result and the guide path's statistic cannot come to disagree about what blocked means.
+         */
+        internal val blockedTime: Double
+            get() = blockedAtPickup + blockedWhileLoaded
     }
 
     /** Something a vehicle does for itself. Nothing is suspended on it. */

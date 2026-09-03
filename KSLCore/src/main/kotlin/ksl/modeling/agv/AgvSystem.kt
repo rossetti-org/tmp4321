@@ -177,6 +177,26 @@ open class AgvSystem @JvmOverloads constructor(
         myTransportTime.value = value
     }
 
+    /**
+     * Reports what one delivered load cost the guide path underneath, so that the five per-carry
+     * figures below are figures about this fleet rather than about nobody.
+     *
+     * They are registered by the space layer and were, until this was wired, fed only by the passive
+     * subsystem's `transportBy` -- which meant an active model published five responses that were
+     * permanently empty while their documentation described what they contained. The layer is shared
+     * and the quantities are properties of the traversal, so the fix is for both paradigms to feed
+     * it rather than for this one to keep its own copies.
+     */
+    internal fun recordCarry(task: Dispatcher.TransportTask) {
+        spaceSystem.collectCarry(
+            emptyMoveTime = task.emptyMoveTime,
+            loadedMoveTime = task.loadedMoveTime,
+            blockedTime = task.blockedTime,
+            zonesTraversed = task.loadedZonesTraversed,
+            routeLength = task.loadedRouteLength
+        )
+    }
+
     // ---- horizon diagnostics -------------------------------------------------------------------
     //
     // `Response`, not `Counter`, and the distinction is semantic rather than a workaround.
@@ -203,6 +223,13 @@ open class AgvSystem @JvmOverloads constructor(
     // the same questions are worth asking of a fleet whichever way it is dispatched, and an active
     // model that could not answer "how much of the time was somebody blocked" would be the poorer
     // of the two for a reason that is purely an accident of ownership.
+    //
+    // The ten fleet-level figures need nothing further: the movement engine feeds them whichever
+    // paradigm is steering, because it is the engine that moves the vehicle. The five **per-carry**
+    // figures did, and did not have it -- they are observed once per delivered load, and only the
+    // passive subsystem was observing. `recordCarry` above is the missing half, and
+    // `PerCarryStatisticsTest` holds the two paradigms' answers against each other so that a future
+    // change cannot quietly empty them again.
 
     /** How many zones the fleet entered, which is very nearly the engine's event count. */
     val numZoneTraversals: CounterCIfc get() = spaceSystem.numZoneTraversals
@@ -629,6 +656,10 @@ open class AgvSystem @JvmOverloads constructor(
                     // beginTravelTo commands the body and returns whether a journey is under way.
                     // `this@VehicleAgent` is the waiter: the AGENT sits in the space layer's
                     // movement queue, never the load.
+                    // Taken before the leg rather than after, because the unloading delay that
+                    // follows an arrival is not travelling and does not belong to a move time. The
+                    // passive subsystem draws its loaded interval at the same two boundaries.
+                    val legStarted = time
                     val travelQ = vehicle.beginTravelTo(stop.location, movingStateFor(stop), this@VehicleAgent)
                     // Taken while the journey is still on the books. The route is cleared on
                     // arrival, so asking for it after the hold returns nothing and the leg appears
@@ -646,6 +677,13 @@ open class AgvSystem @JvmOverloads constructor(
                     when (val act = stop.action) {
                         is StopAction.PickUp -> {
                             act.task.blockedAtPickup = vehicle.body.cumulativeBlockedTime - blockedAtStart
+                            // From the moment a vehicle was committed to this load, not from the
+                            // moment it began the leg. The two differ by however long the vehicle
+                            // took to disengage from what it was doing, and the passive subsystem
+                            // counts that: its clock starts when the transporter is allocated. The
+                            // row is shared, so it has to mean one thing -- and measured this way
+                            // the two paradigms agree to the digit on the same shop.
+                            act.task.emptyMoveTime = time - act.task.assignedAt
                             if (act.task.loadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.loadingDelay,                // SUSPENDS
                                     suspensionName = "${vehicle.name}:loading")
@@ -659,6 +697,8 @@ open class AgvSystem @JvmOverloads constructor(
                         }
                         is StopAction.SetDown -> {
                             act.task.loadedRouteLength = route?.totalLength ?: 0.0
+                            act.task.loadedZonesTraversed = route?.zonesTraversed ?: 0
+                            act.task.loadedMoveTime = time - legStarted
                             if (act.task.unLoadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.unLoadingDelay,              // SUSPENDS
                                     suspensionName = "${vehicle.name}:unloading")

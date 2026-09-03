@@ -465,14 +465,42 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     val routeLengthPerTransport: ResponseCIfc
         get() = myRouteLength
 
+    /**
+     * Records what one completed carry cost the guide path, whichever paradigm drove it.
+     *
+     * Deliberately takes five numbers rather than a `GuidedTransportResult`. These five are
+     * properties of the *traversal* -- how long the vehicle ran empty, how long it ran loaded, how
+     * much of that it spent unable to claim the space ahead, and how far over how many zones -- and
+     * the traversal is the one thing both paradigms genuinely share. Taking the passive protocol's
+     * result type here would make the active subsystem depend on a type belonging to the paradigm it
+     * is an alternative to, in order to report a figure about the layer underneath both. So the seam
+     * is paradigm-neutral and each caller assembles its own numbers.
+     *
+     * `transportTime` is **not** among them, and that is not an oversight. The two paradigms mean
+     * different things by it -- request to set-down on one side, aboard to set-down on the other --
+     * so each publishes its own, and one row that meant two things would be worse than two rows.
+     */
+    internal fun collectCarry(
+        emptyMoveTime: Double,
+        loadedMoveTime: Double,
+        blockedTime: Double,
+        zonesTraversed: Int,
+        routeLength: Double
+    ) {
+        myEmptyMoveTime.value = emptyMoveTime
+        myLoadedMoveTime.value = loadedMoveTime
+        myTransportBlockedTime.value = blockedTime
+        myZonesTraversed.value = zonesTraversed.toDouble()
+        myRouteLength.value = routeLength
+    }
+
     /** Records a completed transport. Called by the process verb that finishes one. */
     internal fun collectTransportResult(result: GuidedTransportResult) {
         myTransportTime.value = result.totalTime
-        myEmptyMoveTime.value = result.emptyMoveTime
-        myLoadedMoveTime.value = result.loadedMoveTime
-        myTransportBlockedTime.value = result.blockedTime
-        myZonesTraversed.value = result.zonesTraversed.toDouble()
-        myRouteLength.value = result.routeLength
+        collectCarry(
+            result.emptyMoveTime, result.loadedMoveTime, result.blockedTime,
+            result.zonesTraversed, result.routeLength
+        )
     }
 
     // ---- animation -----------------------------------------------------------------------------

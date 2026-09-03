@@ -232,6 +232,33 @@ there is no instant at which a decision was made to measure from. Here a
 dispatcher decides at one instant and a vehicle arrives at another, and
 the two sum to exactly the task's time in the dispatcher's queue.
 
+For the fleet rather than one load, the same five figures the passive
+subsystem publishes are on `AgvSystem`, delegated to the guide path
+underneath because that is the layer both paradigms run on:
+
+```kotlin
+val empty = agv.emptyMoveTime.withinReplicationStatistic.weightedAverage
+val loaded = agv.loadedMoveTime.withinReplicationStatistic.weightedAverage
+val stuck = agv.transportBlockedTime.withinReplicationStatistic.weightedAverage
+val zones = agv.zonesTraversedPerTransport.withinReplicationStatistic.weightedAverage
+val far = agv.routeLengthPerTransport.withinReplicationStatistic.weightedAverage
+```
+
+Note where the boundaries fall, because they are not the same as the
+result's. The two move times are **travel only**: `emptyMoveTime` runs
+from the instant a vehicle was committed to the load until it reaches
+it, and `loadedMoveTime` from there until it is set down -- each
+stopping short of the loading or unloading delay that follows.
+`waitForArrival` and `transportTime` on the result are the wider
+intervals that include those delays, which is why neither pair is
+derivable from the other. Measured this way the two paradigms report the
+same numbers for the same shop, which `PerCarryStatisticsTest` holds
+them to.
+
+One consequence worth knowing: after a re-tasking, `emptyMoveTime` runs
+from the **last** assignment, not the first. The abandoned approach is
+not empty travel on this load's behalf, and `numReassignments` on the
+result is what says it happened.
 ### …change the dispatching rule?
 
 ```kotlin
