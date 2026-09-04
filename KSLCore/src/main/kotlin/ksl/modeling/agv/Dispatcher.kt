@@ -569,6 +569,21 @@ open class Dispatcher @JvmOverloads constructor(
     internal fun applyProposals(proposals: List<AssignmentProposal>) {
         for (p in proposals) {
             if (!myAvailable.contains(p.vehicle)) {
+                // Two quite different causes, and a modeller should not be told the wrong one. The
+                // ordinary case is a policy naming a vehicle it was never offered, which is a
+                // defect in the policy. The other is a policy that consumed simulated time -- an
+                // auction deadline, a batching window -- during which a vehicle it *was* offered
+                // stopped. That is nobody's mistake, and the message says so.
+                if (p.vehicle.isOutOfService) {
+                    throw AgvDispatchException(
+                        "Policy ($assignmentPolicy) proposed vehicle (${p.vehicle.name}) for task " +
+                                "(${p.task.name}), but that vehicle stopped while the policy was " +
+                                "deciding and is out of service. A policy that takes simulated time " +
+                                "to decide -- an auction deadline, a batching window -- must re-read " +
+                                "the available set before it proposes, because the fleet can change " +
+                                "under it. AgvVehicle.isOutOfService is the test."
+                    )
+                }
                 throw AgvDispatchException(
                     "Policy ($assignmentPolicy) proposed vehicle (${p.vehicle.name}) for task " +
                             "(${p.task.name}), but that vehicle has not declared itself available. " +
