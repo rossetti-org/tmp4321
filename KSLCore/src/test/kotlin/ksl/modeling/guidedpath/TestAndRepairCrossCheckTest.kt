@@ -6,6 +6,7 @@ import ksl.modeling.guidedpath.rules.StartOfZoneControl
 import ksl.simulation.Model
 import ksl.utilities.random.rvariable.ConstantRV
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -112,6 +113,7 @@ import kotlin.test.assertTrue
  *  rather than a claim that it is wrong, and it is the reason this one quantity is held where it
  *  stands instead of being chased on this side.
  */
+@Tag("slow")
 class TestAndRepairCrossCheckTest {
 
     private companion object {

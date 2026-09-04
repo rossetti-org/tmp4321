@@ -825,6 +825,46 @@ broke down between tours held no assignment and was therefore counted
 *idle*, so a reader of `Agv:NumVehiclesIdle` saw capacity that was not
 there.
 
+### …send a vehicle somewhere without carrying anything?
+
+Post an errand. It goes on the same board as transport requests and is
+decided by the same policy, so it competes with them:
+
+```kotlin
+val errand = agv.dispatcher.postService("YardSpur")
+```
+
+**Any available vehicle may take it** — that is what makes it an errand
+rather than something else. Charging is *not* one, and neither is repair: no
+other vehicle can charge or repair this one on its behalf, which is why
+those are a `Disposition` and an `InterruptionPolicyIfc` respectively. If
+only one particular vehicle can do the job, it does not belong here.
+
+**Nothing is suspended on it**, and three things follow:
+
+- It can be cancelled, unlike a transport request — `dispatcher.cancel(errand)`.
+  "You were going to park, but work has arrived" is safe, because cancelling
+  strands nobody.
+- The vehicle stays re-taskable for the *whole* errand, not just until it
+  arrives. There is no load to take possession of, so nothing makes the
+  assignment irrevocable.
+- It contributes nothing to `Agv:Dispatcher:WaitForAssignment`, which
+  decomposes what a *load* waited for.
+
+**It does count** towards `NumTasksPosted`, `NumTasksCompleted`, and the
+carrying vehicle's own `NumTasksCompleted` — so an errand is a duty cycle
+like any other, which is what `LeastUsedVehiclePolicy` and a
+`TASKS_COMPLETED` failure model should both see.
+
+**One thing to weigh before using it.** An errand shares the dispatcher's
+waiting line. `Agv:Dispatcher:TaskQ:TimeInQ` is documented as the wait for
+transport, and that holds exactly while every task in the queue is a
+transport request. Post errands and the row becomes the wait for *any* work
+the fleet was asked to do. That is the honest reading of one queue serving
+one fleet — the alternative, a second queue, would give a policy two boards
+to allocate over — but it is a change to what a headline row means, so it is
+worth being deliberate about.
+
 ### …abandon an outstanding request?
 
 ```kotlin
@@ -879,7 +919,7 @@ not.
 | `Dispatcher` | Decides who goes where; owns the `TaskQ`, which is the only queue this subsystem reports. |
 | `Dispatcher.Task` | Something a vehicle may be asked to do. A `QObject`, so the *task* carries the wait. |
 | `Dispatcher.TransportTask` | A load to collect and deliver. What `requestAgvTransport` returns. |
-| `Dispatcher.ServiceTask` | Something a vehicle does for itself, by `ServiceKind` — currently `Reposition`. |
+| `Dispatcher.ServiceTask` | A self-directed errand, by `ServiceKind` — currently `Reposition`. Posted with `postService`; cancellable. |
 | `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
 | `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
 | `Interruption` | A vehicle has stopped: `Failed` or `OutOfCharge`, with where, what it holds, and who is stuck behind it. |

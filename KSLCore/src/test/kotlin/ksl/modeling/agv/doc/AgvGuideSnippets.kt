@@ -290,6 +290,13 @@ private object AgvGuideSnippets {
         agv.attachInterruptionListener(ReconsiderOnInterruption(agv.dispatcher))
     }
 
+    // -- §4 An errand -----------------------------------------------------
+
+    fun postAnErrand(agv: AgvSystem) {
+        val errand = agv.dispatcher.postService("YardSpur")
+        agv.dispatcher.cancel(errand)
+    }
+
     // -- §6 A sweep that must survive a deadlock -------------------------
 
     fun sweep(record: (Int, Double) -> Unit, recordInfeasible: (Int, Any) -> Unit) {

@@ -6,6 +6,7 @@ import ksl.examples.book.chapter7.PaintingFlowLineWithAgvs
 import ksl.examples.book.chapter7.PaintingFlowLineWithAgvs.PendingRequestTest
 import ksl.simulation.Model
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.slf4j.LoggerFactory
 import kotlin.math.abs
@@ -135,6 +136,7 @@ import kotlin.test.assertTrue
  *  this model already does. The count is reported below rather than suppressed, because it is a
  *  true reading of a real cost: those vehicles are idle, in the way, and cannot leave.
  */
+@Tag("slow")
 class PaintingFlowLineCrossCheckTest {
 
     private companion object {

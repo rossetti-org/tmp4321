@@ -144,8 +144,17 @@ open class Dispatcher @JvmOverloads constructor(
         internal fun transitionTo(next: TaskState) {
             val legal = when (state) {
                 TaskState.POSTED -> next == TaskState.ASSIGNED || next == TaskState.CANCELLED
+                // ASSIGNED -> COMPLETED is legal only for a task with nothing waiting on it.
+                // IN_PROGRESS means *the load is aboard*, which is also the instant the assignment
+                // stops being revocable (`A4`). A task with no load never has that instant, so
+                // requiring it to pass through IN_PROGRESS would demand a transition that can never
+                // legitimately happen -- and did: a service task that ran to completion raised here.
+                // The consequence is right as well as necessary: a vehicle on a self-directed errand
+                // stays re-taskable until the errand is done, which is exactly what `cancel` promises.
                 TaskState.ASSIGNED ->
-                    next == TaskState.IN_PROGRESS || next == TaskState.POSTED || next == TaskState.CANCELLED
+                    next == TaskState.IN_PROGRESS || next == TaskState.POSTED ||
+                            next == TaskState.CANCELLED ||
+                            (next == TaskState.COMPLETED && waitingEntity == null)
                 TaskState.IN_PROGRESS -> next == TaskState.COMPLETED
                 TaskState.COMPLETED, TaskState.CANCELLED -> false
             }
@@ -315,7 +324,53 @@ open class Dispatcher @JvmOverloads constructor(
         return task
     }
 
-    internal fun postService(destination: String, kind: ServiceKind, priority: Int): ServiceTask {
+    /**
+     * Asks the fleet to send some vehicle somewhere, for its own reasons rather than to carry
+     * anything.
+     *
+     * The errand goes on the same board as transport requests and is decided by the same policy, so
+     * it competes with them and is subject to the same selection rule. That is the point: "go and
+     * fetch an empty pallet from the yard" is work the fleet does, and a model in which it did not
+     * compete for vehicles would understate what the fleet is being asked to do.
+     *
+     * **Any available vehicle may take it**, which is what distinguishes an errand from the things
+     * that look like errands and are not. Charging is *not* one: no other vehicle can charge this
+     * one, so it is a [ksl.modeling.agv.policies.Disposition]. Repair is not one either, for the
+     * same reason — it is an [InterruptionPolicyIfc]. If only one particular vehicle can do it, it
+     * does not belong here.
+     *
+     * **Nothing is suspended on it**, and three consequences follow from that alone:
+     *
+     * - It may be [cancel]led, unlike a transport request. "You were going to park, but work has
+     *   arrived" is a real thing to want and is safe, because cancelling strands nobody.
+     * - The vehicle stays re-taskable for the whole errand, not merely until it arrives. There is no
+     *   load to take possession of, so nothing makes the assignment irrevocable.
+     * - It contributes nothing to `waitForAssignment`, which decomposes what a *load* waited for.
+     *
+     * **What it does count towards.** The dispatcher's `NumTasksPosted` and `NumTasksCompleted`, and
+     * the carrying vehicle's own `NumTasksCompleted` — so an errand is a duty cycle like any other,
+     * which is what a rule such as `LeastUsedVehiclePolicy` and a `FailureBasis.TASKS_COMPLETED`
+     * failure model should both see.
+     *
+     * **It shares the reported waiting line, and that is worth knowing before you use it.** `A11`
+     * says `TaskQ`'s time in queue *is* the wait for transport, which holds exactly while every task
+     * in it is a transport request. Post errands and the row becomes the wait for *any* work the
+     * fleet was asked to do. That is the honest reading of one queue serving one fleet, and the
+     * alternative — a second queue — would give a policy two boards to allocate over and this
+     * subsystem two waiting lines to explain. `NumTasksPosted` against the deliveries a model counts
+     * for itself is how to see the mix.
+     *
+     * @param destination where the vehicle is to end up. Checked against the network now.
+     * @param kind what the errand is. `ServiceKind.Reposition` is the one implemented.
+     * @param priority the task's queue priority, for a ranked selection rule.
+     * @return the posted task, which may be passed to [cancel]
+     */
+    @JvmOverloads
+    fun postService(
+        destination: String,
+        kind: ServiceKind = ServiceKind.Reposition,
+        priority: Int = 1
+    ): ServiceTask {
         system.network.requireLocation(destination)
         val task = ServiceTask(destination, kind)
         task.priority = priority
@@ -494,6 +549,13 @@ open class Dispatcher @JvmOverloads constructor(
         if (assignment.task.state != TaskState.COMPLETED) {
             assignment.task.transitionTo(TaskState.COMPLETED)
         }
+        // A transport task left the queue at pickup, which is what makes the queue's time in queue
+        // the load's wait. A task with no load has no pickup, so this is where it leaves -- and it
+        // has to leave somewhere, or a completed errand would sit in the reported waiting line for
+        // the rest of the replication, inflating its length and never recording a wait at all.
+        if (myTaskQ.contains(assignment.task)) {
+            myTaskQ.remove(assignment.task)
+        }
         myNumTasksCompleted.increment()
     }
 
@@ -601,7 +663,12 @@ open class Dispatcher @JvmOverloads constructor(
             // The task STAYS in the queue: it is dequeued at pickup, not here.
             p.task.transitionTo(TaskState.ASSIGNED)
             p.task.assignedAt = time
-            myWaitForAssignment.value = time - p.task.timeEnteredQueue
+            // Only a task with a load aboard-to-be. This response decomposes what a *load* waited
+            // for, and a self-directed errand has nobody waiting on it; letting one contribute
+            // would quietly redefine a headline figure the moment a model posted its first errand.
+            if (p.task is TransportTask) {
+                myWaitForAssignment.value = time - p.task.timeEnteredQueue
+            }
             myNumAssignmentsMade.increment()
             system.emitAssignment(a)
             withdraw(p.vehicle)
