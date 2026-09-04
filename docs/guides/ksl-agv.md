@@ -49,8 +49,8 @@ but because there is nowhere to put them:
   hold an opinion.
 - **Re-tasking in flight.** Take a task back from a vehicle three-quarters
   of the way to a far pickup when a nearer one appears. The movement
-  machinery has always been able to turn a vehicle round; what was missing
-  was an object whose business it would be to decide.
+  machinery turns a vehicle round; the dispatcher is the object whose
+  business it is to decide when that should happen.
 
 **When not to use it.** If your rule is "send the nearest free cart" and
 you are content for it to be evaluated the moment an entity asks, the
@@ -60,8 +60,11 @@ the result that makes them two models of one world rather than two worlds
 (`ksl.examples.general.agv.TwoParadigmsExample`).
 
 **Not modelled in this version.** Batteries and charging, breakdowns and
-repair, and multi-load vehicles. Each has a named seam —
-`ServiceKind`, `AgvVehicle.loadCapacity` — and none is implemented.
+repair, and multi-load vehicles. `ServiceKind` is the named seam for the
+first two. A vehicle carries one load at a time, and
+`AgvVehicle.loadCapacity` above one is refused at construction rather
+than accepted and ignored — model the consolidation upstream, or use a
+larger fleet.
 Everything the physical layer does not model
 ([`ksl-guidedpath` §1](ksl-guidedpath.md#1-what-this-package-is-for):
 acceleration, turn penalties) is equally absent here.
@@ -241,33 +244,41 @@ subsystem publishes are on `AgvSystem`, delegated to the guide path
 underneath because that is the layer both paradigms run on:
 
 ```kotlin
-val empty = agv.emptyMoveTime.withinReplicationStatistic.weightedAverage
-val loaded = agv.loadedMoveTime.withinReplicationStatistic.weightedAverage
+val approach = agv.approachTime.withinReplicationStatistic.weightedAverage
+val ride = agv.rideTime.withinReplicationStatistic.weightedAverage
 val stuck = agv.transportBlockedTime.withinReplicationStatistic.weightedAverage
 val zones = agv.zonesTraversedPerTransport.withinReplicationStatistic.weightedAverage
 val far = agv.routeLengthPerTransport.withinReplicationStatistic.weightedAverage
 ```
 
 Note where the boundaries fall, because they are not the same as the
-result's. The two move times are **travel only**: `emptyMoveTime` runs
-from the instant a vehicle was committed to the load until it reaches
-it, and `loadedMoveTime` from there until it is set down -- each
-stopping short of the loading or unloading delay that follows.
-`waitForArrival` and `timeAboard` on the result are the wider
+result's. `approachTime` runs from the instant a vehicle was committed
+to the load until it reaches it, and `rideTime` from there until it is
+set down -- each stopping short of the loading or unloading delay that
+follows. `waitForArrival` and `timeAboard` on the result are the wider
 intervals that include those delays, which is why neither pair is
 derivable from the other. Measured this way the two paradigms report the
 same numbers for the same shop, which `PerCarryStatisticsTest` holds
 them to.
 
-One consequence worth knowing: after a re-tasking, `emptyMoveTime` runs
+These two are **protocol intervals, not vehicle states**, and the
+distinction will matter as soon as a vehicle can carry more than one
+load. An approach includes time the vehicle spent blocked, and time
+disengaging from a repositioning move, neither of which is moving empty.
+For the state question, ask the vehicle:
+`Cart:Body:FracTimeMovingEmpty` is the fraction of its time moving with
+no load, and `FracTimeTransporting` the fraction moving with one. Those
+are the figures that stay true whatever a vehicle's capacity.
+
+One consequence worth knowing: after a re-tasking, `approachTime` runs
 from the **last** assignment, not the first. The abandoned approach is
 not empty travel on this load's behalf, and `numReassignments` on the
 result is what says it happened.
+
 ### …compare a passive model with an active one?
 
 Put both in one model and the reports sit side by side, but three
-differences in how rows are named will meet you. Two are informative and
-one was a trap that has been removed.
+differences in how rows are named will meet you.
 
 
 | Passive row | Active row | Why |
@@ -303,10 +314,9 @@ val total = result.totalTime
 ```
 
 The active row that measures aboard-to-set-down is called `TimeAboard`
-rather than `TransportTime` for exactly this reason. Both systems used
-to call it `TransportTime`, at the same depth in one report, meaning
-different intervals — which a study lining rows up by name would have
-compared, getting a wrong answer rather than an obviously missing one.
+rather than `TransportTime` for exactly this reason. The two subsystems'
+own row names are kept disjoint, so a study that lines rows up by name
+never compares two different intervals.
 
 One last pair worth reading carefully: an active model reports both
 `Agv:Space:NumTransportersIdle` and `Agv:NumVehiclesIdle`, and they

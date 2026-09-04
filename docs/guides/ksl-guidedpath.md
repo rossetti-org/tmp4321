@@ -218,6 +218,8 @@ transporter that now belongs to someone else.
 
 ```kotlin
 val result = guidedTransport(carts, destination = "ExitStation")
+val waited = result.approachTime   // committed until aboard, less the loading delay
+val rode = result.rideTime         // aboard until set down, less the unloading delay
 val lost = result.blockedTime      // time unable to claim the space ahead
 val far = result.routeLength
 val zones = result.zonesTraversed
@@ -225,8 +227,17 @@ val zones = result.zonesTraversed
 
 `blockedTime` is the quantity a free-path model cannot produce at all.
 The same figures are also accumulated into system-level responses
-(`transportBlockedTime`, `routeLengthPerTransport`, and the rest), so you
-get the fleet summary without writing an observer.
+(`transportBlockedTime`, `routeLengthPerTransport`, and the rest), so
+you get the fleet summary without writing an observer.
+
+`approachTime` and `rideTime` are **protocol intervals**: they say how
+long this load waited for its ride and how long the ride took. They are
+not statements about the cart's state, because an approach also includes
+time the cart spent blocked and time disengaging from a return to its
+home base, neither of which is moving empty. If what you want is how
+much of a cart's *motion* was wasted running empty, that is a property
+of the cart and not of a journey: read `fracTimeMovingEmpty` and
+`fracTimeTransporting` on the transporter.
 
 ### …decide which cart gets sent?
 
@@ -397,11 +408,10 @@ system.drivingHoldQ          // driving one -- always empty under this paradigm;
 **None of the three reports anything.** A hold queue is how a suspended
 entity is found again; it is not a waiting line, and letting it double as
 the statistic conflates a mechanism with a measurement. `RidingHoldQ`'s
-time in queue would be the mean length of a loaded move and its number in
-queue a count of moving carts — read by anybody scanning a report as a
-line of entities waiting for something. Both quantities are already
-reported properly by `emptyMoveTime` and `loadedMoveTime`, which is what to
-use. `Conveyor` makes the same call for the same three-way split.
+time in queue would be the mean length of a ride and its number in queue
+a count of moving carts — read by anybody scanning a report as a line of
+entities waiting for something. Both quantities are already reported
+properly by `approachTime` and `rideTime`, which is what to use. `Conveyor` makes the same call for the same three-way split.
 
 ```kotlin
 system.statisticalReportingForHoldQueues(true)   // for debugging a model that stopped moving

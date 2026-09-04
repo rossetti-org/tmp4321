@@ -338,8 +338,8 @@ class QueueingLimitsTest {
             assertAgrees("passive wait at rho=$rho", analytic, passiveWait)
 
             // Deterministic, so it is asserted as an identity rather than through an interval.
-            val empty = passive.system.emptyMoveTime.acrossReplicationStatistic.average
-            val loaded = passive.system.loadedMoveTime.acrossReplicationStatistic.average
+            val empty = passive.system.approachTime.acrossReplicationStatistic.average
+            val loaded = passive.system.rideTime.acrossReplicationStatistic.average
             assertEquals(
                 D, empty + loaded, 1.0e-9,
                 "passive service at rho=$rho is not deterministic: empty $empty + loaded $loaded"

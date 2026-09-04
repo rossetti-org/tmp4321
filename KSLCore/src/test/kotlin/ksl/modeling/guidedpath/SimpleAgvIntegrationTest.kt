@@ -179,10 +179,10 @@ class SimpleAgvIntegrationTest {
                     "sent, never arrived, or was never given back"
         )
         for (r in shop.results) {
-            assertTrue(r.loadedMoveTime > 0.0, "a part carried from I1 to I5 must spend time loaded")
+            assertTrue(r.rideTime > 0.0, "a part carried from I1 to I5 must spend time loaded")
             assertTrue(r.zonesTraversed > 0, "the loaded leg crosses zones")
             assertTrue(
-                r.totalTime >= r.emptyMoveTime + r.loadedMoveTime,
+                r.totalTime >= r.approachTime + r.rideTime,
                 "the journey cannot be shorter than the moves it is made of: $r"
             )
         }
@@ -196,7 +196,7 @@ class SimpleAgvIntegrationTest {
         val shop = run(numParts = 1)
         val r = shop.results.single()
         assertEquals(204.0, r.routeLength, 1e-9)
-        assertEquals(20.4, r.loadedMoveTime, 1e-9)
+        assertEquals(20.4, r.rideTime, 1e-9)
         assertEquals(0.0, r.blockedTime, 1e-9, "with one part there is nothing to block against")
     }
 

@@ -50,9 +50,8 @@ open class AgvSystem @JvmOverloads constructor(
      *
      * A [GuidedPathSpace] and not a `GuidedPathTransportSystem`: the difference between the two is
      * the passive protocol's own transport time, which this subsystem does not use and publishes its
-     * own version of. Composing the whole transport system, as this did before the space layer was
-     * lifted out, meant an active model instantiated a *transport system* it never used as one and
-     * carried a report row that no active run could ever fill.
+     * own version of. Composing the space alone keeps an active model free of a report row that no
+     * active run could fill.
      */
     internal val spaceSystem: GuidedPathSpace =
         GuidedPathSpace(this, network, zoneContentionRule, name = "${this.name}:Space")
@@ -193,11 +192,9 @@ open class AgvSystem @JvmOverloads constructor(
      *
      * **Named for the interval and not for the journey**, because the passive subsystem reports a
      * `TransportTime` of its own and means something else by it: request to set-down, the whole
-     * story including the wait for a cart. This one is a strict sub-interval of that. Two rows in one
-     * model wearing the same name while measuring different things is a trap for exactly the study
-     * most likely to meet both -- a paradigm comparison, which lines rows up by name -- and it would
-     * give a wrong answer rather than an obviously missing one. `StatisticNamingTest` holds the two
-     * subsystems' own row names disjoint so this cannot recur.
+     * story including the wait for a cart. This one is a strict sub-interval of that. The two
+     * subsystems' own row names are kept disjoint, so a study that contains both -- a paradigm
+     * comparison, which lines rows up by name -- compares like with like.
      */
     private val myTimeAboard = Response(this, "${this.name}:TimeAboard")
     val timeAboard: ResponseCIfc get() = myTimeAboard
@@ -210,16 +207,14 @@ open class AgvSystem @JvmOverloads constructor(
      * Reports what one delivered load cost the guide path underneath, so that the five per-carry
      * figures below are figures about this fleet rather than about nobody.
      *
-     * They are registered by the space layer and were, until this was wired, fed only by the passive
-     * subsystem's `transportBy` -- which meant an active model published five responses that were
-     * permanently empty while their documentation described what they contained. The layer is shared
-     * and the quantities are properties of the traversal, so the fix is for both paradigms to feed
-     * it rather than for this one to keep its own copies.
+     * They are registered by the space layer, which both paradigms compose. The quantities are
+     * properties of the traversal rather than of either protocol, so both paradigms feed the same
+     * responses instead of each keeping a copy.
      */
     internal fun recordCarry(task: Dispatcher.TransportTask) {
         spaceSystem.collectCarry(
-            emptyMoveTime = task.emptyMoveTime,
-            loadedMoveTime = task.loadedMoveTime,
+            approachTime = task.approachTime,
+            rideTime = task.rideTime,
             blockedTime = task.blockedTime,
             zonesTraversed = task.loadedZonesTraversed,
             routeLength = task.loadedRouteLength
@@ -286,10 +281,10 @@ open class AgvSystem @JvmOverloads constructor(
     val zoneUtilization: TWResponseCIfc get() = spaceSystem.zoneUtilization
 
     /** Per completed carry: time spent travelling out empty to collect the load. */
-    val emptyMoveTime: ResponseCIfc get() = spaceSystem.emptyMoveTime
+    val approachTime: ResponseCIfc get() = spaceSystem.approachTime
 
     /** Per completed carry: time spent travelling with the load aboard. */
-    val loadedMoveTime: ResponseCIfc get() = spaceSystem.loadedMoveTime
+    val rideTime: ResponseCIfc get() = spaceSystem.rideTime
 
     /** Per completed carry: time unable to claim the space ahead. */
     val transportBlockedTime: ResponseCIfc get() = spaceSystem.transportBlockedTime
@@ -712,7 +707,7 @@ open class AgvSystem @JvmOverloads constructor(
                             // counts that: its clock starts when the transporter is allocated. The
                             // row is shared, so it has to mean one thing -- and measured this way
                             // the two paradigms agree to the digit on the same shop.
-                            act.task.emptyMoveTime = time - act.task.assignedAt
+                            act.task.approachTime = time - act.task.assignedAt
                             if (act.task.loadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.loadingDelay,                // SUSPENDS
                                     suspensionName = "${vehicle.name}:loading")
@@ -727,7 +722,7 @@ open class AgvSystem @JvmOverloads constructor(
                         is StopAction.SetDown -> {
                             act.task.loadedRouteLength = route?.totalLength ?: 0.0
                             act.task.loadedZonesTraversed = route?.zonesTraversed ?: 0
-                            act.task.loadedMoveTime = time - legStarted
+                            act.task.rideTime = time - legStarted
                             if (act.task.unLoadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.unLoadingDelay,              // SUSPENDS
                                     suspensionName = "${vehicle.name}:unloading")

@@ -29,22 +29,24 @@ import ksl.modeling.entity.ProcessModel
  * produce at all, and what says whether a fleet is getting in its own way.
  *
  * @param totalTime the whole journey, from the request to arrival at the destination
- * @param emptyMoveTime time the transporter spent coming to collect the entity
- * @param loadedMoveTime time spent carrying the entity
+ * @param approachTime from the transporter being committed until the entity is aboard, excluding
+ *   the loading delay. A protocol interval: whether the transporter was empty during it is a
+ *   separate question, and one the transporter's own `fracTimeMovingEmpty` answers.
+ * @param rideTime from the entity being aboard until it is set down, excluding the unloading delay
  * @param blockedTime time within the journey spent unable to claim the space ahead
  * @param zonesTraversed how many zones the transporter crossed while carrying the entity
  * @param routeLength the distance covered while carrying the entity
  */
 data class GuidedTransportResult(
     val totalTime: Double,
-    val emptyMoveTime: Double,
-    val loadedMoveTime: Double,
+    val approachTime: Double,
+    val rideTime: Double,
     val blockedTime: Double,
     val zonesTraversed: Int,
     val routeLength: Double
 ) {
     override fun toString(): String =
-        "GuidedTransportResult(total=$totalTime, empty=$emptyMoveTime, loaded=$loadedMoveTime, " +
+        "GuidedTransportResult(total=$totalTime, approach=$approachTime, ride=$rideTime, " +
                 "blocked=$blockedTime, zones=$zonesTraversed, distance=$routeLength)"
 }
 
@@ -94,8 +96,8 @@ class GuidedTransportRequest internal constructor(
     val isCompleted: Boolean
         get() = state == GuidedTransportRequestState.COMPLETED
 
-    internal var emptyMoveTime: Double = 0.0
-    internal var loadedMoveTime: Double = 0.0
+    internal var approachTime: Double = 0.0
+    internal var rideTime: Double = 0.0
     internal var zonesTraversed: Int = 0
     internal var routeLength: Double = 0.0
     /** When the entity asked for a transporter, which precedes the allocation by the pool wait. */

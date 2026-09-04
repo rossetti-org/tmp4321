@@ -267,7 +267,7 @@ class PaintingFlowLineCrossCheckTest {
             .format(allocated, repositioning, allocated + repositioning, referenceBusy))
         println("    empty move per leg %.4f minutes; obstructions detected per replication %.0f"
             .format(
-                shop.transportSystem.emptyMoveTime.acrossReplicationStatistic.average,
+                shop.transportSystem.approachTime.acrossReplicationStatistic.average,
                 shop.transportSystem.numObstructionsDetected.acrossReplicationStatistic.average
             ))
         println()

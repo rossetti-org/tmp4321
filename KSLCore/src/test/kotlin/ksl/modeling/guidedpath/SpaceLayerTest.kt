@@ -132,7 +132,7 @@ class SpaceLayerTest {
         // Every space-layer row a passive model had, it still has -- the extraction moved the code,
         // not the responses, and a subclass registers its parent's elements under its own name.
         for (row in listOf(
-            "Sys:EmptyMoveTime", "Sys:LoadedMoveTime", "Sys:TransportBlockedTime",
+            "Sys:ApproachTime", "Sys:RideTime", "Sys:TransportBlockedTime",
             "Sys:ZonesTraversedPerTransport", "Sys:RouteLengthPerTransport",
             "Sys:NumZoneTraversals", "Sys:ZoneUtilization"
         )) {
@@ -143,7 +143,7 @@ class SpaceLayerTest {
         // The five per-carry rows are the space layer's and an active model has them, which is what
         // makes `AgvSystem`'s delegation of them honest.
         for (row in listOf(
-            "Agv:Space:EmptyMoveTime", "Agv:Space:LoadedMoveTime", "Agv:Space:TransportBlockedTime",
+            "Agv:Space:ApproachTime", "Agv:Space:RideTime", "Agv:Space:TransportBlockedTime",
             "Agv:Space:ZonesTraversedPerTransport", "Agv:Space:RouteLengthPerTransport"
         )) {
             assertTrue(active.any { it.endsWith(row) }, "the active report lost $row: $active")

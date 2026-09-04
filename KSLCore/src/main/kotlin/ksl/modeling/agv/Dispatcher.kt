@@ -207,8 +207,8 @@ open class Dispatcher @JvmOverloads constructor(
         internal var blockedAtPickup: Double = 0.0
         internal var loadedRouteLength: Double = 0.0
         internal var blockedWhileLoaded: Double = 0.0
-        internal var emptyMoveTime: Double = 0.0
-        internal var loadedMoveTime: Double = 0.0
+        internal var approachTime: Double = 0.0
+        internal var rideTime: Double = 0.0
         internal var loadedZonesTraversed: Int = 0
 
         /**

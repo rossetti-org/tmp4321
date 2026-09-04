@@ -258,7 +258,7 @@ class ResponseCardinalityTest {
         for (suffix in listOf(
             ":NumTransportersMoving", ":NumTransportersBlocked", ":NumTransportersIdle",
             ":ZoneUtilization", ":NumDeadlocksDetected", ":NumObstructionsDetected",
-            ":TransportTime", ":EmptyMoveTime", ":LoadedMoveTime", ":TransportBlockedTime",
+            ":TransportTime", ":ApproachTime", ":RideTime", ":TransportBlockedTime",
             ":ZonesTraversedPerTransport", ":RouteLengthPerTransport",
             ":NumZoneTraversals", ":NumEventsScheduled", ":EventsPerZoneTraversal"
         )) {

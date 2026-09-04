@@ -53,8 +53,8 @@ import kotlin.test.assertTrue
  *
  *  ```
  *  timeAboard (own)             count=    74
- *  emptyMoveTime                count=     0
- *  loadedMoveTime               count=     0
+ *  approachTime                count=     0
+ *  rideTime               count=     0
  *  transportBlockedTime         count=     0
  *  zonesTraversedPerTransport   count=     0
  *  routeLengthPerTransport      count=     0
@@ -74,8 +74,8 @@ import kotlin.test.assertTrue
  *  the wrong side of one is the natural mistake. Since the delays are constant and every load pays
  *  both, the difference of the means is exactly one delay:
  *
- *  - `mean(waitForArrival) - mean(emptyMoveTime)` must be exactly the loading delay;
- *  - `mean(timeAboard) - mean(loadedMoveTime)` must be exactly the unloading delay.
+ *  - `mean(waitForArrival) - mean(approachTime)` must be exactly the loading delay;
+ *  - `mean(timeAboard) - mean(rideTime)` must be exactly the unloading delay.
  *
  *  Either would fail on an off-by-one-delay, and neither would be satisfied by a response that
  *  merely had observations in it.
@@ -121,8 +121,8 @@ class PerCarryStatisticsTest {
     ) {
         val five: Map<String, ResponseCIfc>
             get() = mapOf(
-                "emptyMoveTime" to emptyMove,
-                "loadedMoveTime" to loadedMove,
+                "approachTime" to emptyMove,
+                "rideTime" to loadedMove,
                 "transportBlockedTime" to blocked,
                 "zonesTraversedPerTransport" to zones,
                 "routeLengthPerTransport" to distance
@@ -217,7 +217,7 @@ class PerCarryStatisticsTest {
         m.lengthOfReplication = HORIZON
         m.simulate()
         return s to Carry(
-            s.completions, s.system.emptyMoveTime, s.system.loadedMoveTime,
+            s.completions, s.system.approachTime, s.system.rideTime,
             s.system.transportBlockedTime, s.system.zonesTraversedPerTransport,
             s.system.routeLengthPerTransport
         )
@@ -230,7 +230,7 @@ class PerCarryStatisticsTest {
         m.lengthOfReplication = HORIZON
         m.simulate()
         return s to Carry(
-            s.completions, s.agv.emptyMoveTime, s.agv.loadedMoveTime,
+            s.completions, s.agv.approachTime, s.agv.rideTime,
             s.agv.transportBlockedTime, s.agv.zonesTraversedPerTransport,
             s.agv.routeLengthPerTransport
         )

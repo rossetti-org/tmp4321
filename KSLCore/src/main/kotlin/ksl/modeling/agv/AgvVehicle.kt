@@ -33,6 +33,11 @@ import ksl.utilities.random.rvariable.RVariableIfc
  * in every replication.
  *
  * A modeller names only this object.
+ *
+ * @property loadCapacity how many loads the vehicle can carry at once. One load at a time is what
+ * this subsystem implements, so any other value is refused at construction; the refusal names the
+ * two ways to get the effect instead -- a larger fleet, or consolidating loads into one entity
+ * before the transport is requested.
  */
 open class AgvVehicle @JvmOverloads constructor(
     val system: AgvSystem,
@@ -41,7 +46,8 @@ open class AgvVehicle @JvmOverloads constructor(
     lengthInZones: Int = 1,
     zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
     name: String? = null,
-    physicalLength: Double? = null
+    physicalLength: Double? = null,
+    val loadCapacity: Int = 1
 ) : ModelElement(system, name) {
 
     /**
@@ -62,6 +68,21 @@ open class AgvVehicle @JvmOverloads constructor(
     internal val bodyQ: RequestQ = RequestQ(this, "${this.name}:BodyQ")
 
     init {
+        require(loadCapacity >= 1) {
+            "Vehicle ($name) was given a load capacity of $loadCapacity. A vehicle must be able to " +
+                    "carry at least one load."
+        }
+        // Refused at construction rather than accepted and then ignored: a capacity the subsystem
+        // cannot honour is a promise it does not keep, and a modeller who asks for three and
+        // silently gets one has no way to tell.
+        require(loadCapacity == 1) {
+            "Vehicle ($name) was given a load capacity of $loadCapacity, but this subsystem carries " +
+                    "one load at a time. Multi-load vehicles are a designed extension that is not " +
+                    "yet implemented -- a vehicle holds a single assignment and its tour is built " +
+                    "from one task -- so a capacity above one would be accepted and then ignored. " +
+                    "Use a larger fleet, or model the consolidation upstream by combining loads into " +
+                    "one entity before the transport is requested."
+        }
         system.addVehicle(this)
     }
 
@@ -96,14 +117,6 @@ open class AgvVehicle @JvmOverloads constructor(
             require(model.isNotRunning) { "The home base cannot be changed while the model is running." }
             field = value
             body.homeBase = value
-        }
-
-    /** How many loads it may carry at once. One for now; raising it is the multi-load seam. */
-    var loadCapacity: Int = 1
-        set(value) {
-            require(model.isNotRunning) { "The load capacity cannot be changed while the model is running." }
-            require(value >= 1) { "A vehicle must be able to carry at least one load." }
-            field = value
         }
 
     /** What it does with itself when the dispatcher has no work. Per vehicle, so a fleet may be

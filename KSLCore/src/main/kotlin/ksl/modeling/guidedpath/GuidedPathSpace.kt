@@ -86,16 +86,10 @@ internal enum class MovementWait {
  * `AgvSystem` has the entity state a need and a dispatcher decide. Both move vehicles over zones in
  * exactly the same way, and this is that way, named.
  *
- * Before the split the active subsystem composed a whole `GuidedPathTransportSystem` and called it
- * `:Space` -- so an AGV model instantiated a *transport system* it never used as one, and the two
- * subsystems shared their physics by one of them depending on the other. What that cost was visible
- * rather than theoretical: five per-carry responses lived on the passive class, were exposed by the
- * active one on the argument that the layer is shared, and were fed by only the passive path. They
- * read zero in every active model that ever ran. A shared layer that is nobody's class is how that
- * stops being possible to write.
- *
- * A third consumer -- a rail network, a stacker crane, an AS/RS aisle -- needs this and none of the
- * passive protocol, and can now say so in its type.
+ * Neither subsystem owns the other. Each composes this layer, so the physics has one home and a
+ * per-carry statistic registered here is fed by whichever protocol delivered the load. A third
+ * consumer -- a rail network, a stacker crane, an AS/RS aisle -- needs this and none of the passive
+ * protocol, and can say so in its type.
  *
  * @param parent the containing model element
  * @param network the guide path to operate, already built
@@ -444,18 +438,38 @@ open class GuidedPathSpace @JvmOverloads constructor(
     // duplication is deliberate: a modeler who wants per-entity outcomes gets them without
     // attaching an observer, and one who wants the fleet-level summary gets it without writing any
     // collection code at all.
+    //
+    // The first two are named for the INTERVAL they measure and not for the vehicle's state during
+    // it. An approach includes time the vehicle spent blocked and time it spent disengaging from a
+    // repositioning move, neither of which is "moving empty"; and a vehicle carrying one load while
+    // going to collect another is moving loaded throughout its approach to the second. The state
+    // question is answered instead by the vehicle's own `fracTimeMovingEmpty` and
+    // `fracTimeTransporting`, which are time-weighted and mean exactly what they say at every
+    // capacity. These two answer the protocol question, and always can.
 
-    private val myEmptyMoveTime = Response(this, name = "${this.name}:EmptyMoveTime")
+    private val myApproachTime = Response(this, name = "${this.name}:ApproachTime")
 
-    /** How long transporters spent travelling to collect an entity. */
-    val emptyMoveTime: ResponseCIfc
-        get() = myEmptyMoveTime
+    /**
+     * Per delivered load: from the transporter being committed to it until the load is aboard,
+     * excluding the loading delay.
+     *
+     * A protocol interval, not a physical state. Whether the vehicle was empty during it is a
+     * separate question, answered by [GuidedTransporter.fracTimeMovingEmpty].
+     */
+    val approachTime: ResponseCIfc
+        get() = myApproachTime
 
-    private val myLoadedMoveTime = Response(this, name = "${this.name}:LoadedMoveTime")
+    private val myRideTime = Response(this, name = "${this.name}:RideTime")
 
-    /** How long transporters spent carrying one. */
-    val loadedMoveTime: ResponseCIfc
-        get() = myLoadedMoveTime
+    /**
+     * Per delivered load: from the load being aboard until it is set down, excluding the unloading
+     * delay.
+     *
+     * A protocol interval, as [approachTime] is. A vehicle may be carrying other loads throughout,
+     * and this figure is about this one.
+     */
+    val rideTime: ResponseCIfc
+        get() = myRideTime
 
     private val myTransportBlockedTime = Response(this, name = "${this.name}:TransportBlockedTime")
 
@@ -483,7 +497,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * Records what one completed carry cost the guide path, whichever paradigm drove it.
      *
      * Deliberately takes five numbers rather than a `GuidedTransportResult`. These five are
-     * properties of the *traversal* -- how long the vehicle ran empty, how long it ran loaded, how
+     * properties of *one load's journey* -- how long it waited to be collected, how long it rode, how
      * much of that it spent unable to claim the space ahead, and how far over how many zones -- and
      * the traversal is the one thing both paradigms genuinely share. Taking the passive protocol's
      * result type here would make the active subsystem depend on a type belonging to the paradigm it
@@ -495,14 +509,14 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * so each publishes its own, and one row that meant two things would be worse than two rows.
      */
     internal fun collectCarry(
-        emptyMoveTime: Double,
-        loadedMoveTime: Double,
+        approachTime: Double,
+        rideTime: Double,
         blockedTime: Double,
         zonesTraversed: Int,
         routeLength: Double
     ) {
-        myEmptyMoveTime.value = emptyMoveTime
-        myLoadedMoveTime.value = loadedMoveTime
+        myApproachTime.value = approachTime
+        myRideTime.value = rideTime
         myTransportBlockedTime.value = blockedTime
         myZonesTraversed.value = zonesTraversed.toDouble()
         myRouteLength.value = routeLength
@@ -575,7 +589,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * would put a row on the report whose "time in queue" is the mean length of a loaded move and
      * whose "number in queue" is a count of moving carts -- read by anybody scanning the report as
      * a line of entities waiting for something. Both quantities are already reported properly and
-     * separately, by [emptyMoveTime] and [loadedMoveTime], which is what a modeller should read.
+     * separately, by [approachTime] and [rideTime], which is what a modeller should read.
      *
      * `Conveyor` makes the same call for the same three-way split, and turning these on is for
      * debugging a model that has stopped moving, not for analysis.

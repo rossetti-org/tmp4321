@@ -84,7 +84,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
     internal fun collectTransportResult(result: GuidedTransportResult) {
         myTransportTime.value = result.totalTime
         collectCarry(
-            result.emptyMoveTime, result.loadedMoveTime, result.blockedTime,
+            result.approachTime, result.rideTime, result.blockedTime,
             result.zonesTraversed, result.routeLength
         )
     }
@@ -95,8 +95,7 @@ open class GuidedPathTransportSystem @JvmOverloads constructor(
          * The system property that switches invariant checking on for every guide path in this JVM.
          *
          * It belongs to [GuidedPathSpace], which is where the control it names lives, and is
-         * re-exported here because Kotlin companions are not inherited and code written against this
-         * class before the space layer was lifted out should keep compiling. Prefer
+         * re-exported here because Kotlin companions are not inherited. Prefer
          * `GuidedPathSpace.CHECK_INVARIANTS_PROPERTY`; the two are the same string.
          */
         const val CHECK_INVARIANTS_PROPERTY: String = GuidedPathSpace.CHECK_INVARIANTS_PROPERTY

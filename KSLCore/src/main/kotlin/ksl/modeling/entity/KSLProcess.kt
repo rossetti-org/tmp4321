@@ -2308,7 +2308,7 @@ interface KSLProcessBuilder {
         if (fetching != null) {
             hold(fetching, suspensionName = "$suspensionName:emptyMove:${chosen.name}")
         }
-        request.emptyMoveTime = pool.time - startedEmpty
+        request.approachTime = pool.time - startedEmpty
         return request
     }
 
@@ -2361,7 +2361,7 @@ interface KSLProcessBuilder {
         if (riding != null) {
             hold(riding, suspensionName = "$suspensionName:transport:${transporter.name}")
         }
-        request.loadedMoveTime = system.time - startedLoaded
+        request.rideTime = system.time - startedLoaded
         request.zonesTraversed = route?.zonesTraversed ?: 0
         request.routeLength = route?.totalLength ?: 0.0
         // The entity is where the transporter is, which is what makes distance-based logic later in
@@ -2372,8 +2372,8 @@ interface KSLProcessBuilder {
         }
         val result = GuidedTransportResult(
             totalTime = system.time - request.requestedAt,
-            emptyMoveTime = request.emptyMoveTime,
-            loadedMoveTime = request.loadedMoveTime,
+            approachTime = request.approachTime,
+            rideTime = request.rideTime,
             blockedTime = (transporter.cumulativeBlockedTime - request.blockedAtAllocation).coerceAtLeast(0.0),
             zonesTraversed = request.zonesTraversed,
             routeLength = request.routeLength

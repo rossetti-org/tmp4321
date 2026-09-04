@@ -355,7 +355,7 @@ class PaintingFlowLineWithAgvs @JvmOverloads constructor(
 
     // The empty-move time is deliberately *not* declared here. The transport system already reports
     // it, and its own loaded counterpart, from every completed journey -- see
-    // `transportSystem.emptyMoveTime`. A second response fed from the same `GuidedTransportResult`
+    // `transportSystem.approachTime`. A second response fed from the same `GuidedTransportResult`
     // would be the same number under a second name, which is the duplication the guide warns about
     // one paragraph after the one that would have suggested writing it.
 
@@ -414,7 +414,7 @@ class PaintingFlowLineWithAgvs @JvmOverloads constructor(
                 loadingDelay = loadUnload, unLoadingDelay = loadUnload
             )
             releaseGuidedTransporter(request, agvs)
-            carried += leg.emptyMoveTime + leg.loadedMoveTime + 2.0 * LOAD_UNLOAD_MINUTES
+            carried += leg.approachTime + leg.rideTime + 2.0 * LOAD_UNLOAD_MINUTES
         }
     }
 }

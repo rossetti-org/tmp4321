@@ -37,7 +37,7 @@ import kotlin.test.assertTrue
  *  becomes the statistic, a row appears on the report that reads as a waiting line and is not one:
  *  `RidingHoldQ`'s time in queue is the mean length of a loaded move, and its number in queue is a
  *  count of moving carts. Both quantities are already reported properly, and separately, by
- *  `EmptyMoveTime` and `LoadedMoveTime`. So the queues report nothing, which is what `Conveyor`
+ *  `ApproachTime` and `RideTime`. So the queues report nothing, which is what `Conveyor`
  *  does with the same three-way split for the same reason.
  *
  *  The split itself is the other half. One queue holding three unrelated kinds of waiter can be told
@@ -162,8 +162,8 @@ class MovementQueueRolesTest {
 
         // The quantities the riding queue would otherwise report are reported properly, by the
         // responses that exist for them.
-        assertTrue(shop.system.emptyMoveTime.defaultReportingOption)
-        assertTrue(shop.system.loadedMoveTime.defaultReportingOption)
+        assertTrue(shop.system.approachTime.defaultReportingOption)
+        assertTrue(shop.system.rideTime.defaultReportingOption)
 
         val switchedOn = run(reporting = true)
         for (q in listOf(

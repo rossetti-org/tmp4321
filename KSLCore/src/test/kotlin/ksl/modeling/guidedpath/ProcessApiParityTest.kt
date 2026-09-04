@@ -174,8 +174,8 @@ class ProcessApiParityTest {
         )
 
         val r = assertNotNull(guided.result)
-        assertEquals(12.6, r.emptyMoveTime, 1e-9)
-        assertEquals(20.4, r.loadedMoveTime, 1e-9)
+        assertEquals(12.6, r.approachTime, 1e-9)
+        assertEquals(20.4, r.rideTime, 1e-9)
         assertEquals(204.0, r.routeLength, 1e-9)
         assertEquals(0.0, r.blockedTime, 1e-9)
     }
@@ -243,8 +243,8 @@ class ProcessApiParityTest {
         )
         val c = assertNotNull(composed.result)
         val t = assertNotNull(triad.result)
-        assertEquals(c.emptyMoveTime, t.emptyMoveTime, 1e-9)
-        assertEquals(c.loadedMoveTime, t.loadedMoveTime, 1e-9)
+        assertEquals(c.approachTime, t.approachTime, 1e-9)
+        assertEquals(c.rideTime, t.rideTime, 1e-9)
         assertEquals(c.zonesTraversed, t.zonesTraversed)
         assertEquals(c.routeLength, t.routeLength, 1e-9)
     }

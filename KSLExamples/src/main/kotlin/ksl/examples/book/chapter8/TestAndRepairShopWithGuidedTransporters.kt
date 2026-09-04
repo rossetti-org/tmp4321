@@ -286,12 +286,12 @@ class TestAndRepairShopWithGuidedTransporters @JvmOverloads constructor(
                 val leg = guidedTransport(
                     transportWorkers, destination = tp.testStation, pickupLocation = at
                 )
-                carried += leg.emptyMoveTime + leg.loadedMoveTime
+                carried += leg.approachTime + leg.rideTime
                 at = tp.testStation
                 use(tp.testMachine, delayDuration = tp.processTime)
             }
             val lastLeg = guidedTransport(transportWorkers, destination = REPAIR, pickupLocation = at)
-            carried += lastLeg.emptyMoveTime + lastLeg.loadedMoveTime
+            carried += lastLeg.approachTime + lastLeg.rideTime
             use(repairWorkers, delayDuration = repairTimes[plan]!!)
             myTransferTime.value = carried
             timeInSystem.value = time - timeStamp
