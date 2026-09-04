@@ -17,8 +17,10 @@
  */
 package ksl.modeling.agv.policies
 
+import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.Interruption
 import ksl.modeling.agv.InterruptionPolicyIfc
+import ksl.modeling.agv.VehicleInterruptionListenerIfc
 import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.entity.ResourceWithQ
 import ksl.modeling.entity.charge
@@ -36,9 +38,12 @@ import ksl.utilities.random.rvariable.RVariableIfc
  * person who is busy elsewhere is not walking anywhere yet -- and on a fleet with one technician
  * and several vehicles that wait is most of the answer. The assessment happens *after* the walk,
  * because nobody knows what is wrong until they are standing at it. And whether to move the vehicle
- * is decided from [Interruption.isObstructing], read at that moment: a vehicle broken down on a
- * spur nobody uses can be repaired where it stands, and the same vehicle across a main aisle
- * cannot.
+ * is decided **after** the walk, from [Interruption.isObstructingNow], which by then is a real
+ * question: somebody has had to be free and walk over, and a queue has had that long to form behind
+ * the vehicle. [Interruption.isOnAThroughRoute] is the standing fact underneath it -- a vehicle
+ * broken down on a spur nobody uses can be repaired where it stands, and the same vehicle across a
+ * main aisle cannot -- and this policy tows when either is true, so that a vehicle dead in an aisle
+ * is moved even on the run where nobody has yet arrived behind it.
  *
  * **What it does about a flat battery is to tow it to a charger and nothing else.** Charge is a
  * function of the vehicle's odometers, so no amount of standing at it helps; reaching a charger is
@@ -77,9 +82,11 @@ open class VisitAndAssessPolicy @JvmOverloads constructor(
         delay(assessmentTime, suspensionName = "${vehicle.name}:assessing")
         when (interruption) {
             is Interruption.Failed -> {
-                // Read now rather than when it stopped: the queue behind it has had the walk and
-                // the assessment to build up, and it is the state at the decision that decides.
-                if (interruption.isObstructing) {
+                // Two questions, and the disjunction is deliberate. `isOnAThroughRoute` is a fact
+                // about where it stopped and is true from the first instant; `isObstructingNow` is
+                // a fact about who is stuck and needs time to become true, which the walk and the
+                // assessment have now provided. Either is reason enough to move it.
+                if (interruption.isOnAThroughRoute || interruption.isObstructingNow) {
                     tow(vehicle, refuge, towVelocity)
                 }
                 delay(interruption.repairTime, suspensionName = "${vehicle.name}:repair")
@@ -97,4 +104,39 @@ open class VisitAndAssessPolicy @JvmOverloads constructor(
     }
 
     override fun toString(): String = "VisitAndAssessPolicy(refuge=$refuge, towVelocity=$towVelocity)"
+}
+
+/**
+ * Asks the dispatcher to look at the board again whenever a vehicle stops or comes back.
+ *
+ * **Not automatic, and worth understanding why.** The dispatcher is woken by the two things that
+ * change a decision from inside the subsystem -- a task being posted and a vehicle declaring itself
+ * available -- and a breakdown is neither. A vehicle that stops mid-approach keeps its assignment,
+ * declares nothing, and posts nothing, so nothing wakes the dispatcher and the task it was carrying
+ * out sits with a vehicle that will not reach it for as long as the repair lasts.
+ *
+ * For most fleets that costs nothing: the default dispatching rule would not take the task back
+ * anyway, because it has no rule for doing so. It matters for a fleet running a **re-tasking**
+ * policy, which could hand the work to a vehicle that is still moving -- and which cannot, because
+ * it is never asked. Attaching this is how a model says it wants to be asked.
+ *
+ * It is opt-in rather than built in because waking the dispatcher is an event, and adding one to
+ * every breakdown would change the event sequence of every existing model that has failures --
+ * including the order of things that happen at the same instant -- for a benefit only some of them
+ * can use.
+ *
+ * ```kotlin
+ * agv.attachInterruptionListener(ReconsiderOnInterruption(agv.dispatcher))
+ * ```
+ */
+class ReconsiderOnInterruption(private val dispatcher: Dispatcher) : VehicleInterruptionListenerIfc {
+
+    override fun stopped(interruption: Interruption) = dispatcher.reconsider()
+
+    override fun returnedToService(interruption: Interruption, outOfServiceFor: Double) =
+        dispatcher.reconsider()
+
+    override fun outOfService(interruption: Interruption) = dispatcher.reconsider()
+
+    override fun toString(): String = "ReconsiderOnInterruption"
 }

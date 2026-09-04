@@ -18,8 +18,11 @@
 package ksl.modeling.agv
 
 import ksl.examples.general.guidedpath.SimpleAgvNetwork
+import ksl.modeling.agv.policies.AssignmentPolicyIfc
 import ksl.modeling.agv.policies.ChargeReservePolicy
 import ksl.modeling.agv.policies.NearestVehiclePolicy
+import ksl.modeling.agv.policies.ReassigningPolicy
+import ksl.modeling.agv.policies.ReconsiderOnInterruption
 import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.ResourceWithQ
@@ -122,8 +125,8 @@ class RecoveryTest {
         }
 
         override suspend fun KSLProcessBuilder.handle(interruption: Interruption) {
-            if (interruption.isObstructing) obstructingWhenItStopped++
-            if (alwaysTow || interruption.isObstructing) {
+            if (interruption.isObstructingNow) obstructingWhenItStopped++
+            if (alwaysTow || interruption.isObstructingNow) {
                 tows++
                 tow(interruption.vehicle, refuge, TOW_VELOCITY)
             }
@@ -145,7 +148,10 @@ class RecoveryTest {
         secondCart: Boolean = false,
         battery: Battery? = null,
         charger: String? = null,
-        reserve: Boolean = false
+        reserve: Boolean = false,
+        assignment: AssignmentPolicyIfc? = null,
+        listeners: List<VehicleInterruptionListenerIfc> = emptyList(),
+        reconsider: Boolean = false
     ) : ProcessModel(parent, "Shop") {
         val network = SimpleAgvNetwork.create()
 
@@ -155,12 +161,14 @@ class RecoveryTest {
 
         val agv = AgvSystem(
             this, network, name = "Agv",
-            assignmentPolicy = if (reserve) ChargeReservePolicy(NearestVehiclePolicy())
-            else NearestVehiclePolicy()
+            assignmentPolicy = assignment
+                ?: if (reserve) ChargeReservePolicy(NearestVehiclePolicy()) else NearestVehiclePolicy()
         )
 
         init {
             charger?.let { agv.addCharger(it) }
+            listeners.forEach { agv.attachInterruptionListener(it) }
+            if (reconsider) agv.attachInterruptionListener(ReconsiderOnInterruption(agv.dispatcher))
         }
 
         val cart = AgvVehicle(
@@ -282,7 +290,7 @@ class RecoveryTest {
             if (pause > 0.0) {
                 delay(pause, suspensionName = "${interruption.vehicle.name}:beforeLooking")
             }
-            if (interruption.isObstructing) sawObstruction++
+            if (interruption.isObstructingNow) sawObstruction++
             if (interruption is Interruption.Failed) {
                 delay(interruption.repairTime, suspensionName = "${interruption.vehicle.name}:repair")
             }
@@ -307,7 +315,7 @@ class RecoveryTest {
         val afterAWhile = trial(40.0)
 
         assertTrue(atOnce.calls > 5 && afterAWhile.calls > 5, "too few breakdowns to compare")
-        // The trap, pinned. `isObstructing` is a live query, and at the instant a vehicle stops
+        // The trap, pinned. `isObstructingNow` is a live query, and at the instant a vehicle stops
         // nobody has had time to arrive behind it: the answer is no, on a layout where the same
         // vehicle goes on to block the fleet for three quarters of the run. A policy that branches
         // on it must let time pass first -- which a realistic one does, because somebody has to be
@@ -316,7 +324,7 @@ class RecoveryTest {
             0, atOnce.sawObstruction,
             "asked at the instant it stopped, the vehicle was found to be obstructing " +
                     "${atOnce.sawObstruction} times out of ${atOnce.calls}. If this is no longer " +
-                    "zero the guidance on Interruption.isObstructing needs revisiting"
+                    "zero the guidance on Interruption.isObstructingNow needs revisiting"
         )
         assertTrue(
             afterAWhile.sawObstruction > 0,
@@ -516,6 +524,278 @@ class RecoveryTest {
             tow(vehicle, charger, TOW_VELOCITY)
             charge(vehicle)
         }
+    }
+
+
+    // ---- 7: the two questions, and when each is answerable ----------------------------------------
+
+    /** Records both judgements at the instant the vehicle stopped, before any time has passed. */
+    private class AsksBothAtOnce : InterruptionPolicyIfc {
+        var calls = 0
+            private set
+        var obstructingNow = 0
+            private set
+        var onAThroughRoute = 0
+            private set
+
+        override suspend fun KSLProcessBuilder.handle(interruption: Interruption) {
+            calls++
+            if (interruption.isObstructingNow) obstructingNow++
+            if (interruption.isOnAThroughRoute) onAThroughRoute++
+            if (interruption is Interruption.Failed) {
+                delay(interruption.repairTime, suspensionName = "${interruption.vehicle.name}:repair")
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("where it stopped is answerable at once; who is stuck behind it is not")
+    fun theLayoutQuestionIsAnswerableImmediately() {
+        val policy = AsksBothAtOnce()
+        run("BothAtOnce", horizon = 4000.0) { m ->
+            Shop(
+                m, FailureModel.distanceBased(ConstantRV(150.0), ConstantRV(200.0)),
+                policy, meanInterarrival = 40.0, secondCart = true
+            )
+        }
+
+        assertTrue(policy.calls > 5, "only ${policy.calls} breakdowns")
+        // The pair, and the whole reason there are two. Asked at the instant it stopped, "is anybody
+        // stuck behind me" is no, every time -- nobody has tried to pass yet. "Am I standing where
+        // traffic has to pass" is a fact about the layout and is true right away.
+        assertEquals(
+            0, policy.obstructingNow,
+            "asked at the instant it stopped, the vehicle was found to be obstructing " +
+                    "${policy.obstructingNow} times out of ${policy.calls}"
+        )
+        assertTrue(
+            policy.onAThroughRoute > 0,
+            "a vehicle that stops on the main loop of a one-way layout was never once found to be " +
+                    "on a through route, over ${policy.calls} breakdowns"
+        )
+    }
+
+    @Test
+    @DisplayName("a spur is not a through route, and the loop is")
+    fun aSpurIsARefuge() {
+        val m = Model("Refuge")
+        val shop = Shop(m, failure = null, policy = null, meanInterarrival = 1000.0)
+        val network = shop.network
+        // I6 is the far end of a one-cart parking spur: nothing passes through it, which is what a
+        // spur is for. I2 is a junction on the loop; three links meet there.
+        assertEquals(
+            false, network.requireLocation("I6").zone.isOnAThroughRoute,
+            "the dead end of a parking spur was reported as a through route"
+        )
+        assertEquals(
+            true, network.requireLocation("I2").zone.isOnAThroughRoute,
+            "a junction with three links meeting at it was not reported as a through route"
+        )
+        assertEquals(
+            false, network.link("Link5")!!.zones.first().isOnAThroughRoute,
+            "a zone of a spur was reported as a through route"
+        )
+        assertEquals(
+            true, network.link("Link1")!!.zones.first().isOnAThroughRoute,
+            "a zone of the main loop was not reported as a through route"
+        )
+    }
+
+    // ---- 8: who gets told -------------------------------------------------------------------------
+
+    private class Recorder(val label: String) : VehicleInterruptionListenerIfc {
+        val events = mutableListOf<String>()
+        override fun stopped(interruption: Interruption) {
+            events.add("stopped:${interruption.vehicle.name}")
+        }
+
+        override fun returnedToService(interruption: Interruption, outOfServiceFor: Double) {
+            events.add("back:${interruption.vehicle.name}:$outOfServiceFor")
+        }
+
+        override fun outOfService(interruption: Interruption) {
+            events.add("out:${interruption.vehicle.name}")
+        }
+    }
+
+    @Test
+    @DisplayName("every listener is told, and a stop is followed by exactly one outcome")
+    fun listenersAreToldAndThereAreTwoOutcomes() {
+        val first = Recorder("first")
+        val second = Recorder("second")
+        val s = run("Listeners", horizon = 3000.0) { m ->
+            Shop(
+                m, FailureModel.distanceBased(ConstantRV(200.0), ConstantRV(15.0)),
+                policy = null, meanInterarrival = 90.0, listeners = listOf(first, second)
+            )
+        }
+
+        assertTrue(first.events.isNotEmpty(), "the first listener was never told anything")
+        assertEquals(
+            first.events, second.events,
+            "two listeners on the same fleet were told different things"
+        )
+        val stops = first.events.count { it.startsWith("stopped:") }
+        val backs = first.events.count { it.startsWith("back:") }
+        val outs = first.events.count { it.startsWith("out:") }
+        assertEquals(
+            total(s.cart.numFailures!!).toInt(), stops,
+            "the fleet reported ${total(s.cart.numFailures!!)} failures but listeners heard $stops"
+        )
+        // Every stop resolves exactly one way, and under the default policy every failure is put
+        // right -- so all of them come back and none is written off. The single exception the
+        // horizon always allows is a stop still being dealt with when the clock stopped, which is
+        // why the last event may be a `stopped` with nothing after it.
+        assertTrue(
+            stops - (backs + outs) <= 1,
+            "$stops stops produced ${backs + outs} outcomes; at most one may be unresolved, and " +
+                    "only the one in hand when the run ended"
+        )
+        assertEquals(0, outs, "the default policy failed to repair a vehicle")
+        // Interleaved rather than batched: a stop is always followed by its own outcome before the
+        // next stop, because the vehicle's own agent runs the procedure and does nothing else.
+        val kinds = first.events.map { it.substringBefore(':') }
+        assertEquals(
+            List(backs) { listOf("stopped", "back") }.flatten() +
+                    if (stops > backs) listOf("stopped") else emptyList(),
+            kinds,
+            "stops and outcomes did not alternate: ${first.events}"
+        )
+    }
+
+    @Test
+    @DisplayName("a vehicle broken down between tours is not counted as idle capacity")
+    fun theFleetCountsPartition() {
+        val s = run("Counts", horizon = 3000.0) { m ->
+            Shop(
+                m, FailureModel.usageBased(ConstantRV(2.0), ConstantRV(60.0)),
+                policy = null, meanInterarrival = 90.0
+            )
+        }
+
+        assertTrue(total(s.cart.numFailures!!) > 5.0, "too few failures to measure")
+        // A usage-based failure comes due at the end of a tour, where the vehicle holds no
+        // assignment -- which is exactly the case that used to read as idle. With a sixty-unit
+        // repair on a one-cart fleet this is a large fraction of the run.
+        val out = mean(s.agv.numVehiclesOutOfService)
+        assertTrue(
+            out > 0.05,
+            "a one-cart fleet spending sixty time units under repair after every second task was " +
+                    "out of service for only $out of a vehicle on average"
+        )
+        // The three counts partition the fleet at every instant, so their time-weighted averages
+        // sum to the fleet size. That is what stops spare capacity being double-counted.
+        val total = mean(s.agv.numVehiclesOnTask) + mean(s.agv.numVehiclesIdle) + out
+        assertEquals(
+            1.0, total, 1.0e-9,
+            "on task, idle and out of service averaged $total over a fleet of one"
+        )
+    }
+
+    /**
+     *  One load, two carts, and nothing else happening.
+     *
+     *  The cart on `I7` is the nearer of the two to the entry station -- 126 feet against 198 -- so
+     *  it is the one given the load, and it is the one that breaks down. It fails three feet out,
+     *  which puts it on its own parking spur rather than in the loop, so the other cart's route to
+     *  the entry station is clear and nothing about this outcome is about blocking.
+     */
+    private class QuietShop(parent: ModelElement, reconsider: Boolean) : ProcessModel(parent, "Shop") {
+        val network = SimpleAgvNetwork.create()
+
+        init {
+            spatialModel = network
+        }
+
+        val agv = AgvSystem(
+            this, network, name = "Agv",
+            assignmentPolicy = ReassigningPolicy(improvementThreshold = 1.0)
+        )
+
+        init {
+            if (reconsider) agv.attachInterruptionListener(ReconsiderOnInterruption(agv.dispatcher))
+        }
+
+        val failing = AgvVehicle(
+            agv, TransporterPlacement.At(SimpleAgvNetwork.AGV2_HOME), ConstantRV(VELOCITY),
+            name = "Failing",
+            failureModel = FailureModel.distanceBased(ConstantRV(3.0), ConstantRV(2000.0))
+        ).apply { homeBase = SimpleAgvNetwork.AGV2_HOME }
+
+        val spare = AgvVehicle(
+            agv, TransporterPlacement.At(SimpleAgvNetwork.AGV1_HOME), ConstantRV(VELOCITY), name = "Spare"
+        ).apply { homeBase = SimpleAgvNetwork.AGV1_HOME }
+
+        var deliveredAt = Double.NaN
+        var carriedBy = ""
+
+        private inner class Part : Entity() {
+            val move = process {
+                currentLocation = network.requireLocation(SimpleAgvNetwork.ENTRY_STATION)
+                val r = transportByAgv(agv, SimpleAgvNetwork.EXIT_STATION, origin = SimpleAgvNetwork.ENTRY_STATION)
+                deliveredAt = r.totalTime
+                carriedBy = r.vehicleName
+            }
+        }
+
+        override fun initialize() {
+            deliveredAt = Double.NaN
+            carriedBy = ""
+            activate(Part().move)
+        }
+    }
+
+    @Test
+    @DisplayName("on a quiet fleet, a load committed to a broken vehicle is never delivered unless the dispatcher is told")
+    fun theDispatcherHearsAboutItOnlyWhenAsked() {
+        fun trial(reconsider: Boolean): QuietShop {
+            val m = Model("Quiet$reconsider")
+            val shop = QuietShop(m, reconsider)
+            m.numberOfReplications = 1
+            m.lengthOfReplication = 4000.0
+            m.simulate()
+            return shop
+        }
+
+        val silent = trial(false)
+        val told = trial(true)
+
+        assertTrue(total(silent.failing.numFailures!!) > 0.0, "the cart never failed")
+
+        // The cost of nobody being told, and it is not a delay -- it is the whole load. A vehicle
+        // that stops keeps its assignment, declares nothing and posts nothing, so nothing inside the
+        // subsystem wakes the dispatcher. With no other traffic to wake it either, the re-tasking
+        // rule is never asked, the healthy cart stands idle at its spur for the whole run, and the
+        // load is still suspended when the horizon falls.
+        assertTrue(
+            silent.deliveredAt.isNaN(),
+            "the load was delivered at ${silent.deliveredAt} without anything having woken the " +
+                    "dispatcher, so this comparison is not measuring what it claims to"
+        )
+        assertEquals(
+            0.0, total(silent.agv.dispatcher.numAssignmentsRevoked), 0.0,
+            "an assignment was revoked with nothing to prompt a dispatching pass"
+        )
+        assertTrue(
+            mean(silent.agv.numEntitiesNeverResumed) > 0.0,
+            "the load was neither delivered nor reported as left suspended"
+        )
+
+        // Told, the dispatcher takes the task off the stopped vehicle and gives it to the one that
+        // can do it. Delivered at 136 on this layout, against a repair of 2000 it would otherwise
+        // have waited out.
+        assertEquals(
+            "Spare", told.carriedBy,
+            "the load was carried by (${told.carriedBy}) rather than by the healthy cart"
+        )
+        assertTrue(
+            told.deliveredAt < 500.0,
+            "the load took ${told.deliveredAt}, which is long enough that it waited for the repair"
+        )
+        assertEquals(
+            1.0, total(told.agv.dispatcher.numAssignmentsRevoked), 0.0,
+            "the task was not taken off the broken vehicle exactly once"
+        )
     }
 
     // ---- 6: the replication boundary --------------------------------------------------------------

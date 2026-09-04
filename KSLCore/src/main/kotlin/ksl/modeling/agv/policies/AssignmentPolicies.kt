@@ -471,6 +471,21 @@ class ScoringAssignmentPolicy(
  * finishes the delivery, which the assignment's own guard enforces rather than this policy
  * remembering to check.
  *
+ * ## A stopped vehicle is taken off its task whatever the distances say
+ *
+ * A vehicle that has broken down or run out of charge is no *further* from its pickup than it was --
+ * having driven part of the way, it is usually nearer -- so a rule that compares distances never
+ * takes work back from it, however long it stands there. That is the wrong answer, and it is wrong
+ * silently: the load waits on a vehicle that is not coming while a healthy one sits idle.
+ *
+ * So a stopped incumbent is treated as unable to collect at all, and any vehicle that can reach the
+ * pickup takes the task. [AgvVehicle.isOutOfService] is the test. The threshold does not apply,
+ * because the incumbent's cost is no longer a distance to compare against.
+ *
+ * Being told is a separate matter from acting. Nothing inside the subsystem wakes the dispatcher
+ * when a vehicle stops, so this rule fires at the next pass rather than at the breakdown unless the
+ * model attaches [ReconsiderOnInterruption].
+ *
  * ## The inner policy must rank pairings, not tasks
  *
  * The default is a scoring policy over the feasible set, and that is not an arbitrary choice.
@@ -517,7 +532,8 @@ class ReassigningPolicy(
             val holder = dispatcher.assignmentFor(task) ?: continue
             if (!holder.isRevocable) continue
             val incumbentCost = context.distanceTo(holder.vehicle, task.pickupLocation)
-            if (!incumbentCost.isFinite()) continue
+            val stopped = holder.vehicle.isOutOfService
+            if (!stopped && !incumbentCost.isFinite()) continue
 
             // Case one: someone else could collect this load materially sooner.
             val challenger = context.available
@@ -527,6 +543,23 @@ class ReassigningPolicy(
                 )
             val challengerCost =
                 challenger?.let { context.distanceTo(it, task.pickupLocation) } ?: Double.POSITIVE_INFINITY
+
+            // Case three, and it is the one a distance rule cannot see. A vehicle that has stopped
+            // -- broken down, out of charge, being pushed out of an aisle -- is no nearer its pickup
+            // than it was, and by driving part of the way it is usually *nearer*. So the two tests
+            // above never fire for it, however long it stands there, and the load waits on a vehicle
+            // that is not coming. Distance is the wrong question here: what matters is that it
+            // cannot collect anything at all, so anyone who can, should.
+            //
+            // The case this gets wrong is a vehicle stopped briefly a few feet from its pickup while
+            // the only alternative is across the site. That is real, and the threshold cannot help
+            // with it because the incumbent's cost is not a distance any more. A model that cares
+            // should say how long it is willing to wait, which is a rule of its own and belongs in
+            // a policy of its own.
+            if (stopped) {
+                if (challengerCost.isFinite()) dispatcher.revoke(holder)
+                continue
+            }
 
             // Case two: this vehicle could collect a *different* load materially sooner. The two are
             // not the same test and a fleet of one has only the second -- which is precisely the

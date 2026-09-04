@@ -7,6 +7,7 @@ import ksl.modeling.agv.FailureBasis
 import ksl.modeling.agv.FailureModel
 import ksl.modeling.agv.Interruption
 import ksl.modeling.agv.InterruptionPolicyIfc
+import ksl.modeling.agv.VehicleInterruptionListenerIfc
 import ksl.modeling.agv.AssignmentProposal
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.exceptions.AgvInvariantViolation
@@ -27,6 +28,7 @@ import ksl.modeling.agv.policies.DispositionPolicyIfc
 import ksl.modeling.agv.policies.LeastUsedVehiclePolicy
 import ksl.modeling.agv.policies.MoveToStagingDisposition
 import ksl.modeling.agv.policies.NearestVehiclePolicy
+import ksl.modeling.agv.policies.ReconsiderOnInterruption
 import ksl.modeling.agv.policies.ReassigningPolicy
 import ksl.modeling.agv.policies.ReturnToHomeBaseDisposition
 import ksl.modeling.agv.policies.ScoringAssignmentPolicy
@@ -274,6 +276,20 @@ private object AgvGuideSnippets {
         agv.auditAtReplicationEnd = true    // once per replication; on by default
     }
 
+    // -- §4 Telling the rest of the model about a breakdown --------------
+
+    fun attachABreakdownLog(agv: AgvSystem, breakdownLog: MutableList<Pair<Double, String>>) {
+        agv.attachInterruptionListener(object : VehicleInterruptionListenerIfc {
+            override fun stopped(interruption: Interruption) {
+                breakdownLog.add(interruption.at to interruption.vehicle.name)
+            }
+        })
+    }
+
+    fun tellTheDispatcher(agv: AgvSystem) {
+        agv.attachInterruptionListener(ReconsiderOnInterruption(agv.dispatcher))
+    }
+
     // -- §6 A sweep that must survive a deadlock -------------------------
 
     fun sweep(record: (Int, Double) -> Unit, recordInfeasible: (Int, Any) -> Unit) {
@@ -354,7 +370,7 @@ private object AgvGuideSnippets {
             val tech = seize(technicians)                // somebody has to be free
             delay(walkingTime)                           // and walk to it
             delay(assessmentTime)                        // and look at it
-            if (interruption.isObstructing) {            // decided at the vehicle, not before
+            if (interruption.isObstructingNow) {            // decided at the vehicle, not before
                 tow(vehicle, refuge, atVelocity = 1.0)   // pushed out of the aisle
             }
             if (interruption is Interruption.Failed) delay(interruption.repairTime)

@@ -678,7 +678,7 @@ class VisitAndAssess(
         val tech = seize(technicians)                // somebody has to be free
         delay(walkingTime)                           // and walk to it
         delay(assessmentTime)                        // and look at it
-        if (interruption.isObstructing) {            // decided at the vehicle, not before
+        if (interruption.isObstructingNow) {            // decided at the vehicle, not before
             tow(vehicle, refuge, atVelocity = 1.0)   // pushed out of the aisle
         }
         if (interruption is Interruption.Failed) delay(interruption.repairTime)
@@ -725,14 +725,30 @@ leaves a flat vehicle, and it goes out of service for the rest of the
 replication. There is no way for a policy to claim it fixed something it did
 not.
 
-**Ask `isObstructing` at the vehicle, not at the breakdown.** It is a live
-query, and a queue behind a stopped vehicle takes time to form — so asking
-at the instant it stops nearly always says no. Measured on the chapter's
-shop over sixteen breakdowns: asking immediately found an obstruction *not
-once*, while asking forty time units later found several, on a layout where
-leaving the vehicle in the aisle cost the healthy cart 77% of its time
-blocked. A realistic policy never hits this, because it cannot decide
-anything until somebody has been told, been free, and walked there.
+**Two questions, and they are answerable at different moments.**
+
+| | Asks | True when |
+|---|---|---|
+| `isOnAThroughRoute` | is this a bad place to stop? | any zone the vehicle holds is one traffic passes through — from the first instant |
+| `isObstructingNow` | is anybody actually stuck? | some vehicle is waiting on a zone it holds — only once time has passed |
+
+`isObstructingNow` is a live query, and a queue behind a stopped vehicle
+takes time to form, so asking at the instant it stops nearly always says no.
+Measured on the chapter's shop over sixteen breakdowns: asking immediately
+found an obstruction *not once*, while asking forty time units later found
+several — on a layout where leaving the vehicle in the aisle cost the
+healthy cart 77% of its time blocked. Nothing errors; the policy just never
+tows.
+
+`isOnAThroughRoute` is a fact about the **layout** rather than about who
+happens to be queued, so it is true straight away. It is false only when
+every zone the vehicle holds is on a spur or at a dead end — which is what a
+spur is for, and why the chapter's layout parks its carts on them.
+
+A policy that decides before any time has passed wants the first. A policy
+that has already spent time getting somebody to the vehicle can use either,
+and the second is then the sharper question. `VisitAndAssessPolicy` tows
+when either is true.
 
 **What towing is worth**, on that same shop — two carts, one breaking down
 every 150 feet with a 200-unit repair, over 4000 time units:
@@ -745,6 +761,69 @@ every 150 feet with a 200-unit repair, over 4000 time units:
 The same argument applies to a flat battery, and there it buys something no
 other policy can: `tow` to a charger, `charge`, and the vehicle comes back.
 Without that, a vehicle that runs flat is finished for the replication.
+
+### …tell the rest of the model that a vehicle has broken down?
+
+Attach a listener to the fleet. Any number may be attached, because
+observing does not conflict — a maintenance log, an andon board and a
+dispatcher all want to know and have nothing to do with one another:
+
+```kotlin
+agv.attachInterruptionListener(object : VehicleInterruptionListenerIfc {
+    override fun stopped(interruption: Interruption) {
+        breakdownLog.add(interruption.at to interruption.vehicle.name)
+    }
+})
+```
+
+Three moments, each with a do-nothing default so you name only the ones you
+care about: `stopped`, then exactly one of `returnedToService` or
+`outOfService`. Listeners are called synchronously from inside the vehicle's
+own process, so they may read anything and may call
+`dispatcher.reconsider()`, but they must not suspend and should not move
+anything — deciding what happens to the vehicle is the policy's job.
+
+Note the split: **one policy, because it decides; many listeners, because
+they observe.** It is the same distinction the guide path makes between a
+movement gate and an arrival listener.
+
+**The dispatcher is not told automatically, and on a quiet fleet that costs
+you the load.** A vehicle that stops keeps its assignment, declares nothing
+and posts nothing, so nothing inside the subsystem wakes the dispatcher — and
+a re-tasking rule that would have handed the work to a healthy vehicle is
+never asked. Measured: one load, two carts, the nearer one breaking down
+three feet out with a 2000-unit repair, and no other traffic to wake
+anything.
+
+| | Outcome |
+|---|---|
+| Dispatcher not told | the load is **never delivered** — still suspended at the horizon, with an idle cart on its spur |
+| `ReconsiderOnInterruption` attached | delivered at t=136 by the other cart |
+
+```kotlin
+agv.attachInterruptionListener(ReconsiderOnInterruption(agv.dispatcher))
+```
+
+It is opt-in because waking on every breakdown adds an event, and adding one
+to every model that has failures would change the order of things happening
+at the same instant for a benefit only some of them can use.
+
+**Being told is not the same as being able to act.** A rule that scores by
+distance cannot see a breakdown at all: a vehicle that stopped part-way to
+its pickup is no *further* away than it was, and usually nearer, so a
+distance comparison never takes the work back however long it stands there.
+`ReassigningPolicy` therefore treats a stopped incumbent as unable to
+collect — any vehicle that can reach the pickup takes the task, and the
+improvement threshold does not apply, because the incumbent's cost is no
+longer a distance to compare against. A policy of your own should make the
+same allowance; `AgvVehicle.isOutOfService` is the test.
+
+**And a vehicle being dealt with is not spare capacity.**
+`Agv:NumVehiclesOutOfService` is the third of the three fleet counts, and
+the three partition the fleet at every instant. Without it a vehicle that
+broke down between tours held no assignment and was therefore counted
+*idle*, so a reader of `Agv:NumVehiclesIdle` saw capacity that was not
+there.
 
 ### …abandon an outstanding request?
 
@@ -804,7 +883,8 @@ not.
 | `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
 | `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
 | `Interruption` | A vehicle has stopped: `Failed` or `OutOfCharge`, with where, what it holds, and who is stuck behind it. |
-| `InterruptionPolicyIfc` | What happens next. A process, so it may wait for a technician, assess, and tow. |
+| `InterruptionPolicyIfc` | What happens next. A process, so it may wait for a technician, assess, and tow. One per vehicle. |
+| `VehicleInterruptionListenerIfc` | Told when a vehicle stops and when it comes back. Any number per fleet. |
 | `TaskBoard` | The read-only view of the queue handed to policies: `unassigned`, `assigned`, `oldest`. |
 | `Assignment` | A vehicle's commitment to a task. `isRevocable` until the load is aboard. |
 | `AssignmentProposal` | What a policy returns. Inert: proposing is not doing. |

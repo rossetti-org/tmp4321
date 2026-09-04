@@ -402,7 +402,8 @@ open class Dispatcher @JvmOverloads constructor(
         // then never accounted for anywhere.
         myNumAssignmentsRevoked.increment()
         // Available again in the same breath, so a pass that releases and reassigns can do both
-        // without an intervening wake.
+        // without an intervening wake -- unless the vehicle is out of service, in which case
+        // `declareAvailable` declines on its behalf and it declares itself when it is fit again.
         declareAvailable(assignment.vehicle)
         assignment.vehicle.agent?.abandonAssignment()
     }
@@ -453,6 +454,16 @@ open class Dispatcher @JvmOverloads constructor(
      * declined.
      */
     internal fun declareAvailable(vehicle: AgvVehicle) {
+        // A vehicle that has stopped and is being dealt with cannot take work, whatever else has
+        // just happened to it. The case that makes this necessary rather than defensive is a
+        // revocation: taking a task back from a broken vehicle declares it available in the same
+        // breath, and without this the dispatcher would hand it something else it equally cannot
+        // start. It re-declares itself when its policy has put it right, which is the first thing
+        // its control loop does.
+        if (vehicle.isOutOfService) {
+            withdraw(vehicle)
+            return
+        }
         if (!myAvailable.contains(vehicle)) myAvailable.add(vehicle)
         if (!myNewlyDeclared.contains(vehicle)) myNewlyDeclared.add(vehicle)
         wake()
@@ -508,11 +519,19 @@ open class Dispatcher @JvmOverloads constructor(
     /**
      * Asks the dispatcher to look at the board again.
      *
-     * The dispatcher is woken by the two things that can change a decision from *inside* this
-     * subsystem: a task being posted, and a vehicle declaring itself available. Between them those
-     * cover every internal change, because a vehicle that moves — finishing a task, finishing a
+     * The dispatcher is woken by the two things that ordinarily change a decision from *inside*
+     * this subsystem: a task being posted, and a vehicle declaring itself available. Between them
+     * they cover the working fleet, because a vehicle that moves — finishing a task, finishing a
      * disposition — re-declares when it stops, so anything that alters what a vehicle can reach
      * already causes a fresh pass.
+     *
+     * **They do not cover a vehicle that stops.** One that breaks down or runs flat keeps its
+     * assignment, declares nothing and posts nothing, so nothing here wakes and a task committed to
+     * a vehicle that will not reach it for an hour is not reconsidered. That costs nothing to a
+     * fleet whose rule would not take the task back anyway, and it costs a re-tasking policy the
+     * decision it exists to make. `ReconsiderOnInterruption` is the listener that closes it, and it
+     * is opt-in because waking on every breakdown changes the event sequence of every model that
+     * has them.
      *
      * What they do not cover is a decision that changes for reasons **outside** the subsystem. A
      * policy or a bidding rule is written by the modeller and may depend on anything in their model

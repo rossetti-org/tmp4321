@@ -510,13 +510,21 @@ open class AgvVehicle @JvmOverloads constructor(
      * nothing can be assigned to a vehicle under repair without anything having to check for it.
      */
     internal fun takeInterruption(): Interruption? {
-        val pending = pendingInterruption
-        if (pending != null) {
-            pendingInterruption = null
-            return pending
-        }
-        if (!isFailureDue()) return null
-        return bookFailure()
+        val taken = pendingInterruption?.also { pendingInterruption = null }
+            ?: if (isFailureDue()) bookFailure() else null
+            ?: return null
+        // Out of service from here until its policy has run and the vehicle has been found fit
+        // again. Set before anybody is told, so a listener that reads the fleet counts sees the
+        // vehicle already accounted for rather than still counted as spare capacity.
+        isOutOfService = true
+        // Out of the dispatcher's pool as well. A vehicle repositioning under a disposition is
+        // deliberately left assignable while it moves, so one that breaks down on the way home
+        // would otherwise still be offered work it cannot start. It declares itself again at the
+        // top of its own loop once its policy has put it right.
+        system.dispatcher.withdraw(this)
+        system.refreshFleetCounts()
+        system.notifyStopped(taken)
+        return taken
     }
 
     /**
@@ -528,15 +536,35 @@ open class AgvVehicle @JvmOverloads constructor(
      * assessment and the tow included -- which is what being out of service actually costs.
      */
     internal fun interruptionEnded(interruption: Interruption) {
-        if (interruption !is Interruption.Failed) return
-        if (!isFailed) return
-        isFailed = false
-        myFracTimeFailed?.value = 0.0
-        myCumulativeFailedTime += time - outOfServiceSince
-        myTimeOutOfService?.value = time - outOfServiceSince
-        outOfServiceSince = Double.NaN
-        nextFailureAt = basisValue() + myBetweenFailures!!.value
+        if (interruption is Interruption.Failed && isFailed) {
+            isFailed = false
+            myFracTimeFailed?.value = 0.0
+            myCumulativeFailedTime += time - outOfServiceSince
+            myTimeOutOfService?.value = time - outOfServiceSince
+            outOfServiceSince = Double.NaN
+            nextFailureAt = basisValue() + myBetweenFailures!!.value
+        }
+        if (isFitToContinue) {
+            isOutOfService = false
+            system.refreshFleetCounts()
+            system.notifyReturnedToService(interruption, time - interruption.at)
+        } else {
+            // Stays out of service, and stays counted that way: nothing is going to change its
+            // mind for the rest of the replication.
+            system.notifyOutOfService(interruption)
+        }
     }
+
+    /**
+     * True from the moment the vehicle stops until its policy has put it right -- and thereafter,
+     * for good, if the policy did not.
+     *
+     * Distinct from [isFailed], which is about breakdowns alone: a vehicle stopped for a flat
+     * battery is out of service without having failed. It is what [AgvSystem.numVehiclesOutOfService]
+     * counts, and it is why a vehicle that broke down between tours is no longer reported as idle.
+     */
+    var isOutOfService: Boolean = false
+        private set
 
     /**
      * Whether the vehicle can carry on from where it stands.
@@ -621,6 +649,7 @@ open class AgvVehicle @JvmOverloads constructor(
         isFailed = false
         myFracTimeFailed?.value = 0.0
         pendingInterruption = null
+        isOutOfService = false
         outOfServiceSince = Double.NaN
         myCumulativeFailedTime = 0.0
         nextFailureAt = if (myBetweenFailures == null) Double.POSITIVE_INFINITY

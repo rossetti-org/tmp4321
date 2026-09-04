@@ -71,26 +71,41 @@ sealed class Interruption(
         }
 
     /**
-     * True when at least one vehicle is currently held up by this one.
+     * True when at least one vehicle is being held up by this one **at this instant**.
      *
-     * The question a policy actually asks. A vehicle broken down on a spur nobody uses can be
-     * repaired where it stands; the same vehicle across a main aisle cannot, and this is the
-     * difference between the two.
+     * The name says *now* because that is the whole of what it means, and the difference matters.
+     * A vehicle becomes blocked only when it tries to enter the next zone and is refused, so at the
+     * moment a vehicle stops, nobody has tried yet and the answer is no. Twenty minutes later three
+     * carts are queued behind it and the answer is yes. Both answers are correct.
      *
-     * **Do not ask it at the instant the vehicle stopped.** A queue behind a stopped vehicle takes
-     * time to form, so the answer then is almost always no -- including on a layout where that same
-     * vehicle goes on to block the fleet for most of the run. Measured on the chapter's shop: over
-     * sixteen breakdowns, asking immediately found an obstruction **not once**, while asking forty
-     * time units later found several, and leaving the vehicle in the aisle cost the healthy cart
-     * 77% of its time blocked.
+     * **So a policy that asks this as its first line never tows.** Measured on the chapter's shop:
+     * over sixteen breakdowns, asking at the instant the vehicle stopped found an obstruction *not
+     * once*, on a layout where leaving it in the aisle cost the healthy cart 77% of its time
+     * blocked. Nothing errors; the model simply behaves as though towing were not configured.
      *
-     * A realistic policy does not have this problem, because it cannot decide anything until
-     * somebody has been told, been free, and walked to the vehicle -- and by then the queue is
-     * real. A policy that branches on this before any time has passed is asking a question whose
-     * answer it has arranged to be no.
+     * A realistic policy never meets this, because it cannot decide anything until somebody has
+     * been told, been free, and walked to the vehicle -- and by then the queue is real. **Ask this
+     * one after time has passed.** To decide before any has, ask [isOnAThroughRoute], which is a
+     * fact about the layout and is true the instant the vehicle stops.
      */
-    val isObstructing: Boolean
+    val isObstructingNow: Boolean
         get() = obstructed.isNotEmpty()
+
+    /**
+     * True when the vehicle is standing somewhere traffic with business elsewhere has to pass.
+     *
+     * The judgement a person makes on arriving at a dead vehicle, and the one this class can answer
+     * **immediately**: it is a fact about the layout rather than about who happens to be queued, so
+     * it does not need time to pass to be meaningful. False when every zone the vehicle holds is on
+     * a spur or at a dead end -- which is what a spur is for.
+     *
+     * The pair it forms with [isObstructingNow] is the useful one. This says *is this a bad place to
+     * stop*; the other says *is anybody actually stuck*. A policy with no delays before its decision
+     * wants this one. A policy that has already spent time getting somebody to the vehicle can use
+     * either, and the other is then the sharper question.
+     */
+    val isOnAThroughRoute: Boolean
+        get() = heldZones.any { it.isOnAThroughRoute }
 
     /**
      * The vehicle has broken down.
@@ -206,4 +221,54 @@ class RepairInPlacePolicy : InterruptionPolicyIfc {
     }
 
     override fun toString(): String = "RepairInPlacePolicy"
+}
+
+/**
+ * Told when a vehicle stops and when it comes back.
+ *
+ * **Separate from [InterruptionPolicyIfc], and the split is the same one the guide path already
+ * makes between a movement gate and an arrival listener.** A policy *decides*, so there is one of
+ * them: two would need a rule for what to do when they disagree. A listener *observes*, so there
+ * may be any number: observers do not conflict, and the things that want to know about a breakdown
+ * -- a maintenance log, an andon board, a dispatcher with a re-tasking rule, a modeller's own
+ * bookkeeping -- have nothing to do with one another.
+ *
+ * Attached to the fleet rather than to a vehicle, because a breakdown is a fleet event: it changes
+ * what the fleet can do. [Interruption.vehicle] says which one, so a listener interested in a single
+ * vehicle filters in one line.
+ *
+ * Called **synchronously**, from inside the vehicle's own process at a point where no simulated
+ * time passes. A listener may read anything and may call [Dispatcher.reconsider]; it must not
+ * suspend, which the type enforces, and it should not move anything -- deciding what happens to the
+ * vehicle is the policy's job, and a listener that moved it would be racing the policy that is
+ * about to.
+ *
+ * Every method has a do-nothing default, so an implementation names only the moments it cares about.
+ */
+interface VehicleInterruptionListenerIfc {
+
+    /**
+     * The vehicle has stopped and its policy is about to run.
+     *
+     * The vehicle still holds its assignment and its load. If it had not yet collected the load, the
+     * assignment is still revocable -- so this is the moment a dispatcher with a re-tasking rule
+     * would want to look at the board again.
+     */
+    fun stopped(interruption: Interruption) {}
+
+    /**
+     * The policy put the vehicle right and it is going back to work.
+     *
+     * @param outOfServiceFor how long the whole procedure took, from stopping to now
+     */
+    fun returnedToService(interruption: Interruption, outOfServiceFor: Double) {}
+
+    /**
+     * The policy returned and the vehicle is still not fit to carry on, so it is out for the rest of
+     * the replication -- standing where it stopped and holding its zones.
+     *
+     * The fleet is permanently one vehicle smaller from here, which is worth telling a dispatcher
+     * that was counting on it.
+     */
+    fun outOfService(interruption: Interruption) {}
 }

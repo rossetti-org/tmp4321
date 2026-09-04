@@ -236,6 +236,20 @@ sealed class Zone {
         return length / (velocity * velocityFactor)
     }
 
+    /**
+     * Whether traffic with business elsewhere has to pass through this zone.
+     *
+     * A fact about the layout and not about who happens to be standing here, so it is answerable at
+     * any instant -- including the instant a transporter stops, when nobody has yet had time to
+     * queue up behind it.
+     *
+     * A spur is the exception, and it is the exception the guide path already recognises: a dead end
+     * is entered and left the same way, so nothing passes *through* it, which is what makes a spur
+     * the standard device for keeping a stopped transporter out of everyone's way. Its zones are
+     * refuges, and so is the junction it ends at, because that junction leads nowhere else.
+     */
+    abstract val isOnAThroughRoute: Boolean
+
     final override fun toString(): String = name
 }
 
@@ -256,6 +270,10 @@ class LinkZone internal constructor(
 ) : Zone() {
 
     override val name: String = "${link.name}.Zone$positionOnLink"
+
+    /** True unless the owning link is a spur, which nothing passes through. */
+    override val isOnAThroughRoute: Boolean
+        get() = link.type != LinkType.SPUR
 
     override val length: Double
         get() = link.zoneLength
@@ -295,6 +313,16 @@ class IntersectionZone internal constructor(
 ) : Zone() {
 
     override val name: String = intersection.name
+
+    /**
+     * True unless this is a dead end.
+     *
+     * A junction with one incident link leads nowhere but back the way a transporter came, so the
+     * only traffic that reaches it is traffic that wanted it. Two or more and it is a junction in
+     * the ordinary sense: somebody's route runs through it.
+     */
+    override val isOnAThroughRoute: Boolean
+        get() = intersection.incidentLinks.size > 1
 
     /** True when the junction is treated as a point, so that crossing it takes no time. */
     val isDimensionless: Boolean

@@ -107,6 +107,37 @@ open class AgvSystem @JvmOverloads constructor(
         }
     }
 
+    private val myInterruptionListeners = mutableListOf<VehicleInterruptionListenerIfc>()
+
+    /**
+     * Asks to be told whenever a vehicle in this fleet stops and cannot carry on by itself.
+     *
+     * Any number of listeners; see [VehicleInterruptionListenerIfc] for why observation is plural
+     * where the policy that decides is singular. [ReconsiderOnInterruption] is the one most models
+     * want.
+     */
+    fun attachInterruptionListener(listener: VehicleInterruptionListenerIfc) {
+        myInterruptionListeners.add(listener)
+    }
+
+    /** Stops telling a listener about interruptions. */
+    fun detachInterruptionListener(listener: VehicleInterruptionListenerIfc) {
+        myInterruptionListeners.remove(listener)
+    }
+
+    // Copied before iterating, so that a listener may attach or detach one while being told.
+    internal fun notifyStopped(interruption: Interruption) {
+        for (l in myInterruptionListeners.toList()) l.stopped(interruption)
+    }
+
+    internal fun notifyReturnedToService(interruption: Interruption, outOfServiceFor: Double) {
+        for (l in myInterruptionListeners.toList()) l.returnedToService(interruption, outOfServiceFor)
+    }
+
+    internal fun notifyOutOfService(interruption: Interruption) {
+        for (l in myInterruptionListeners.toList()) l.outOfService(interruption)
+    }
+
     private var myFailedTimePerTransport: Response? = null
 
     /**
@@ -256,8 +287,23 @@ open class AgvSystem @JvmOverloads constructor(
         this, "${this.name}:NumVehiclesOnTask", allowedDomain = ksl.utilities.Interval(0.0, Double.MAX_VALUE)
     )
 
-    /** How many vehicles are working a task. The complement of [numVehiclesIdle] over the fleet. */
+    /** How many vehicles are working a task. */
     val numVehiclesOnTask: TWResponseCIfc get() = myNumVehiclesOnTask
+
+    private val myNumVehiclesOutOfService = TWResponse(
+        this, "${this.name}:NumVehiclesOutOfService",
+        allowedDomain = ksl.utilities.Interval(0.0, Double.MAX_VALUE)
+    )
+
+    /**
+     * How many vehicles are stopped and being dealt with -- broken down, waiting for a technician,
+     * being pushed out of the way, or out for the rest of the replication.
+     *
+     * The three counts partition the fleet, which is the point of this one existing. Without it a
+     * vehicle that broke down between tours held no assignment and was therefore counted **idle**,
+     * so a reader of [numVehiclesIdle] would see spare capacity that was not there.
+     */
+    val numVehiclesOutOfService: TWResponseCIfc get() = myNumVehiclesOutOfService
 
     /**
      * How long a load spent aboard, observed once at delivery.
@@ -453,10 +499,13 @@ open class AgvSystem @JvmOverloads constructor(
         }
     }
 
-    private fun refreshFleetCounts() {
-        val onTask = myVehicles.count { it.currentAssignment != null }
+    /** The three counts partition the fleet: on task, out of service, and neither. */
+    internal fun refreshFleetCounts() {
+        val out = myVehicles.count { it.isOutOfService }
+        val onTask = myVehicles.count { it.currentAssignment != null && !it.isOutOfService }
         myNumVehiclesOnTask.value = onTask.toDouble()
-        myNumVehiclesIdle.value = (myVehicles.size - onTask).toDouble()
+        myNumVehiclesOutOfService.value = out.toDouble()
+        myNumVehiclesIdle.value = (myVehicles.size - onTask - out).toDouble()
     }
 
     // ---- lifecycle -----------------------------------------------------------------------------
@@ -910,6 +959,10 @@ open class AgvSystem @JvmOverloads constructor(
                             hold(outOfServiceQ,                             // SUSPENDS, forever
                                 suspensionName = "${vehicle.name}:outOfService")
                         }
+                        // A dispatcher told about the breakdown may have taken the task off this
+                        // vehicle while its policy ran, and if it did, the stop we were travelling
+                        // to belongs to somebody else now.
+                        if (assignment !== a) break
                     }
                     if (assignment !== a) break
                     when (val act = stop.action) {
