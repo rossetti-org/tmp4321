@@ -59,8 +59,7 @@ answer. With one vehicle the two agree *exactly*, to the digit — which is
 the result that makes them two models of one world rather than two worlds
 (`ksl.examples.general.agv.TwoParadigmsExample`).
 
-**Not modelled in this version.** Breakdowns and repair, and multi-load
-vehicles. `ServiceKind` is the named seam for the first.
+**Not modelled in this version.** Multi-load vehicles.
 A vehicle carries one load at a time, and
 `AgvVehicle.loadCapacity` above one is refused at construction rather
 than accepted and ignored — model the consolidation upstream, or use a
@@ -585,6 +584,69 @@ flat exactly as though it had no charging policy. The reserve is what makes
 a low vehicle decline the next load, and declining is what makes it idle
 enough for its disposition to be asked.
 
+### …make vehicles break down?
+
+Give the vehicle a `FailureModel`. A failure is due once the chosen
+quantity has advanced by a draw since the last repair, and the quantity is
+the choice you are making:
+
+```kotlin
+val cart = AgvVehicle(
+    agv, TransporterPlacement.At("I6"), ConstantRV(3.0), name = "Cart",
+    failureModel = FailureModel.clockBased(
+        timeBetweenFailures = ExponentialRV(400.0, streamNum = 7),
+        repairTime = LognormalRV(20.0, 25.0, streamNum = 8),
+        basis = FailureBasis.OPERATING_TIME
+    )
+)
+```
+
+| Factory | Basis | Failures go with |
+|---|---|---|
+| `FailureModel.clockBased(..., OPERATING_TIME)` | Time the vehicle was not idle | Hours in service |
+| `FailureModel.clockBased(..., CALENDAR_TIME)` | Elapsed simulated time | Age |
+| `FailureModel.usageBased(...)` | Tasks completed | Duty cycles |
+| `FailureModel.distanceBased(...)` | Distance travelled | Mileage |
+
+`Cart:NumFailures`, `Cart:FracTimeFailed` and `Cart:RepairTime` land on
+the report, for a vehicle that has a failure model and only for one.
+
+**A failure interrupts the tour; it does not revoke the assignment.** The
+vehicle keeps its load, is repaired where it stands, and resumes the tour
+from the stop it had reached. Handing the task back would put a load on the
+board while a vehicle was still physically holding it, and two vehicles
+would then believe they had it.
+
+**A failure is noticed at the next check point, not at the instant it comes
+due.** None of the four bases has events of its own, so a failure accrues
+silently and fires at whichever comes first: the next zone boundary, or the
+end of the current tour. A vehicle parked with nothing to do therefore does
+not fail while parked — it fails at the first boundary of its next journey,
+carrying whatever came due while it stood there. For a busy fleet this is a
+rounding difference. For a mostly idle one it is not, and `CALENDAR_TIME`
+on such a fleet reads as *failures that had become due by the time the
+vehicle next worked*.
+
+**Calendar and operating time are not a refinement of one another.** On a
+fleet that is idle most of the run they give different counts, which is why
+both are offered rather than one being chosen for you.
+
+The gap is smaller than the idle fraction alone would suggest, and it is
+worth knowing why: **failures do not queue up**. When one fires, the next
+threshold is drawn from the basis value at that instant, so several
+failures that came due while the vehicle stood still collapse into one.
+A calendar-basis fleet therefore fails roughly as often as it is *checked*,
+not as often as the clock says it should — which reads as "the vehicle was
+found broken when it was next needed". One cart, arrivals averaging 600
+apart over a horizon of 6000, a failure every 120: 26 failures on calendar
+time against 21 on operating time, with the cart working 2568 of the 6000.
+
+A vehicle under repair on the guide path is an obstruction for as long as
+the repair lasts — see §6 — and one still under repair when the horizon
+falls shows on `Agv:NumVehiclesFailedAtHorizon`, which is what says the
+open assignment and the suspended entity beside it belong to a breakdown
+rather than to a run that was too short.
+
 ### …abandon an outstanding request?
 
 ```kotlin
@@ -641,6 +703,7 @@ not.
 | `Dispatcher.TransportTask` | A load to collect and deliver. What `requestAgvTransport` returns. |
 | `Dispatcher.ServiceTask` | Something a vehicle does for itself, by `ServiceKind` — currently `Reposition`. |
 | `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
+| `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
 | `TaskBoard` | The read-only view of the queue handed to policies: `unassigned`, `assigned`, `oldest`. |
 | `Assignment` | A vehicle's commitment to a task. `isRevocable` until the load is aboard. |
 | `AssignmentProposal` | What a policy returns. Inert: proposing is not doing. |
@@ -722,6 +785,18 @@ area is *still available*, and on a one-way link it cannot leave until
 whatever is in the staging zone moves. A dispatcher may therefore commit a
 task to a vehicle that cannot start on it. Measure `fracTimeBlocked` across
 the fleet before believing a staging-area design.
+
+### A vehicle under repair is an obstruction too
+
+Everything the previous heading says about a flat vehicle applies to a
+broken-down one for the length of its repair: it halts on the zones it
+holds and closes every route through them. The difference is that a repair
+ends, so this is a delay rather than a permanent hole — but a repair
+distribution with a long tail on a one-way loop will produce blocking that
+looks nothing like the mean.
+
+`Cart2:NumTimesBlocked` on the *healthy* vehicles is where that shows up,
+not on the one that failed.
 
 ### A flat vehicle is a closed aisle, not an idle asset
 

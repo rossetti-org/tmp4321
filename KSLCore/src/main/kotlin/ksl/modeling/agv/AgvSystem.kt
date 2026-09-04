@@ -346,6 +346,18 @@ open class AgvSystem @JvmOverloads constructor(
     private val myNumEntitiesNeverResumed = Response(this, "${this.name}:NumEntitiesNeverResumed")
     val numEntitiesNeverResumed: ResponseCIfc get() = myNumEntitiesNeverResumed
 
+    private val myNumVehiclesFailed = Response(this, "${this.name}:NumVehiclesFailedAtHorizon")
+
+    /**
+     * How many vehicles were broken down when the replication ended.
+     *
+     * Reported apart from an assignment left open, and both are needed to read the other. A failed
+     * vehicle keeps its load, so its task shows as an open assignment and its entity as one never
+     * resumed -- which, without this row, reads as a run that was merely too short. It was not: the
+     * work was stopped, and how long the fleet spent stopped is [AgvVehicle.fracTimeFailed].
+     */
+    val numVehiclesFailedAtHorizon: ResponseCIfc get() = myNumVehiclesFailed
+
     private val myNumVehiclesStranded = Response(this, "${this.name}:NumVehiclesStranded")
 
     /**
@@ -461,6 +473,7 @@ open class AgvSystem @JvmOverloads constructor(
         reportEntitiesNeverResumed()
         reportAssignmentsStillOpen()
         reportVehiclesStranded()
+        reportVehiclesFailed()
         // After the diagnostics rather than before them: if the audit is about to raise, the three
         // reports above are the context a reader will want, and they are already in the log.
         if (auditAtReplicationEnd) {
@@ -573,6 +586,26 @@ open class AgvSystem @JvmOverloads constructor(
                     append(System.lineSeparator())
                     append("  (${v.name}) at (${v.currentLocationName}), holding ")
                     append("${v.body.heldZones.joinToString { it.name }}")
+                }
+            }
+        }
+    }
+
+    /** Vehicles broken down when the horizon fell, so that the work they were holding is visible. */
+    private fun reportVehiclesFailed() {
+        val failed = myVehicles.filter { it.isFailed }
+        myNumVehiclesFailed.value = failed.size.toDouble()
+        if (failed.isEmpty()) return
+        logger.warn {
+            buildString {
+                append("AgvSystem ($name): ${failed.size} vehicle(s) were under repair when ")
+                append("replication ${model.currentReplicationNumber} ended. A failed vehicle keeps ")
+                append("its load, so any assignment and any suspended entity reported above may ")
+                append("belong to one of these rather than to a run that was simply too short.")
+                for (v in failed) {
+                    append(System.lineSeparator())
+                    append("  (${v.name}) at (${v.currentLocationName})")
+                    v.currentAssignment?.let { append(", holding task (${it.task.name})") }
                 }
             }
         }
@@ -854,6 +887,14 @@ open class AgvSystem @JvmOverloads constructor(
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()
+                // Between tours is the second place a failure can come due, and the safe one: the
+                // vehicle has not declared itself available yet, so nothing can be assigned to a
+                // vehicle under repair without anything having to check for that.
+                val repair = vehicle.repairBetweenToursIfDue()
+                if (repair > 0.0) {
+                    delay(repair, suspensionName = "${vehicle.name}:repair")  // SUSPENDS
+                    vehicle.repairFinished()
+                }
             }
         }
 

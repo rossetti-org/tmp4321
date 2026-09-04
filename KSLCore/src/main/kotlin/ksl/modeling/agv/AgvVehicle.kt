@@ -15,11 +15,13 @@ import ksl.modeling.guidedpath.VelocitySampling
 import ksl.modeling.guidedpath.rules.EndOfZoneControl
 import ksl.modeling.guidedpath.rules.ZoneControlRuleIfc
 import ksl.modeling.variable.Counter
+import ksl.modeling.variable.RandomVariable
 import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response
 import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
+import ksl.simulation.KSLEvent
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.RVariableIfc
 
@@ -36,6 +38,8 @@ import ksl.utilities.random.rvariable.RVariableIfc
  *
  * A modeller names only this object.
  *
+ * @property failureModel when the vehicle breaks down and how long it takes to repair, or null for
+ * a vehicle that does not fail. Like [battery], a vehicle without one reports no failure rows.
  * @property battery the vehicle's energy store, or null for a vehicle whose charge is not modelled.
  * A vehicle with no battery reports no charging statistics, because a row that measures something
  * the model does not have is a question its reader has to answer for themselves every time.
@@ -53,7 +57,8 @@ open class AgvVehicle @JvmOverloads constructor(
     name: String? = null,
     physicalLength: Double? = null,
     val loadCapacity: Int = 1,
-    val battery: Battery? = null
+    val battery: Battery? = null,
+    val failureModel: FailureModel? = null
 ) : ModelElement(system, name) {
 
     /**
@@ -333,10 +338,24 @@ open class AgvVehicle @JvmOverloads constructor(
     val minStateOfCharge: ResponseCIfc?
         get() = myMinStateOfCharge
 
-    /** The gate the space layer asks at every zone boundary. */
+    /**
+     * The gate the space layer asks at every zone boundary.
+     *
+     * Two reasons a vehicle may not carry on, checked in the order that matters: a vehicle with no
+     * charge cannot be repaired into moving again, so exhaustion is decided first and a failure due
+     * at the same instant stays due until the vehicle moves -- which, for a flat one, is never.
+     */
     private fun mayContinuePastBoundary(): Boolean {
         observeCharge()
-        if (!isFlat) return true
+        if (isFlat) return refuseForFlatBattery()
+        if (isFailureDue()) {
+            failWhereItStands()
+            return false
+        }
+        return true
+    }
+
+    private fun refuseForFlatBattery(): Boolean {
         myNumTimesStranded?.increment()
         logger.warn {
             "AgvVehicle ($name) ran out of charge at ($currentLocationName) during replication " +
@@ -372,6 +391,121 @@ open class AgvVehicle @JvmOverloads constructor(
         observeCharge()
     }
 
+
+    // ---- failure and repair ---------------------------------------------------------------------
+
+    private val myBetweenFailures: RandomVariable? = failureModel?.let {
+        RandomVariable(this, it.betweenFailures, name = "${this.name}:BetweenFailuresRV")
+    }
+    private val myRepairTimeRV: RandomVariable? = failureModel?.let {
+        RandomVariable(this, it.repairTime, name = "${this.name}:RepairTimeRV")
+    }
+
+    /** The value of the basis quantity at which the next failure comes due. */
+    private var nextFailureAt: Double = Double.POSITIVE_INFINITY
+
+    /**
+     * True while the vehicle is broken down.
+     *
+     * It keeps its assignment and its load throughout: a failure interrupts the tour, it does not
+     * hand the work back. See [FailureModel].
+     */
+    var isFailed: Boolean = false
+        private set
+
+    /** How far the basis quantity has advanced, in whatever units the basis is measured in. */
+    private fun basisValue(): Double = when (failureModel?.basis) {
+        FailureBasis.CALENDAR_TIME -> time
+        FailureBasis.OPERATING_TIME -> body.operatingTime
+        FailureBasis.DISTANCE_TRAVELLED -> body.distanceTravelled
+        FailureBasis.TASKS_COMPLETED -> myNumTasksCompleted.value
+        null -> 0.0
+    }
+
+    /** True when a failure has come due and has not yet been acted on. */
+    internal fun isFailureDue(): Boolean =
+        failureModel != null && !isFailed && basisValue() >= nextFailureAt
+
+    private val myFracTimeFailed: TWResponse? =
+        if (failureModel == null) null else TWResponse(this, "${this.name}:FracTimeFailed")
+
+    /** The fraction of time the vehicle was broken down. Registered only if it can fail. */
+    val fracTimeFailed: TWResponseCIfc?
+        get() = myFracTimeFailed
+
+    private val myNumFailures: Counter? =
+        if (failureModel == null) null else Counter(this, "${this.name}:NumFailures")
+
+    /** How many times the vehicle failed. Registered only if it can fail. */
+    val numFailures: CounterCIfc?
+        get() = myNumFailures
+
+    private val myRepairTime: Response? =
+        if (failureModel == null) null else Response(this, "${this.name}:RepairTime")
+
+    /** How long each repair took, one observation per failure. Registered only if it can fail. */
+    val repairTime: ResponseCIfc?
+        get() = myRepairTime
+
+    /**
+     * Books the failure and returns how long the repair takes.
+     *
+     * Does not schedule anything. The two check points want different things done with the
+     * duration -- a vehicle halted at a zone boundary needs an event to start it moving again,
+     * while one between tours simply delays -- so the caller owns the waiting.
+     */
+    private fun beginRepair(): Double {
+        val duration = myRepairTimeRV!!.value
+        isFailed = true
+        myFracTimeFailed?.value = 1.0
+        myNumFailures?.increment()
+        myRepairTime?.value = duration
+        return duration
+    }
+
+    /** Puts the vehicle back in service and sets the next failure due. */
+    private fun endRepair() {
+        isFailed = false
+        myFracTimeFailed?.value = 0.0
+        nextFailureAt = basisValue() + myBetweenFailures!!.value
+    }
+
+    /**
+     * Fails a vehicle that is halted at a zone boundary, and schedules it back into service.
+     *
+     * The vehicle's agent is suspended in the space layer's movement queue and cannot delay for
+     * itself, so the repair is an event: at its end the transporter is released from the halt and
+     * carries on along the route it never gave up. The tour resumes at the stop it had reached,
+     * which is what makes a failure an interruption rather than a revocation.
+     */
+    private fun failWhereItStands() {
+        val duration = beginRepair()
+        schedule(
+            { _: KSLEvent<Nothing> ->
+                endRepair()
+                system.spaceSystem.resumeHaltedTransporter(body)
+            },
+            duration, name = "${this.name}:repaired"
+        )
+    }
+
+    /**
+     * Repairs a vehicle that has finished a tour, if one is due. Returns how long to wait.
+     *
+     * Called from the control loop between tours, where the vehicle has not yet declared itself
+     * available -- so nothing can be assigned to a vehicle under repair, without anything having to
+     * check for that.
+     */
+    internal fun repairBetweenToursIfDue(): Double {
+        if (!isFailureDue()) return 0.0
+        return beginRepair()
+    }
+
+    /** Ends a between-tours repair. */
+    internal fun repairFinished() {
+        if (isFailed) endRepair()
+    }
+
     /**
      * Commands the body toward a location and reports whether a journey is now under way.
      *
@@ -401,8 +535,15 @@ open class AgvVehicle @JvmOverloads constructor(
         chargeAdded = 0.0
         chargeClockStartedAt = time
         lowestCharge = Double.MAX_VALUE
-        if (battery != null) {
-            myFracTimeCharging?.value = 0.0
+        myFracTimeCharging?.value = 0.0
+        isFailed = false
+        myFracTimeFailed?.value = 0.0
+        nextFailureAt = if (myBetweenFailures == null) Double.POSITIVE_INFINITY
+        else basisValue() + myBetweenFailures.value
+        // One gate, because a gate is a veto and two would need a rule for disagreeing. Installed
+        // only when something can actually refuse, so a vehicle that neither runs on a battery nor
+        // breaks down is asked nothing at all.
+        if (battery != null || failureModel != null) {
             body.attachMovementGate { _, _ -> mayContinuePastBoundary() }
         }
     }
