@@ -311,9 +311,13 @@ class FailureTest {
             "a vehicle failing every $n tasks completed $completed of them and failed " +
                     "${total(s.cart.numFailures!!)} times"
         )
-        assertTrue(
-            mean(s.cart.repairTime!!) == 2.0,
-            "the mean repair time was ${mean(s.cart.repairTime!!)}, not the constant 2.0 it was given"
+        // Out of service for exactly the repair, because the default policy adds nothing around it.
+        // A policy that made somebody walk to the vehicle would move this and not the repair time,
+        // which is the distinction the row is named for.
+        assertEquals(
+            2.0, mean(s.cart.timeOutOfService!!), 1.0e-12,
+            "the vehicle was out of service for ${mean(s.cart.timeOutOfService!!)} against a repair " +
+                    "time of the constant 2.0 it was given, under a policy that does nothing else"
         )
     }
 

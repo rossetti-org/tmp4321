@@ -608,14 +608,23 @@ val cart = AgvVehicle(
 | `FailureModel.usageBased(...)` | Tasks completed | Duty cycles |
 | `FailureModel.distanceBased(...)` | Distance travelled | Mileage |
 
-`Cart:NumFailures`, `Cart:FracTimeFailed` and `Cart:RepairTime` land on
-the report, for a vehicle that has a failure model and only for one.
+`Cart:NumFailures`, `Cart:FracTimeFailed` and `Cart:TimeOutOfService` land
+on the report, for a vehicle that has a failure model and only for one; and
+`Agv:FailedTimePerTransport` appears once any vehicle in the fleet can fail.
+
+`TimeOutOfService` is the **whole procedure** — the wait for a technician,
+the walk, the assessment and any tow, not the repair alone. What the repair
+itself costs is the `repairTime` you gave the failure model.
 
 **A failure interrupts the tour; it does not revoke the assignment.** The
-vehicle keeps its load, is repaired where it stands, and resumes the tour
-from the stop it had reached. Handing the task back would put a load on the
-board while a vehicle was still physically holding it, and two vehicles
-would then believe they had it.
+vehicle keeps its load, is repaired, and resumes the tour from the stop it
+had reached — from wherever it now stands, if somebody moved it. Handing the
+task back would put a load on the board while a vehicle was still physically
+holding it, and two vehicles would then believe they had it.
+
+**What happens next is a policy, not a duration.** See *…do what a site
+actually does when a vehicle breaks down?* below. The default repairs the
+vehicle where it stands for the drawn repair time and nothing else.
 
 **A failure is noticed at the next check point, not at the instant it comes
 due.** None of the four bases has events of its own, so a failure accrues
@@ -646,6 +655,96 @@ the repair lasts — see §6 — and one still under repair when the horizon
 falls shows on `Agv:NumVehiclesFailedAtHorizon`, which is what says the
 open assignment and the suspended entity beside it belong to a breakdown
 rather than to a run that was too short.
+
+### …do what a site actually does when a vehicle breaks down?
+
+Nobody's AGV is repaired by a number. Somebody is told, somebody who is free
+walks over, looks at it, and pushes it out of the aisle if it is in the way.
+Every step of that is a wait or a branch, so what happens after a vehicle
+stops is a **process**, written as an `InterruptionPolicyIfc`:
+
+```kotlin
+class VisitAndAssess(
+    private val technicians: ResourceWithQ,
+    private val refuge: String,
+    private val reportingDelay: RVariableIfc,
+    private val walkingTime: RVariableIfc,
+    private val assessmentTime: RVariableIfc
+) : InterruptionPolicyIfc {
+
+    override suspend fun KSLProcessBuilder.handle(interruption: Interruption) {
+        val vehicle = interruption.vehicle
+        delay(reportingDelay)                        // nobody noticed for a while
+        val tech = seize(technicians)                // somebody has to be free
+        delay(walkingTime)                           // and walk to it
+        delay(assessmentTime)                        // and look at it
+        if (interruption.isObstructing) {            // decided at the vehicle, not before
+            tow(vehicle, refuge, atVelocity = 1.0)   // pushed out of the aisle
+        }
+        if (interruption is Interruption.Failed) delay(interruption.repairTime)
+        release(tech)
+    }
+}
+
+cart.interruptionPolicy = VisitAndAssess(
+    technicians, refuge = "MaintenanceSpur",
+    reportingDelay = ConstantRV(2.0),
+    walkingTime = ExponentialRV(8.0, streamNum = 9),
+    assessmentTime = ConstantRV(5.0)
+)
+```
+
+`VisitAndAssessPolicy` ships with exactly that shape, so most models can use
+it as it stands.
+
+The framework contributes two verbs and one context object; everything else
+is ordinary process code.
+
+| | |
+|---|---|
+| `tow(vehicle, to, atVelocity)` | Pushes a stopped vehicle along the guide path to somewhere it is out of the way, and waits for it to get there |
+| `charge(vehicle)` | Holds a vehicle on a charger until its battery is full |
+| `Interruption` | Where it stopped, what it holds, what it was doing, the task in hand, and **who is stuck behind it** |
+
+**A towed vehicle is still on the guide path.** It claims and gives up zones
+exactly as a driving one does, because a vehicle being pushed down an aisle
+blocks that aisle every bit as much as one driving down it. What changes is
+where it ends up. It is exempt from its own faults while under tow —
+neither a flat battery nor the failure it is being pushed away from stops it
+part way.
+
+**The velocity is the pusher's**, and overrides the vehicle's own
+distribution for the duration. How fast a person moves a dead AGV has
+nothing to do with how fast it drives.
+
+**The policy has no return value.** When it returns, the subsystem asks the
+same question the vehicle asks at every zone boundary: *is this fit to carry
+on?* A repair that finished leaves a repaired vehicle and it re-routes from
+wherever it now stands. A policy that did nothing about a flat battery
+leaves a flat vehicle, and it goes out of service for the rest of the
+replication. There is no way for a policy to claim it fixed something it did
+not.
+
+**Ask `isObstructing` at the vehicle, not at the breakdown.** It is a live
+query, and a queue behind a stopped vehicle takes time to form — so asking
+at the instant it stops nearly always says no. Measured on the chapter's
+shop over sixteen breakdowns: asking immediately found an obstruction *not
+once*, while asking forty time units later found several, on a layout where
+leaving the vehicle in the aisle cost the healthy cart 77% of its time
+blocked. A realistic policy never hits this, because it cannot decide
+anything until somebody has been told, been free, and walked there.
+
+**What towing is worth**, on that same shop — two carts, one breaking down
+every 150 feet with a 200-unit repair, over 4000 time units:
+
+| | Loads delivered | Healthy cart blocked |
+|---|---|---|
+| Left in the aisle | 15 | 77% |
+| Pushed onto a spur | 34 | 10% |
+
+The same argument applies to a flat battery, and there it buys something no
+other policy can: `tow` to a charger, `charge`, and the vehicle comes back.
+Without that, a vehicle that runs flat is finished for the replication.
 
 ### …abandon an outstanding request?
 
@@ -704,6 +803,8 @@ not.
 | `Dispatcher.ServiceTask` | Something a vehicle does for itself, by `ServiceKind` — currently `Reposition`. |
 | `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
 | `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
+| `Interruption` | A vehicle has stopped: `Failed` or `OutOfCharge`, with where, what it holds, and who is stuck behind it. |
+| `InterruptionPolicyIfc` | What happens next. A process, so it may wait for a technician, assess, and tow. |
 | `TaskBoard` | The read-only view of the queue handed to policies: `unassigned`, `assigned`, `oldest`. |
 | `Assignment` | A vehicle's commitment to a task. `isRevocable` until the load is aboard. |
 | `AssignmentProposal` | What a policy returns. Inert: proposing is not doing. |

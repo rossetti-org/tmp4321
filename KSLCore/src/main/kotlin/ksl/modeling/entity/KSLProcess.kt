@@ -36,6 +36,7 @@ import ksl.modeling.entity.ProcessModel.Entity
 import ksl.modeling.queue.Queue
 import ksl.modeling.guidedpath.*
 import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.AgvTransportResult
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.spatial.*
@@ -2564,10 +2565,88 @@ interface KSLProcessBuilder {
             waitForArrival = pickedUp - task.assignedAt,
             timeAboard = delivered - pickedUp,
             blockedTime = task.blockedTime,
+            failedTime = task.failedTime,
             routeLength = task.loadedRouteLength,
             vehicleName = task.carriedBy?.name ?: "",
             numReassignments = task.numReassignments
         )
     }
 
+}
+
+/**
+ * Pushes a stopped vehicle along the guide path to somewhere it is out of the way, and waits for it
+ * to get there.
+ *
+ * **The vehicle stays on the guide path throughout**, claiming and giving up zones exactly as a
+ * driving one does. That is not a simplification: a vehicle being pushed down an aisle blocks that
+ * aisle every bit as much as one driving down it, and a model in which it did not would understate
+ * what a breakdown costs. What changes at the far end is where it ends up -- on a spur, in a
+ * cross-aisle, at a maintenance bay -- and therefore what it is standing on for the rest of the
+ * repair.
+ *
+ * **A vehicle under tow is exempt from its own faults.** It is not deciding anything and it is not
+ * driving; somebody is pushing it. So neither a flat battery nor the failure it is being towed away
+ * from may stop it part way, and the movement gate lets it through every boundary until it arrives.
+ *
+ * The velocity is the *pusher's*, not the vehicle's, and overrides its velocity distribution
+ * entirely for the duration. How fast a person can move a dead AGV has nothing to do with how fast
+ * it drives.
+ *
+ * Called from an [ksl.modeling.agv.InterruptionPolicyIfc], which runs inside the vehicle's own agent -- which is what
+ * makes this a plain suspension rather than a message to somebody else. When it returns, the vehicle
+ * is at [to] and its tour, if it had one, is untouched: the tour names stops, not routes, so it
+ * finishes from wherever the vehicle now stands.
+ *
+ * @param vehicle the vehicle to move
+ * @param to an intersection name or station alias to push it to
+ * @param atVelocity how fast it is pushed, in the network's length units per model time unit
+ * @param suspensionName a name for the wait, for tracing
+ */
+suspend fun KSLProcessBuilder.tow(
+    vehicle: AgvVehicle,
+    to: String,
+    atVelocity: Double,
+    suspensionName: String? = null
+) {
+    require(atVelocity > 0.0) {
+        "Vehicle (${vehicle.name}) cannot be towed at $atVelocity. A tow velocity must be > 0.0."
+    }
+    val agent = vehicle.agent
+    checkNotNull(agent) {
+        "Vehicle (${vehicle.name}) has no live agent, so it cannot be towed. `tow` is called from " +
+                "an interruption policy, which runs inside the vehicle's own agent; calling it from " +
+                "anywhere else has nothing to suspend."
+    }
+    val queue = vehicle.beginTow(to, atVelocity, agent)
+    if (queue != null) {
+        hold(queue, suspensionName = suspensionName ?: "${vehicle.name}:towedTo:$to")
+    }
+    vehicle.endTow()
+}
+
+/**
+ * Holds a vehicle on a charger until its battery is full, and waits.
+ *
+ * The vehicle must already be at a charger -- this does not move it, because moving a vehicle that
+ * cannot drive is [tow] and moving one that can is the dispatcher's business. What it does is the
+ * part that is not movement: work out how long a full charge takes from where the battery actually
+ * is, wait that long, and put the charge back.
+ *
+ * The duration is **net of the hotel load**, which keeps drawing while the vehicle sits on the
+ * charger. A [ksl.modeling.agv.Battery] refuses a charging rate that does not outpace its own idle draw, so the
+ * answer is always positive and finite.
+ *
+ * Harmless on a vehicle with no battery: there is nothing to charge and no time passes.
+ *
+ * @param vehicle the vehicle on the charger
+ * @param suspensionName a name for the wait, for tracing
+ */
+suspend fun KSLProcessBuilder.charge(vehicle: AgvVehicle, suspensionName: String? = null) {
+    if (vehicle.battery == null) return
+    val duration = vehicle.beginCharging()
+    if (duration > 0.0) {
+        delay(duration, suspensionName = suspensionName ?: "${vehicle.name}:charging")
+    }
+    vehicle.endCharging()
 }

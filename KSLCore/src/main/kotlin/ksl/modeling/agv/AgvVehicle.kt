@@ -21,7 +21,6 @@ import ksl.modeling.variable.Response
 import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
-import ksl.simulation.KSLEvent
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.RVariableIfc
 
@@ -136,6 +135,14 @@ open class AgvVehicle @JvmOverloads constructor(
 
     /** What it offers when a dispatcher calls for proposals. Consulted from the negotiated phase. */
     var bidPolicy: BidPolicyIfc = NetworkDistanceBid()
+
+    /**
+     * What happens when this vehicle stops and cannot carry on by itself.
+     *
+     * Per vehicle, so a fleet may be heterogeneous -- which is the realistic case, since a fleet is
+     * rarely all one age. The default repairs where the vehicle stands and leaves a flat one flat.
+     */
+    var interruptionPolicy: InterruptionPolicyIfc = RepairInPlacePolicy()
 
     /** The live agent for this replication. Non-null only between `initialize` and the horizon, and
      *  **replaced** rather than reused each replication -- a retained agent would read the previous
@@ -346,24 +353,30 @@ open class AgvVehicle @JvmOverloads constructor(
      * at the same instant stays due until the vehicle moves -- which, for a flat one, is never.
      */
     private fun mayContinuePastBoundary(): Boolean {
+        // A vehicle being pushed is not deciding anything and is not driving. Neither its battery
+        // nor the failure it is being pushed away from may stop it part way to the refuge.
+        if (body.isUnderTow) return true
         observeCharge()
-        if (isFlat) return refuseForFlatBattery()
+        if (isFlat) {
+            myNumTimesStranded?.increment()
+            logger.warn {
+                "AgvVehicle ($name) ran out of charge at ($currentLocationName) during replication " +
+                        "${model.currentReplicationNumber} and stopped where it stands. Its " +
+                        "interruption policy decides what happens next; the default leaves it there, " +
+                        "holding its zones and obstructing anything routed through them. A " +
+                        "ChargeReservePolicy is what prevents this arising at all."
+            }
+            pendingInterruption = Interruption.OutOfCharge(
+                this, time, currentLocationName, body.heldZones, body.transporterState,
+                currentAssignment?.task, isCarryingALoad
+            )
+            return false
+        }
         if (isFailureDue()) {
-            failWhereItStands()
+            pendingInterruption = bookFailure()
             return false
         }
         return true
-    }
-
-    private fun refuseForFlatBattery(): Boolean {
-        myNumTimesStranded?.increment()
-        logger.warn {
-            "AgvVehicle ($name) ran out of charge at ($currentLocationName) during replication " +
-                    "${model.currentReplicationNumber} and stopped where it stands. It holds its " +
-                    "zones for the rest of the replication and obstructs anything routed through " +
-                    "them. A ChargeReservePolicy is what prevents this."
-        }
-        return false
     }
 
     private fun observeCharge() {
@@ -440,70 +453,139 @@ open class AgvVehicle @JvmOverloads constructor(
     val numFailures: CounterCIfc?
         get() = myNumFailures
 
-    private val myRepairTime: Response? =
-        if (failureModel == null) null else Response(this, "${this.name}:RepairTime")
-
-    /** How long each repair took, one observation per failure. Registered only if it can fail. */
-    val repairTime: ResponseCIfc?
-        get() = myRepairTime
+    private val myTimeOutOfService: Response? =
+        if (failureModel == null) null else Response(this, "${this.name}:TimeOutOfService")
 
     /**
-     * Books the failure and returns how long the repair takes.
+     * How long the vehicle was out of service, one observation per failure.
      *
-     * Does not schedule anything. The two check points want different things done with the
-     * duration -- a vehicle halted at a zone boundary needs an event to start it moving again,
-     * while one between tours simply delays -- so the caller owns the waiting.
+     * The whole procedure, not the repair alone: the wait for a technician, the walk to the
+     * vehicle, the assessment and any tow are all time the vehicle was not working, and a row named
+     * for the repair while measuring all of it would say the wrong thing. What the repair itself
+     * costs is the failure model's own `repairTime` random variable, which is what the default
+     * policy delays for.
      */
-    private fun beginRepair(): Double {
+    val timeOutOfService: ResponseCIfc?
+        get() = myTimeOutOfService
+
+    /** True when the load this vehicle was given is aboard it. */
+    val isCarryingALoad: Boolean
+        get() = currentAssignment?.task?.state == TaskState.IN_PROGRESS
+
+    /**
+     * Books a failure: counts it, starts the out-of-service clock, and draws the repair time.
+     *
+     * The draw happens here rather than inside the policy so that a policy which surrounds the
+     * repair with travel and waiting uses the same number the default would have used, and one
+     * which ignores it is visibly choosing to.
+     */
+    private fun bookFailure(): Interruption.Failed {
         val duration = myRepairTimeRV!!.value
         isFailed = true
         myFracTimeFailed?.value = 1.0
         myNumFailures?.increment()
-        myRepairTime?.value = duration
-        return duration
+        outOfServiceSince = time
+        return Interruption.Failed(
+            this, time, currentLocationName, body.heldZones, body.transporterState,
+            currentAssignment?.task, isCarryingALoad,
+            failureNumber = myNumFailures?.value?.toInt() ?: 0,
+            repairTime = duration
+        )
     }
 
-    /** Puts the vehicle back in service and sets the next failure due. */
-    private fun endRepair() {
+    private var pendingInterruption: Interruption? = null
+
+    /** True when a movement gate stopped this vehicle and nothing has dealt with it yet. */
+    internal val hasPendingInterruption: Boolean
+        get() = pendingInterruption != null
+    private var outOfServiceSince: Double = Double.NaN
+
+    /**
+     * The interruption the vehicle's agent must deal with before it does anything else, or null.
+     *
+     * Two things reach the agent through here and they are deliberately the same thing. One is an
+     * interruption a movement gate raised part way through a journey, which is waiting to be
+     * collected. The other is a failure that has come due while the vehicle was between tours, which
+     * is booked now -- at a point where the vehicle has *not yet declared itself available*, so
+     * nothing can be assigned to a vehicle under repair without anything having to check for it.
+     */
+    internal fun takeInterruption(): Interruption? {
+        val pending = pendingInterruption
+        if (pending != null) {
+            pendingInterruption = null
+            return pending
+        }
+        if (!isFailureDue()) return null
+        return bookFailure()
+    }
+
+    /**
+     * Closes the procedure the policy has just finished.
+     *
+     * A repair policy returns when the vehicle is repaired, so the framework clears the failure
+     * rather than making every policy remember to. `FracTimeFailed` and `TimeOutOfService`
+     * therefore span the whole procedure -- the wait for a technician, the walk to the vehicle, the
+     * assessment and the tow included -- which is what being out of service actually costs.
+     */
+    internal fun interruptionEnded(interruption: Interruption) {
+        if (interruption !is Interruption.Failed) return
+        if (!isFailed) return
         isFailed = false
         myFracTimeFailed?.value = 0.0
+        myCumulativeFailedTime += time - outOfServiceSince
+        myTimeOutOfService?.value = time - outOfServiceSince
+        outOfServiceSince = Double.NaN
         nextFailureAt = basisValue() + myBetweenFailures!!.value
     }
 
     /**
-     * Fails a vehicle that is halted at a zone boundary, and schedules it back into service.
+     * Whether the vehicle can carry on from where it stands.
      *
-     * The vehicle's agent is suspended in the space layer's movement queue and cannot delay for
-     * itself, so the repair is an event: at its end the transporter is released from the halt and
-     * carries on along the route it never gave up. The tour resumes at the stop it had reached,
-     * which is what makes a failure an interruption rather than a revocation.
+     * Asked by the framework the moment an interruption policy returns, and it is the same question
+     * the movement gate asks -- deliberately, so that a policy cannot claim to have fixed something
+     * it did not. A repair that finished leaves a repaired vehicle and it carries on. A charge
+     * policy that did nothing leaves a flat vehicle and it does not.
      */
-    private fun failWhereItStands() {
-        val duration = beginRepair()
-        schedule(
-            { _: KSLEvent<Nothing> ->
-                endRepair()
-                system.spaceSystem.resumeHaltedTransporter(body)
-            },
-            duration, name = "${this.name}:repaired"
-        )
-    }
+    internal val isFitToContinue: Boolean
+        get() = !isFlat && !isFailed
+
+    private var myCumulativeFailedTime: Double = 0.0
 
     /**
-     * Repairs a vehicle that has finished a tour, if one is due. Returns how long to wait.
+     * How long this vehicle has been out of service in this replication, including a procedure
+     * still under way.
      *
-     * Called from the control loop between tours, where the vehicle has not yet declared itself
-     * available -- so nothing can be assigned to a vehicle under repair, without anything having to
-     * check for that.
+     * Differences of this between two instants give the out-of-service time within a journey, which
+     * is how a delivered load's `failedTime` is computed. Same pattern, and for the same reason, as
+     * the guide path's cumulative blocked time.
      */
-    internal fun repairBetweenToursIfDue(): Double {
-        if (!isFailureDue()) return 0.0
-        return beginRepair()
+    internal val cumulativeFailedTime: Double
+        get() = if (outOfServiceSince.isNaN()) myCumulativeFailedTime
+        else myCumulativeFailedTime + (time - outOfServiceSince)
+
+    // ---- towing ----------------------------------------------------------------------------------
+
+    /** Starts a tow. See [tow], which is the verb a policy calls. */
+    internal fun beginTow(
+        location: String,
+        velocity: Double,
+        waiter: ProcessModel.Entity
+    ): HoldQueue? {
+        body.towVelocity = velocity
+        val queue = system.spaceSystem.beginJourney(
+            body, location, TransporterState.TOWED, waiter, MovementWait.DRIVING
+        )
+        // Already there. Nothing was started, so nothing is under tow.
+        if (queue == null) body.towVelocity = null
+        return queue
     }
 
-    /** Ends a between-tours repair. */
-    internal fun repairFinished() {
-        if (isFailed) endRepair()
+    /** Ends a tow, whether or not the vehicle actually had to go anywhere. */
+    internal fun endTow() {
+        body.towVelocity = null
+        if (body.transporterState == TransporterState.TOWED) {
+            body.transporterState = TransporterState.IDLE
+        }
     }
 
     /**
@@ -538,6 +620,9 @@ open class AgvVehicle @JvmOverloads constructor(
         myFracTimeCharging?.value = 0.0
         isFailed = false
         myFracTimeFailed?.value = 0.0
+        pendingInterruption = null
+        outOfServiceSince = Double.NaN
+        myCumulativeFailedTime = 0.0
         nextFailureAt = if (myBetweenFailures == null) Double.POSITIVE_INFINITY
         else basisValue() + myBetweenFailures.value
         // One gate, because a gate is a veto and two would need a rule for disagreeing. Installed

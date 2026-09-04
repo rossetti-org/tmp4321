@@ -500,6 +500,11 @@ internal class MovementEngine(
         // has reached its destination arrives, whatever a gate would have said about carrying on.
         if (transporter.currentRoute?.nextZone != null && !transporter.mayContinuePast(zone)) {
             transporter.halt()
+            // The route is kept, so that a consumer which merely wants the transporter to pause and
+            // then carry on the same way can say so with `resumeHaltedTransporter`. One that intends
+            // to move it somewhere else instead issues a fresh journey, which computes its own route
+            // from wherever the transporter has ended up.
+            mySystem.transporterInterrupted(transporter)
             return
         }
         advance(transporter)

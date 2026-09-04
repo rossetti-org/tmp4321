@@ -84,6 +84,17 @@ enum class TransporterState {
     /** Travelling to a home base or staging area, allocated to no one. */
     RETURNING_HOME,
 
+    /**
+     * Being moved by something other than itself -- pushed or towed off the guide path by a person.
+     *
+     * Its own state rather than a borrowed one. A towed transporter is moving, so it holds and gives
+     * up zones exactly as a driving one does and obstructs traffic exactly as much. But it is
+     * neither transporting nor running empty *under its own power*, and counting it as either would
+     * put a vehicle that has broken down into a utilization figure meant to describe vehicles that
+     * are working.
+     */
+    TOWED,
+
     /** Unable to claim the next zone, and waiting for whoever holds it. */
     BLOCKED
 }
@@ -364,7 +375,8 @@ class GuidedTransporter @JvmOverloads constructor(
     val isMoving: Boolean
         get() = transporterState == TransporterState.MOVING_EMPTY ||
                 transporterState == TransporterState.MOVING_LOADED ||
-                transporterState == TransporterState.RETURNING_HOME
+                transporterState == TransporterState.RETURNING_HOME ||
+                transporterState == TransporterState.TOWED
 
     /** The route being followed, or null when the transporter is not travelling. */
     var currentRoute: Route? = null
@@ -432,8 +444,21 @@ class GuidedTransporter @JvmOverloads constructor(
     /** The velocity in force for the current movement, held when sampling is per movement. */
     internal var currentVelocity: Double = 1.0
 
+    /**
+     * How fast the transporter is being moved, or null when it is driving itself.
+     *
+     * Overrides the sampling policy entirely while it is set, because a transporter under tow is not
+     * drawing from its own velocity distribution -- somebody is pushing it, and how fast they push
+     * has nothing to do with how fast it drives.
+     */
+    internal var towVelocity: Double? = null
+
+    /** True while something other than this transporter is moving it. */
+    val isUnderTow: Boolean
+        get() = towVelocity != null
+
     /** The velocity to use for the next zone, drawn according to the sampling policy. */
-    internal fun velocityForNextZone(): Double = when (velocitySampling) {
+    internal fun velocityForNextZone(): Double = towVelocity ?: when (velocitySampling) {
         VelocitySampling.PER_MOVE -> currentVelocity
         VelocitySampling.PER_ZONE -> sampleVelocity()
     }
@@ -584,6 +609,18 @@ class GuidedTransporter @JvmOverloads constructor(
             return myCumulativeDistance + traversalDistance * fraction
         }
 
+    private var myZonesEntered: Int = 0
+
+    /**
+     * How many zones this transporter has entered in this replication.
+     *
+     * The odometer's companion, and the count to take differences of when something wants to know
+     * how many zones a particular journey crossed. The route knows how many it *intends* to cross,
+     * which is a different number the moment a journey is redirected or interrupted part way.
+     */
+    val zonesEntered: Int
+        get() = myZonesEntered
+
     /** Opens a traversal for the odometer. Called by the engine as it schedules the arrival. */
     internal fun beginTraversal(distance: Double, duration: Double) {
         traversalDistance = distance
@@ -593,6 +630,7 @@ class GuidedTransporter @JvmOverloads constructor(
 
     /** Credits a completed traversal and closes it. Called first thing on entering the zone. */
     internal fun endTraversal() {
+        myZonesEntered++
         if (traversalStartedAt.isNaN()) return
         myCumulativeDistance += traversalDistance
         traversalDistance = 0.0
@@ -644,6 +682,14 @@ class GuidedTransporter @JvmOverloads constructor(
         transporterState = stateBeforeHalt
     }
 
+    /**
+     * Drops the halt without restoring anything, for a transporter that is being given a new journey
+     * rather than resuming the one it stopped in the middle of. The move sets the state itself.
+     */
+    internal fun clearHalt() {
+        isHalted = false
+    }
+
     // ---- placement and movement ---------------------------------------------------------------
 
     /**
@@ -672,6 +718,8 @@ class GuidedTransporter @JvmOverloads constructor(
         operatingSince = Double.NaN
         myCumulativeOperatingTime = 0.0
         myCumulativeDistance = 0.0
+        myZonesEntered = 0
+        towVelocity = null
         traversalDistance = 0.0
         traversalDuration = 0.0
         traversalStartedAt = Double.NaN

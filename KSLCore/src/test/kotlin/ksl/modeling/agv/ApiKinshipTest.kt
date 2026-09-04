@@ -86,6 +86,14 @@ class ApiKinshipTest {
         //   auction  -- DispatchContext's Contract-Net negotiation, which must call `contractNet`,
         //               itself a suspending extension on the builder, and whose deadline is a
         //               suspension a policy is meant to see it is paying for.
+        //   handle   -- the interruption seam, called as `with(policy) { handle(interruption) }`.
+        //               A breakdown procedure is a wait for a technician, a walk, a look and a
+        //               push, so it must be able to consume simulated time for the same reason
+        //               `assign` must.
+        //
+        // The verbs a *modeller* writes in their own process -- `transportByAgv`, `tow`, `charge`
+        // -- are top-level extensions and live in KSLProcess.kt with the rest of the process API,
+        // which is where a reader looks for them and why none of them appears in this scan.
         //
         // Both are members of a type, so neither can be called without naming that type at the call
         // site; neither hides a suspension behind a bare helper name.
@@ -111,11 +119,12 @@ class ApiKinshipTest {
                     "which simulated time passes.")
 
         assertEquals(
-            setOf("assign", "auction"), found.map { it.second }.toSet(),
-            "the only permitted KSLProcessBuilder extensions in this package are the two seams that " +
-                    "@RestrictsSuspension forces into that form -- the assignment policy and the " +
-                    "Contract-Net auction. A new name here is a new place a suspension can hide, and " +
-                    "should be justified before it is added to this list. Found: $found"
+            setOf("assign", "auction", "handle"), found.map { it.second }.toSet(),
+            "the only permitted KSLProcessBuilder extensions in this package are the seams that " +
+                    "@RestrictsSuspension forces into that form -- the assignment policy, the " +
+                    "Contract-Net auction, and the interruption policy. A new name here is a new " +
+                    "place a suspension can hide, and should be justified before it is added to " +
+                    "this list. Found: $found"
         )
     }
 

@@ -2,6 +2,11 @@ package ksl.modeling.agv.doc
 
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.Battery
+import ksl.modeling.agv.FailureBasis
+import ksl.modeling.agv.FailureModel
+import ksl.modeling.agv.Interruption
+import ksl.modeling.agv.InterruptionPolicyIfc
 import ksl.modeling.agv.AssignmentProposal
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.exceptions.AgvInvariantViolation
@@ -10,6 +15,8 @@ import ksl.modeling.agv.policies.BatchedAssignmentPolicy
 import ksl.modeling.agv.policies.Bid
 import ksl.modeling.agv.policies.BidPolicyIfc
 import ksl.modeling.agv.policies.ByPriorityTaskSelection
+import ksl.modeling.agv.policies.ChargeReservePolicy
+import ksl.modeling.agv.policies.ChargeWhenLowDisposition
 import ksl.modeling.agv.policies.CallForProposals
 import ksl.modeling.agv.policies.CompletionTimeBid
 import ksl.modeling.agv.policies.ContractNetAssignmentPolicy
@@ -25,6 +32,8 @@ import ksl.modeling.agv.policies.ReturnToHomeBaseDisposition
 import ksl.modeling.agv.policies.ScoringAssignmentPolicy
 import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.entity.ProcessModel
+import ksl.modeling.entity.ResourceWithQ
+import ksl.modeling.entity.tow
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.LinkType
 import ksl.modeling.guidedpath.TransporterPlacement
@@ -35,6 +44,8 @@ import ksl.simulation.Model
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ConstantRV
 import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.random.rvariable.LognormalRV
+import ksl.utilities.random.rvariable.RVariableIfc
 
 /**
  * Compile-only host for every code snippet in `docs/guides/ksl-agv.md`.
@@ -282,6 +293,84 @@ private object AgvGuideSnippets {
             }
         }
     }
+
+
+    // -- §4 Batteries and charging ---------------------------------------
+
+    class ChargedShop(parent: ModelElement) : ProcessModel(parent, "ChargedShop") {
+
+        val network = buildNetwork()
+
+        init {
+            spatialModel = network
+        }
+
+        val agv = AgvSystem(
+            this, network, name = "Agv",
+            assignmentPolicy = ChargeReservePolicy(NearestVehiclePolicy())
+        )
+
+        init {
+            agv.addCharger("I6")
+        }
+
+        val cart = AgvVehicle(
+            agv, TransporterPlacement.At("I6"), ConstantRV(3.0), name = "Cart",
+            battery = Battery(
+                capacity = 1000.0,
+                chargePerDistance = 0.5,   // traction: drawn per foot travelled
+                chargePerTime = 0.02,      // hotel load: drawn always, parked included
+                chargingRate = 100.0
+            )
+        ).apply {
+            dispositionPolicy = ChargeWhenLowDisposition(threshold = 0.6)
+        }
+    }
+
+    // -- §4 Breakdowns ---------------------------------------------------
+
+    fun aVehicleThatBreaksDown(agv: AgvSystem): AgvVehicle = AgvVehicle(
+        agv, TransporterPlacement.At("I6"), ConstantRV(3.0), name = "FailingCart",
+        failureModel = FailureModel.clockBased(
+            timeBetweenFailures = ExponentialRV(400.0, streamNum = 7),
+            repairTime = LognormalRV(20.0, 25.0, streamNum = 8),
+            basis = FailureBasis.OPERATING_TIME
+        )
+    )
+
+    // -- §4 What a site actually does when a vehicle breaks down ---------
+
+    class VisitAndAssess(
+        private val technicians: ResourceWithQ,
+        private val refuge: String,
+        private val reportingDelay: RVariableIfc,
+        private val walkingTime: RVariableIfc,
+        private val assessmentTime: RVariableIfc
+    ) : InterruptionPolicyIfc {
+
+        override suspend fun KSLProcessBuilder.handle(interruption: Interruption) {
+            val vehicle = interruption.vehicle
+            delay(reportingDelay)                        // nobody noticed for a while
+            val tech = seize(technicians)                // somebody has to be free
+            delay(walkingTime)                           // and walk to it
+            delay(assessmentTime)                        // and look at it
+            if (interruption.isObstructing) {            // decided at the vehicle, not before
+                tow(vehicle, refuge, atVelocity = 1.0)   // pushed out of the aisle
+            }
+            if (interruption is Interruption.Failed) delay(interruption.repairTime)
+            release(tech)
+        }
+    }
+
+    fun installTheRecoveryPolicy(cart: AgvVehicle, technicians: ResourceWithQ) {
+        cart.interruptionPolicy = VisitAndAssess(
+            technicians, refuge = "MaintenanceSpur",
+            reportingDelay = ConstantRV(2.0),
+            walkingTime = ExponentialRV(8.0, streamNum = 9),
+            assessmentTime = ConstantRV(5.0)
+        )
+    }
+
 
     // -- §6 What the horizon left undone ---------------------------------
 

@@ -98,7 +98,26 @@ open class AgvSystem @JvmOverloads constructor(
     internal fun addVehicle(vehicle: AgvVehicle) {
         require(model.isNotRunning) { "A vehicle cannot be added while the model is running." }
         myVehicles.add(vehicle)
+        // Registered when the first vehicle that can fail joins the fleet, and not before. A model
+        // whose vehicles cannot break down would otherwise carry a row that is zero in every
+        // replication of every run -- which is a question its reader has to answer for themselves
+        // every time, and the defect PerCarryStatisticsTest exists because of.
+        if (vehicle.failureModel != null && myFailedTimePerTransport == null) {
+            myFailedTimePerTransport = Response(this, "${this.name}:FailedTimePerTransport")
+        }
     }
+
+    private var myFailedTimePerTransport: Response? = null
+
+    /**
+     * Per delivered load: how much of its journey the carrying vehicle spent out of service.
+     *
+     * Present only when at least one vehicle in the fleet has a failure model. It is a part of
+     * [approachTime] and [timeAboard] rather than something outside them, and it is what separates
+     * a fleet that is slow from one that is unreliable.
+     */
+    val failedTimePerTransport: ResponseCIfc?
+        get() = myFailedTimePerTransport
 
     private val myChargers = mutableListOf<String>()
 
@@ -145,10 +164,10 @@ open class AgvSystem @JvmOverloads constructor(
             ?.first
     }
 
-    // ---- the four hold queues ------------------------------------------------------------------
+    // ---- the five hold queues ------------------------------------------------------------------
     //
     // Suspension plumbing, not the model's waiting line -- that is the dispatcher's task queue.
-    // All four are internal so only this subsystem can suspend anything in them, and all four
+    // All five are internal so only this subsystem can suspend anything in them, and all five
     // report nothing, which is what `Conveyor` does for the same reason: a hold queue is how a
     // suspended entity is found again, and letting it double as the statistic conflates a mechanism
     // with a measurement.
@@ -157,6 +176,17 @@ open class AgvSystem @JvmOverloads constructor(
     internal val inTransitHoldQ = HoldQueue(this, "${this.name}:InTransitHoldQ")
     internal val availabilityQ = HoldQueue(this, "${this.name}:AvailabilityQ")
     internal val dispatcherIdleQ = HoldQueue(this, "${this.name}:DispatcherIdleQ")
+
+    /**
+     * Where a vehicle waits when its interruption policy did not put it right.
+     *
+     * **Nothing resumes this queue.** A vehicle here is out of service for the rest of the
+     * replication, standing where it stopped and holding its zones -- which is the honest model of
+     * a vehicle that has run flat or broken down beyond what anybody did about it, and is why the
+     * fleet's throughput falls rather than the run raising. `NumVehiclesStranded` and
+     * `NumVehiclesFailedAtHorizon` are what say it happened.
+     */
+    internal val outOfServiceQ = HoldQueue(this, "${this.name}:OutOfServiceQ")
 
     /** The loads suspended waiting to be collected. For the closing audit; the queues stay shut. */
     internal val loadsAwaitingPickup: List<ProcessModel.Entity>
@@ -191,7 +221,7 @@ open class AgvSystem @JvmOverloads constructor(
      */
     fun statisticalReportingForHoldQueues(option: Boolean) {
         val queues = listOf(
-            awaitingPickupHoldQ, inTransitHoldQ, availabilityQ, dispatcherIdleQ
+            awaitingPickupHoldQ, inTransitHoldQ, availabilityQ, dispatcherIdleQ, outOfServiceQ
         )
         // The space layer's three movement queues are switched through its own method rather than
         // reached into from here, so that this system does not have to know how many there are.
@@ -257,6 +287,7 @@ open class AgvSystem @JvmOverloads constructor(
      * responses instead of each keeping a copy.
      */
     internal fun recordCarry(task: Dispatcher.TransportTask) {
+        myFailedTimePerTransport?.value = task.failedTime
         spaceSystem.collectCarry(
             approachTime = task.approachTime,
             rideTime = task.rideTime,
@@ -737,7 +768,10 @@ open class AgvSystem @JvmOverloads constructor(
         // Every suspension in this loop is written at the call site. There are no private
         // suspending helpers, so a reader can see every point at which simulated time passes and
         // the world can change underneath the vehicle; the non-suspending bookkeeping is on
-        // AgvVehicle and Dispatcher as ordinary methods.
+        // AgvVehicle and Dispatcher as ordinary methods. The one call that runs somebody else's
+        // suspending code -- the interruption policy -- appears twice rather than being factored
+        // out, which is the price of the rule and is worth paying: the two places are the two
+        // moments a vehicle can stop, and a reader who cannot see both cannot see the feature.
         //
         // That restraint takes effort, because the language pushes the other way. KSLProcessBuilder
         // is @RestrictsSuspension, so an extension on the builder is the *only* way to factor a
@@ -745,6 +779,24 @@ open class AgvSystem @JvmOverloads constructor(
         // resistance precisely where it does the most damage to readability.
         val control: KSLProcess = process("${vehicle.name}:control") {
             while (true) {                                  // terminated by afterReplication
+                // Before anything else, and in particular before declaring availability. Two things
+                // arrive here: an interruption a movement gate raised part way through a journey
+                // that ended somewhere other than where it was going, and a failure that has come
+                // due since the last one. Handling both at this point is what makes "nothing may be
+                // assigned to a vehicle under repair" true by construction rather than a condition
+                // somebody has to check -- the vehicle has not said it is available yet.
+                val settle = vehicle.takeInterruption()
+                if (settle != null) {
+                    with(vehicle.interruptionPolicy) { handle(settle) }     // SUSPENDS, usually
+                    vehicle.interruptionEnded(settle)
+                    if (!vehicle.isFitToContinue) {
+                        // The policy did not put it right, so it is out for the rest of the
+                        // replication -- standing where it stopped, holding its zones. Nothing
+                        // resumes this queue.
+                        hold(outOfServiceQ,                                 // SUSPENDS, forever
+                            suspensionName = "${vehicle.name}:outOfService")
+                    }
+                }
                 if (assignment == null) {
                     dispatcher.declareAvailable(vehicle)
                     // SUSPENDS. The dispatcher resumes us either with work or, having none for us,
@@ -791,8 +843,10 @@ open class AgvSystem @JvmOverloads constructor(
                                 }
                                 // Work may have arrived while it drove and turned it round in
                                 // flight, in which case it is somewhere else on somebody's business
-                                // and there is nothing here to charge.
-                                if (assignment == null) {
+                                // and there is nothing here to charge. A vehicle stopped short of
+                                // the charger has not reached one either; the top of the loop
+                                // settles whatever stopped it.
+                                if (assignment == null && !vehicle.hasPendingInterruption) {
                                     val duration = vehicle.beginCharging()
                                     if (duration > 0.0) {
                                         delay(duration,                     // SUSPENDS
@@ -813,28 +867,50 @@ open class AgvSystem @JvmOverloads constructor(
                 val allocation = seize(vehicle.body, 1, queue = vehicle.bodyQ)
                 val t = tourFor(a).also { tour = it }
                 val blockedAtStart = vehicle.body.cumulativeBlockedTime
+                val failedAtStart = vehicle.cumulativeFailedTime
                 while (!t.isComplete) {
                     val stop = t.nextStop!!
-                    // beginTravelTo commands the body and returns whether a journey is under way.
-                    // `this@VehicleAgent` is the waiter: the AGENT sits in the space layer's
-                    // movement queue, never the load.
                     // Taken before the leg rather than after, because the unloading delay that
                     // follows an arrival is not travelling and does not belong to a move time. The
                     // passive subsystem draws its loaded interval at the same two boundaries.
                     val legStarted = time
-                    val travelQ = vehicle.beginTravelTo(stop.location, movingStateFor(stop), this@VehicleAgent)
-                    // Taken while the journey is still on the books. The route is cleared on
-                    // arrival, so asking for it after the hold returns nothing and the leg appears
-                    // to have covered no ground at all -- a silent zero rather than an error.
-                    val route = if (travelQ != null) vehicle.body.currentRoute else null
-                    if (travelQ != null) {
+                    // Distance and zones come off the vehicle's odometers rather than off the
+                    // route, because a leg may take more than one journey. A vehicle stopped part
+                    // way and pushed to a refuge covers ground on the abandoned route and then more
+                    // on a fresh one; the route it ends up following knows nothing about the first.
+                    // Differences of the odometers are right under interruption and under a mid-leg
+                    // redirection alike.
+                    val distanceAtLegStart = vehicle.body.distanceTravelled
+                    val zonesAtLegStart = vehicle.body.zonesEntered
+                    // A leg is re-issued until the vehicle actually gets there. Under an ordinary
+                    // journey this loop runs once. It runs again whenever a movement gate stopped
+                    // the vehicle short and its policy dealt with whatever stopped it -- which may
+                    // have left it somewhere else entirely, on a spur it was pushed to. The tour
+                    // survives that because a tour names *stops*, not routes.
+                    while (true) {
+                        // beginTravelTo commands the body and returns whether a journey is under
+                        // way. `this@VehicleAgent` is the waiter: the AGENT sits in the space
+                        // layer's movement queue, never the load.
+                        val travelQ = vehicle.beginTravelTo(
+                            stop.location, movingStateFor(stop), this@VehicleAgent
+                        ) ?: break                                          // already there
                         hold(travelQ,                                       // SUSPENDS
                             suspensionName = "${vehicle.name}:travellingTo:${stop.location}")
+                        // The assignment can be revoked while we travel, and if it was, this stop
+                        // belongs to a task we no longer hold. `t` is a local, so without this
+                        // check the loop would go on to collect a load that has been given to
+                        // someone else -- and the model would keep running, with two vehicles
+                        // believing they had it.
+                        if (assignment !== a) break
+                        // Nothing pending means the journey ended the ordinary way: it arrived.
+                        val interruption = vehicle.takeInterruption() ?: break
+                        with(vehicle.interruptionPolicy) { handle(interruption) }   // SUSPENDS
+                        vehicle.interruptionEnded(interruption)
+                        if (!vehicle.isFitToContinue) {
+                            hold(outOfServiceQ,                             // SUSPENDS, forever
+                                suspensionName = "${vehicle.name}:outOfService")
+                        }
                     }
-                    // The assignment can be revoked while we travel, and if it was, this stop
-                    // belongs to a task we no longer hold. `t` is a local, so without this check the
-                    // loop would go on to collect a load that has been given to someone else -- and
-                    // the model would keep running, with two vehicles believing they had it.
                     if (assignment !== a) break
                     when (val act = stop.action) {
                         is StopAction.PickUp -> {
@@ -846,6 +922,7 @@ open class AgvSystem @JvmOverloads constructor(
                             // row is shared, so it has to mean one thing -- and measured this way
                             // the two paradigms agree to the digit on the same shop.
                             act.task.approachTime = time - act.task.assignedAt
+                            act.task.failedBeforePickup = vehicle.cumulativeFailedTime - failedAtStart
                             if (act.task.loadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.loadingDelay,                // SUSPENDS
                                     suspensionName = "${vehicle.name}:loading")
@@ -858,8 +935,14 @@ open class AgvSystem @JvmOverloads constructor(
                             awaitingPickupHoldQ.removeAndResume(act.task.load)
                         }
                         is StopAction.SetDown -> {
-                            act.task.loadedRouteLength = route?.totalLength ?: 0.0
-                            act.task.loadedZonesTraversed = route?.zonesTraversed ?: 0
+                            act.task.loadedRouteLength =
+                                vehicle.body.distanceTravelled - distanceAtLegStart
+                            act.task.loadedZonesTraversed =
+                                vehicle.body.zonesEntered - zonesAtLegStart
+                            // Includes any time the vehicle spent broken down with the load aboard.
+                            // These are protocol intervals rather than statements about the
+                            // vehicle's state, and the load was aboard throughout; `failedTime`
+                            // below is what separates the two out for a study that needs it.
                             act.task.rideTime = time - legStarted
                             if (act.task.unLoadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.unLoadingDelay,              // SUSPENDS
@@ -867,6 +950,8 @@ open class AgvSystem @JvmOverloads constructor(
                             }
                             act.task.blockedWhileLoaded =
                                 vehicle.body.cumulativeBlockedTime - blockedAtStart - act.task.blockedAtPickup
+                            act.task.failedWhileLoaded = vehicle.cumulativeFailedTime -
+                                    failedAtStart - act.task.failedBeforePickup
                             act.task.load.currentLocation = network.requireLocation(act.task.destination)
                             act.task.transitionTo(TaskState.COMPLETED)
                             inTransitHoldQ.removeAndResume(act.task.load)   // the verb returns
@@ -887,14 +972,6 @@ open class AgvSystem @JvmOverloads constructor(
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()
-                // Between tours is the second place a failure can come due, and the safe one: the
-                // vehicle has not declared itself available yet, so nothing can be assigned to a
-                // vehicle under repair without anything having to check for that.
-                val repair = vehicle.repairBetweenToursIfDue()
-                if (repair > 0.0) {
-                    delay(repair, suspensionName = "${vehicle.name}:repair")  // SUSPENDS
-                    vehicle.repairFinished()
-                }
             }
         }
 

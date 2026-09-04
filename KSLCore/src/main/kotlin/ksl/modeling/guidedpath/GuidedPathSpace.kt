@@ -633,6 +633,45 @@ open class GuidedPathSpace @JvmOverloads constructor(
     }
 
     /**
+     * Wakes whoever was waiting on a journey that a movement gate stopped part way.
+     *
+     * The same resumption as an arrival, and deliberately not the same thing: the transporter is
+     * halted on a zone that is not where it was going, still holding its zones, with its route
+     * abandoned. Whoever was waiting has to be told so that it can decide what to do -- which is why
+     * this exists at all, and why a gate that refuses is not the same as a transporter that vanishes.
+     *
+     * A waiter woken this way must not assume it has arrived. [GuidedTransporter.isHalted] is what
+     * distinguishes the two, and it stays set until the transporter is given a new journey.
+     */
+    internal fun transporterInterrupted(transporter: GuidedTransporter) {
+        val wait = transporter.journeyWait ?: return
+        transporter.journeyWait = null
+        wait.queue.removeAndResume(wait.waiter)
+    }
+
+    /**
+     * The transporters standing still right now because this one is in their way.
+     *
+     * Answered exactly rather than guessed: a blocked transporter records the zone or the link it is
+     * waiting for, so being in the way is a fact about what this transporter holds, not an inference
+     * from where it happens to be.
+     *
+     * What it is for is a policy that has to decide whether a stopped vehicle is worth moving. A
+     * vehicle broken down on a spur nobody uses can be repaired where it stands; the same vehicle
+     * across a main aisle cannot, and this is the difference between the two.
+     */
+    fun transportersHeldUpBy(transporter: GuidedTransporter): List<GuidedTransporter> {
+        val held = transporter.heldZones
+        if (held.isEmpty()) return emptyList()
+        val heldLinks = held.filterIsInstance<LinkZone>().map { it.link }.toSet()
+        return myTransporters.filter { other ->
+            other !== transporter && other.transporterState == TransporterState.BLOCKED &&
+                    (other.awaitedZone?.let { it in held } == true ||
+                            other.awaitedLink?.let { it in heldLinks } == true)
+        }
+    }
+
+    /**
      * Sets a transporter travelling and returns whether it actually has to go anywhere.
      *
      * Returning the queue rather than a flag is what keeps the two ends of a wait in agreement.
@@ -757,6 +796,10 @@ open class GuidedPathSpace @JvmOverloads constructor(
         movingState: TransporterState
     ): Boolean {
         val destination = network.requireLocation(destinationName)
+        // A transporter given somewhere new to go is no longer halted, whatever stopped it before.
+        // Clearing it here rather than at each call site is what keeps the flag meaning one thing:
+        // stopped at a boundary with nothing scheduled and nowhere it is going.
+        transporter.clearHalt()
         return engine.startMove(transporter, destination, movingState)
     }
 

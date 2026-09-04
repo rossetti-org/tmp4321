@@ -210,6 +210,8 @@ open class Dispatcher @JvmOverloads constructor(
         internal var approachTime: Double = 0.0
         internal var rideTime: Double = 0.0
         internal var loadedZonesTraversed: Int = 0
+        internal var failedBeforePickup: Double = 0.0
+        internal var failedWhileLoaded: Double = 0.0
 
         /**
          * How much of the journey the vehicle spent unable to claim the space ahead.
@@ -219,6 +221,17 @@ open class Dispatcher @JvmOverloads constructor(
          */
         internal val blockedTime: Double
             get() = blockedAtPickup + blockedWhileLoaded
+
+        /**
+         * How much of the journey the vehicle spent out of service.
+         *
+         * The same shape as [blockedTime] and for the same reason. It is a *part of* the approach
+         * and ride times rather than something outside them: those are protocol intervals and the
+         * load was waiting, or aboard, throughout. This is what lets a study separate a fleet that
+         * is slow from one that is unreliable, which the two intervals alone cannot distinguish.
+         */
+        internal val failedTime: Double
+            get() = failedBeforePickup + failedWhileLoaded
     }
 
     /** Something a vehicle does for itself. Nothing is suspended on it. */
