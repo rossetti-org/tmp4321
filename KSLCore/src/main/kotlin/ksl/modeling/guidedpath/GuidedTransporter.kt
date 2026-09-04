@@ -452,6 +452,11 @@ class GuidedTransporter @JvmOverloads constructor(
      * has nothing to do with how fast it drives.
      */
     internal var towVelocity: Double? = null
+        set(value) {
+            val wasUnderTow = field != null
+            field = value
+            if (wasUnderTow && value == null) announceDispatchable()
+        }
 
     /** True while something other than this transporter is moving it. */
     val isUnderTow: Boolean
@@ -680,6 +685,7 @@ class GuidedTransporter @JvmOverloads constructor(
         if (!isHalted) return
         isHalted = false
         transporterState = stateBeforeHalt
+        announceDispatchable()
     }
 
     /**
@@ -687,7 +693,48 @@ class GuidedTransporter @JvmOverloads constructor(
      * rather than resuming the one it stopped in the middle of. The move sets the state itself.
      */
     internal fun clearHalt() {
+        if (!isHalted) return
         isHalted = false
+        announceDispatchable()
+    }
+
+    // ---- being available to a pool ---------------------------------------------------------------
+
+    /**
+     * Whether this transporter could be sent somewhere if it were asked right now.
+     *
+     * Distinct from being unallocated, and the distinction is the point. A transporter is
+     * *unallocated* when nobody holds it, which is a fact about ownership. It is **dispatchable**
+     * when nobody holds it *and* it is able to move, which is a fact about the vehicle. The two
+     * differ for a transporter that is repositioning under an idle disposition rule and is halted
+     * by its movement gate part way, or one that something else is towing: it belongs to nobody, and
+     * it is going nowhere.
+     *
+     * A pool sends only dispatchable transporters, and an allocation rule is offered only these, so
+     * a rule never has to know this property exists.
+     */
+    val isDispatchable: Boolean
+        get() = numBusy == 0 && !isHalted && !isUnderTow
+
+    private val myPools = mutableListOf<GuidedTransporterPoolWithQ>()
+
+    /** Records a pool this transporter belongs to, so it can be re-offered when it can move again. */
+    internal fun joinPool(pool: GuidedTransporterPoolWithQ) {
+        if (myPools.none { it === pool }) myPools.add(pool)
+    }
+
+    /**
+     * Tells every pool holding this transporter that it can move again.
+     *
+     * Without this the fix for the blindness would create the failure it was written to prevent. A
+     * pool that declines to offer a halted transporter has, at that moment, nothing to offer; the
+     * ordinary wake path runs on release, and a transporter that is released from a halt is not
+     * being released by anybody. So the moment that makes it dispatchable has to say so, or an
+     * entity waits for a transporter that is standing free in front of it.
+     */
+    private fun announceDispatchable() {
+        if (!isDispatchable) return
+        for (pool in myPools) pool.transporterBecameDispatchable()
     }
 
     // ---- placement and movement ---------------------------------------------------------------

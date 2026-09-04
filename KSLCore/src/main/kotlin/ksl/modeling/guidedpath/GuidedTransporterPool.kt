@@ -26,7 +26,9 @@ import ksl.modeling.guidedpath.rules.GuidedTransporterAllocationRuleIfc
 import ksl.modeling.guidedpath.rules.IdleDisposition
 import ksl.modeling.guidedpath.rules.IdleDispositionRuleIfc
 import ksl.modeling.guidedpath.rules.ParkInPlaceRule
+import ksl.modeling.entity.ResumeSource
 import ksl.modeling.queue.QueueCIfc
+import ksl.simulation.KSLEvent
 import ksl.simulation.ModelElement
 
 /**
@@ -65,6 +67,7 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
                         "(${system.name}), so it cannot be pooled here."
             }
             addResource(t)
+            t.joinPool(this)
         }
     }
 
@@ -92,13 +95,43 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
     val waitingQ: QueueCIfc<ProcessModel.Entity.Request>
         get() = myWaitingQ
 
-    /** The transporters that are allocated to nobody. */
+    /**
+     * The transporters this pool could send right now: allocated to nobody, and able to move.
+     *
+     * Both halves are needed. A transporter halted by its movement gate part way through a
+     * repositioning move, or one under tow, belongs to nobody and is going nowhere; offering it is
+     * offering a vehicle that will not come. Worse, the default rule ranks candidates by distance to
+     * the pickup, and a stopped candidate is the one whose distance does not grow while the others'
+     * do -- so a blind rule does not merely include the stuck vehicle, it drifts toward it.
+     *
+     * Use [transporters] for the whole fleet and [haltedTransporters] for the ones a gate is
+     * holding.
+     */
     val idleTransporters: List<GuidedTransporter>
-        get() = myResources.filter { it.hasAvailableUnits }
+        get() = myResources.filter { it.isDispatchable }
 
     /** True when some transporter of the pool could be sent now. */
     val hasIdleTransporter: Boolean
-        get() = myResources.any { it.hasAvailableUnits }
+        get() = myResources.any { it.isDispatchable }
+
+    /**
+     * The transporters of this pool that a movement gate is currently holding, or that are under
+     * tow. They are not offered to the allocation rule, and they are here so that a model which
+     * installs a gate can report on what its gate is doing.
+     */
+    val haltedTransporters: List<GuidedTransporter>
+        get() = myResources.filter { it.numBusy == 0 && !it.isDispatchable }
+
+    /**
+     * How many transporters this pool has to give, which is how many it could actually send.
+     *
+     * Overridden, because this is the number the library's own wake path reads when an entity gives
+     * a transporter back: a pool that reported a halted vehicle as available would wake a waiting
+     * entity to be told there is nothing for it. Every transporter has a capacity of one, so the
+     * count of dispatchable transporters is the number of units.
+     */
+    override val numAvailableUnits: Int
+        get() = idleTransporters.size
 
     /**
      * Clears any state the allocation rule carries, so a replication cannot inherit the end of the
@@ -116,6 +149,8 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
      */
     internal fun selectFor(pickup: GuidedPathNetwork.Intersection): GuidedTransporter? {
         val candidates = idleTransporters
+        // Only dispatchable transporters reach a rule, so no rule -- the library's or a modeller's
+        // -- has to know that halting exists in order to be correct.
         if (candidates.isEmpty()) return null
         val chosen = allocationRule.selectTransporter(system.network, pickup, candidates)
         check(chosen in candidates) {
@@ -164,6 +199,10 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
      */
     internal fun disposeIfUnwanted(transporter: GuidedTransporter) {
         if (myWaitingQ.isNotEmpty) return
+        // A gate that refused this transporter passage is not overruled by a rule about parking.
+        // Whatever halted it decides when it moves, and a disposition issued now would be a second
+        // journey competing with that decision.
+        if (!transporter.isDispatchable) return
         when (val disposition = idleDispositionRule.disposition(transporter)) {
             is IdleDisposition.ParkInPlace -> Unit
 
@@ -176,7 +215,26 @@ open class GuidedTransporterPoolWithQ @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Offers the pool again after one of its transporters became able to move.
+     *
+     * Called by the transporter itself when a halt is released or a tow ends while nobody holds it.
+     * That instant raises this pool's available units without any release having happened, and the
+     * library's wake path runs only on a release -- so if this did not exist, an entity could wait
+     * out the replication in front of a transporter that was standing free.
+     */
+    internal fun transporterBecameDispatchable() {
+        if (myWaitingQ.isEmpty) return
+        myWaitingQ.processWaitingRequestsForResource(
+            this,
+            KSLEvent.DEFAULT_PRIORITY,
+            ResumeSource.REQUEST_Q_CAPACITY_INCREASE,
+            "guided_transporter_pool=$name became dispatchable"
+        )
+    }
+
     override fun toString(): String =
         "GuidedTransporterPoolWithQ($name, ${myResources.size} transporters, " +
-                "${idleTransporters.size} idle, ${myWaitingQ.size} waiting)"
+                "${idleTransporters.size} dispatchable, ${haltedTransporters.size} halted, " +
+                "${myWaitingQ.size} waiting)"
 }
