@@ -59,9 +59,9 @@ answer. With one vehicle the two agree *exactly*, to the digit — which is
 the result that makes them two models of one world rather than two worlds
 (`ksl.examples.general.agv.TwoParadigmsExample`).
 
-**Not modelled in this version.** Batteries and charging, breakdowns and
-repair, and multi-load vehicles. `ServiceKind` is the named seam for the
-first two. A vehicle carries one load at a time, and
+**Not modelled in this version.** Breakdowns and repair, and multi-load
+vehicles. `ServiceKind` is the named seam for the first.
+A vehicle carries one load at a time, and
 `AgvVehicle.loadCapacity` above one is refused at construction rather
 than accepted and ignored — model the consolidation upstream, or use a
 larger fleet.
@@ -523,6 +523,68 @@ implementer could break.
 
 See §6 before choosing `ParkInPlaceDisposition`.
 
+### …model batteries and charging?
+
+Give the vehicle a `Battery`, tell the system where the chargers are, and
+set the two policies that keep it charged.
+
+```kotlin
+val agv = AgvSystem(
+    this, network, name = "Agv",
+    assignmentPolicy = ChargeReservePolicy(NearestVehiclePolicy())
+)
+agv.addCharger("ChargeSpur")
+
+val cart = AgvVehicle(
+    agv, TransporterPlacement.At("I6"), ConstantRV(3.0), name = "Cart",
+    battery = Battery(
+        capacity = 1000.0,
+        chargePerDistance = 0.5,   // traction: drawn per foot travelled
+        chargePerTime = 0.02,      // hotel load: drawn always, parked included
+        chargingRate = 100.0
+    )
+).apply {
+    dispositionPolicy = ChargeWhenLowDisposition(threshold = 0.6)
+}
+```
+
+Then read `cart.stateOfCharge`, `cart.fractionCharged`, and on the report
+`Cart:FracTimeCharging`, `Cart:NumChargingSessions`,
+`Cart:MinStateOfCharge` and `Cart:NumTimesStranded`. Those four rows exist
+only for a vehicle that has a battery — a row measuring something the model
+does not have is a question its reader has to answer every time.
+
+**Two drain rates, because a real vehicle has two.** Traction energy scales
+with distance and stops when the vehicle stops. Hotel load — controller,
+radio, lights, heating — scales with time and does not. `chargePerTime`
+defaults to zero, so a model that ignores idle draw is exactly a model with
+one rate.
+
+**Charge is derived, not stepped.** Nothing schedules an event for it: the
+level is a closed-form function of the vehicle's two odometers,
+`distanceTravelled` and elapsed time, computed whenever you ask. Adding a
+battery to a model does not change how many events its run takes, which
+`BatteryTest` asserts by running the same model both ways.
+
+**Exhaustion is noticed at the next zone boundary.** A vehicle cannot stop
+part way into a zone — it is physically between two places and has already
+claimed the space ahead — so a flat vehicle completes the entry it is
+committed to and halts on the zone it holds. From then on it stands there,
+and every route through those zones is closed.
+
+**Both policies, or neither works.** They do different jobs and the fleet
+needs both:
+
+| Policy | What it does | Why it is not enough alone |
+|---|---|---|
+| `ChargeReservePolicy` | Refuses an assignment the vehicle could not finish and still reach a charger | Stops the vehicle stranding, but never sends it to charge — so it stops working |
+| `ChargeWhenLowDisposition` | Sends an idle low vehicle to a charger | Dispositions are consulted only when the dispatcher has no work, and a busy fleet always has work |
+
+A saturated fleet with only the disposition never charges at all, and runs
+flat exactly as though it had no charging policy. The reserve is what makes
+a low vehicle decline the next load, and declining is what makes it idle
+enough for its disposition to be asked.
+
 ### …abandon an outstanding request?
 
 ```kotlin
@@ -578,6 +640,7 @@ not.
 | `Dispatcher.Task` | Something a vehicle may be asked to do. A `QObject`, so the *task* carries the wait. |
 | `Dispatcher.TransportTask` | A load to collect and deliver. What `requestAgvTransport` returns. |
 | `Dispatcher.ServiceTask` | Something a vehicle does for itself, by `ServiceKind` — currently `Reposition`. |
+| `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
 | `TaskBoard` | The read-only view of the queue handed to policies: `unassigned`, `assigned`, `oldest`. |
 | `Assignment` | A vehicle's commitment to a task. `isRevocable` until the load is aboard. |
 | `AssignmentProposal` | What a policy returns. Inert: proposing is not doing. |
@@ -659,6 +722,31 @@ area is *still available*, and on a one-way link it cannot leave until
 whatever is in the staging zone moves. A dispatcher may therefore commit a
 task to a vehicle that cannot start on it. Measure `fracTimeBlocked` across
 the fleet before believing a staging-area design.
+
+### A flat vehicle is a closed aisle, not an idle asset
+
+A vehicle that runs out of charge does not simply stop working. It halts on
+the zones it holds and keeps holding them for the rest of the replication,
+so every route through those zones is closed and the run's congestion
+statistics describe a smaller network than the one you modelled. Nothing
+raises: throughput falls and the report looks like a fleet that was merely
+too small.
+
+`Agv:NumVehiclesStranded` and `Cart:NumTimesStranded` are what say it
+happened, and both are written for every replication, zero included. Any
+value above zero means the run's other statistics were measured on a
+layout that was missing some of its aisles.
+
+The guard is `ChargeReservePolicy`, and it must reserve for **time as well
+as distance**. Reaching a charger costs both, so a reserve computed from
+distance alone under-reserves exactly when the trip is slow — which on a
+guide path means exactly when it is congested. A reserve that was correct
+for a model with no idle draw becomes incorrect the moment you add one,
+and it fails in the direction that strands vehicles.
+
+The reserve does not conjure capacity. It trades stranded vehicles for
+unserved demand, which shows up as `Agv:NumTasksNeverAssigned`. That is the
+honest outcome, and it is the one to act on.
 
 ### The re-tasking threshold is not optional
 

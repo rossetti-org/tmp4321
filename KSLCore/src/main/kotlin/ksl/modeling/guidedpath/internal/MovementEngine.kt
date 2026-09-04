@@ -136,7 +136,9 @@ internal class MovementEngine(
         if (transporter.velocitySampling == VelocitySampling.PER_ZONE) {
             transporter.currentVelocity = velocity
         }
-        val traversalTime = traversalTimeWithLengthCredit(transporter, next, velocity)
+        val plan = traversalPlan(transporter, next, velocity)
+        val traversalTime = plan.duration
+        transporter.beginTraversal(plan.distance, plan.duration)
         when (val timing = transporter.zoneControlRule.releaseTiming(transporter, next)) {
             is ZoneReleaseTiming.AtStart -> releaseRearAtStart(transporter)
 
@@ -221,25 +223,34 @@ internal class MovementEngine(
         return false
     }
 
+    /** How far the next zone is and how long it takes. */
+    private class TraversalPlan(val distance: Double, val duration: Double)
+
     /**
-     * How long the next zone takes, less whatever of the transporter's own length is still owed to
-     * it after a reversal.
+     * The ground the next zone costs, less whatever of the transporter's own length is still owed
+     * to it after a reversal.
      *
      * The credit is spent zone by zone rather than all at once, because a transporter may be longer
-     * than the zone it is turning round in. A zone entirely covered by the credit costs no time at
-     * all, which is right: the leading end was already past it.
+     * than the zone it is turning round in. A zone entirely covered by the credit costs no time and
+     * no distance at all, which is right: the leading end was already past it.
+     *
+     * Distance and duration come out together because they must agree about the credit. Computing
+     * the duration here and the distance anywhere else would let a transporter's odometer and its
+     * arrival time describe different journeys.
      */
-    private fun traversalTimeWithLengthCredit(
+    private fun traversalPlan(
         transporter: GuidedTransporter,
         next: Zone,
         velocity: Double
-    ): Double {
-        if (transporter.lengthCreditRemaining <= 0.0) return next.traversalTime(velocity)
+    ): TraversalPlan {
+        if (transporter.lengthCreditRemaining <= 0.0) {
+            return TraversalPlan(next.length, next.traversalTime(velocity))
+        }
         val credit = minOf(transporter.lengthCreditRemaining, next.length)
         transporter.lengthCreditRemaining -= credit
         val remaining = next.length - credit
-        if (remaining <= 0.0) return 0.0
-        return remaining / (velocity * next.velocityFactor)
+        if (remaining <= 0.0) return TraversalPlan(0.0, 0.0)
+        return TraversalPlan(remaining, remaining / (velocity * next.velocityFactor))
     }
 
     /**
@@ -451,6 +462,9 @@ internal class MovementEngine(
 
     /** Completes a traversal: the transporter now covers the zone it was travelling into. */
     fun endZoneTraversal(transporter: GuidedTransporter, zone: Zone) {
+        // First, so that nothing reached from here reads an odometer that still has this traversal
+        // in progress and counts part of it twice.
+        transporter.endTraversal()
         zone.occupy(transporter)
         transporter.claimedZone = null
         transporter.addFrontZone(zone)
@@ -480,6 +494,28 @@ internal class MovementEngine(
             transporter.transporterState = transporter.pendingMovingState
         }
         mySystem.refreshFleetCounts()
+        // The one place a transporter can be stopped without leaving the guide path in a state this
+        // engine cannot describe: it has finished entering a zone, it covers that zone, and it has
+        // route left to run. Asked only when there is somewhere further to go -- a transporter that
+        // has reached its destination arrives, whatever a gate would have said about carrying on.
+        if (transporter.currentRoute?.nextZone != null && !transporter.mayContinuePast(zone)) {
+            transporter.halt()
+            return
+        }
+        advance(transporter)
+    }
+
+    /**
+     * Starts a halted transporter again from where it stopped.
+     *
+     * It kept its zones and its route, so there is nothing to rebuild: restoring the state it was
+     * halted out of and advancing is the whole of it. The gate is asked again at the next boundary,
+     * so a transporter released while the condition that halted it still holds gets exactly one
+     * zone further and stops again.
+     */
+    fun resumeHalted(transporter: GuidedTransporter) {
+        if (!transporter.isHalted) return
+        transporter.releaseHalt()
         advance(transporter)
     }
 

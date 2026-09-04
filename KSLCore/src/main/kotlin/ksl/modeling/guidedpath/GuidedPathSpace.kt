@@ -645,6 +645,20 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * @param wait what kind of wait it is, which decides the queue
      * @return the queue to suspend the waiter in, or null when the transporter was already there
      */
+    /**
+     * Starts a transporter that a [TransporterMovementGateIfc] halted at a zone boundary.
+     *
+     * Nothing else will: a halted transporter has nothing scheduled and nobody waiting on it, which
+     * is the point of halting rather than blocking. Whatever refused it passage is what decides it
+     * may go on, and this is how it says so. Harmless on a transporter that is not halted.
+     */
+    fun resumeHaltedTransporter(transporter: GuidedTransporter) {
+        require(transporter.system === this) {
+            "Transporter (${transporter.name}) is not on guide path (${this.name})."
+        }
+        engine.resumeHalted(transporter)
+    }
+
     internal fun beginJourney(
         transporter: GuidedTransporter,
         destinationName: String,

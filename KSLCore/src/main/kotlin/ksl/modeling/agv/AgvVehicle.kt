@@ -16,6 +16,8 @@ import ksl.modeling.guidedpath.rules.EndOfZoneControl
 import ksl.modeling.guidedpath.rules.ZoneControlRuleIfc
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
 import ksl.simulation.ModelElement
@@ -34,6 +36,9 @@ import ksl.utilities.random.rvariable.RVariableIfc
  *
  * A modeller names only this object.
  *
+ * @property battery the vehicle's energy store, or null for a vehicle whose charge is not modelled.
+ * A vehicle with no battery reports no charging statistics, because a row that measures something
+ * the model does not have is a question its reader has to answer for themselves every time.
  * @property loadCapacity how many loads the vehicle can carry at once. One load at a time is what
  * this subsystem implements, so any other value is refused at construction; the refusal names the
  * two ways to get the effect instead -- a larger fleet, or consolidating loads into one entity
@@ -47,7 +52,8 @@ open class AgvVehicle @JvmOverloads constructor(
     zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
     name: String? = null,
     physicalLength: Double? = null,
-    val loadCapacity: Int = 1
+    val loadCapacity: Int = 1,
+    val battery: Battery? = null
 ) : ModelElement(system, name) {
 
     /**
@@ -215,6 +221,157 @@ open class AgvVehicle @JvmOverloads constructor(
         myNumTasksCompleted.increment()
     }
 
+
+    // ---- charge ---------------------------------------------------------------------------------
+
+    /**
+     * How far this vehicle has travelled in this replication, in the network's own length units.
+     *
+     * An odometer on the body, where the movement happens, so both paradigms have it. Includes the
+     * part of a zone traversal still under way.
+     */
+    val distanceTravelled: Double
+        get() = body.distanceTravelled
+
+    /**
+     * How long this vehicle has been anything other than idle in this replication.
+     *
+     * Moving, blocked, loading and unloading count; standing with nothing to do does not. Distinct
+     * from elapsed time, and the distinction is what lets a service or wear model be written
+     * against hours in operation rather than hours on the wall.
+     */
+    val operatingTime: Double
+        get() = body.operatingTime
+
+    /** Charge added at chargers, and the instant the depletion clock started, both per replication. */
+    private var chargeAdded: Double = 0.0
+    private var chargeClockStartedAt: Double = 0.0
+    private var lowestCharge: Double = Double.MAX_VALUE
+
+    /**
+     * The charge account, which may run negative.
+     *
+     * Kept unclamped because clamping loses the arithmetic. A vehicle that stands flat for an hour
+     * has drawn an hour of hotel load it did not have; topping it up to full at a charger must
+     * cancel that draw, and it can only do so if the overdraft was recorded. [stateOfCharge] is
+     * what a modeller reads.
+     */
+    private val rawCharge: Double
+        get() {
+            val b = battery ?: return Double.NaN
+            return b.initialCharge + chargeAdded -
+                    body.distanceTravelled * b.chargePerDistance -
+                    (time - chargeClockStartedAt) * b.chargePerTime
+        }
+
+    /**
+     * How much charge is left, or NaN for a vehicle with no battery.
+     *
+     * Derived from the odometers whenever it is asked for rather than stepped by events, so reading
+     * it costs nothing and never lags. Never below zero: a flat battery is flat.
+     */
+    val stateOfCharge: Double
+        get() = battery?.let { rawCharge.coerceIn(0.0, it.capacity) } ?: Double.NaN
+
+    /** [stateOfCharge] as a fraction of capacity, or NaN for a vehicle with no battery. */
+    val fractionCharged: Double
+        get() = battery?.let { stateOfCharge / it.capacity } ?: Double.NaN
+
+    /** True when the vehicle has no charge left. Always false for a vehicle with no battery. */
+    val isFlat: Boolean
+        get() = battery != null && rawCharge <= 0.0
+
+    /**
+     * True while the vehicle is stopped mid-route because it ran out of charge.
+     *
+     * It holds its zones and obstructs everything behind it for the rest of the replication, which
+     * is what running flat on a guide path actually costs. See [ksl.modeling.agv.policies.ChargeReservePolicy] for the guard
+     * that stops it happening.
+     */
+    val isStranded: Boolean
+        get() = body.isHalted
+
+    private val myFracTimeCharging: TWResponse? =
+        if (battery == null) null else TWResponse(this, "${this.name}:FracTimeCharging")
+
+    /** The fraction of time spent on a charger. Registered only for a vehicle that has a battery. */
+    val fracTimeCharging: TWResponseCIfc?
+        get() = myFracTimeCharging
+
+    private val myNumChargingSessions: Counter? =
+        if (battery == null) null else Counter(this, "${this.name}:NumChargingSessions")
+
+    /** How many times the vehicle charged. Registered only for a vehicle that has a battery. */
+    val numChargingSessions: CounterCIfc?
+        get() = myNumChargingSessions
+
+    private val myNumTimesStranded: Counter? =
+        if (battery == null) null else Counter(this, "${this.name}:NumTimesStranded")
+
+    /**
+     * How many times the vehicle stopped mid-route for want of charge.
+     *
+     * It can be more than one per replication only if something restarts a stranded vehicle;
+     * nothing in this subsystem does, so in practice it is zero or one, and one is a modelling
+     * failure rather than an outcome to average.
+     */
+    val numTimesStranded: CounterCIfc?
+        get() = myNumTimesStranded
+
+    private val myMinStateOfCharge: Response? =
+        if (battery == null) null else Response(this, "${this.name}:MinStateOfCharge")
+
+    /**
+     * The lowest charge the vehicle was seen to hold during the replication, one observation per
+     * replication.
+     *
+     * Sampled where charge is checked -- at zone boundaries and around charging -- rather than
+     * continuously, because a quantity derived from odometers has no events of its own to sample
+     * at. Between two boundaries it falls monotonically, so the boundary readings bracket the true
+     * minimum to within one zone.
+     */
+    val minStateOfCharge: ResponseCIfc?
+        get() = myMinStateOfCharge
+
+    /** The gate the space layer asks at every zone boundary. */
+    private fun mayContinuePastBoundary(): Boolean {
+        observeCharge()
+        if (!isFlat) return true
+        myNumTimesStranded?.increment()
+        logger.warn {
+            "AgvVehicle ($name) ran out of charge at ($currentLocationName) during replication " +
+                    "${model.currentReplicationNumber} and stopped where it stands. It holds its " +
+                    "zones for the rest of the replication and obstructs anything routed through " +
+                    "them. A ChargeReservePolicy is what prevents this."
+        }
+        return false
+    }
+
+    private fun observeCharge() {
+        if (battery == null) return
+        val soc = stateOfCharge
+        if (soc < lowestCharge) lowestCharge = soc
+    }
+
+    /** Puts the vehicle on a charger and reports how long it must stay to fill the battery. */
+    internal fun beginCharging(): Double {
+        val b = battery ?: return 0.0
+        observeCharge()
+        myFracTimeCharging?.value = 1.0
+        // Net of the hotel load, which keeps drawing while the vehicle is on the charger. The
+        // battery refuses a charging rate that does not outpace it, so this is positive.
+        return ((b.capacity - rawCharge) / (b.chargingRate - b.chargePerTime)).coerceAtLeast(0.0)
+    }
+
+    /** Takes the vehicle off the charger, full. */
+    internal fun endCharging() {
+        val b = battery ?: return
+        chargeAdded += b.capacity - rawCharge
+        myFracTimeCharging?.value = 0.0
+        myNumChargingSessions?.increment()
+        observeCharge()
+    }
+
     /**
      * Commands the body toward a location and reports whether a journey is now under way.
      *
@@ -241,6 +398,28 @@ open class AgvVehicle @JvmOverloads constructor(
 
     override fun initialize() {
         myFracTimeOnTask.value = 0.0
+        chargeAdded = 0.0
+        chargeClockStartedAt = time
+        lowestCharge = Double.MAX_VALUE
+        if (battery != null) {
+            myFracTimeCharging?.value = 0.0
+            body.attachMovementGate { _, _ -> mayContinuePastBoundary() }
+        }
+    }
+
+    /**
+     * Records the replication's lowest charge.
+     *
+     * Here rather than in `afterReplication` because this runs while the replication is still live,
+     * and a `Response` summarizes in `afterReplication` whatever was observed during the run. A
+     * replication in which the vehicle never moved observed nothing, and its initial charge is the
+     * honest reading for it.
+     */
+    override fun replicationEnded() {
+        super.replicationEnded()
+        if (battery == null) return
+        observeCharge()
+        myMinStateOfCharge?.value = if (lowestCharge == Double.MAX_VALUE) stateOfCharge else lowestCharge
     }
 
     override fun toString(): String =

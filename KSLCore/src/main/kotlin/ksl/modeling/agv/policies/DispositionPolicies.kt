@@ -15,7 +15,15 @@ sealed class Disposition {
     /** Go somewhere named. */
     data class MoveTo(val locationName: String) : Disposition()
 
-    // GoCharge arrives with the battery seam.
+    /**
+     * Go to a charger and stay there until the battery is full.
+     *
+     * Distinct from [MoveTo] the same place, because arriving is not the point: the vehicle waits
+     * there for as long as charging takes. It remains assignable throughout -- a vehicle charging
+     * is a vehicle the dispatcher may still want -- but the charging delay is not interruptible, so
+     * work arriving mid-charge is taken up when the battery is full rather than at once.
+     */
+    data class GoCharge(val locationName: String) : Disposition()
 }
 
 /**
@@ -65,4 +73,45 @@ class ParkInPlaceDisposition : DispositionPolicyIfc {
 class MoveToStagingDisposition(val locationName: String) : DispositionPolicyIfc {
     override fun disposition(vehicle: AgvVehicle): Disposition = Disposition.MoveTo(locationName)
     override fun toString(): String = "MoveToStagingDisposition($locationName)"
+}
+
+/**
+ * Send the vehicle to charge when it is low, and otherwise do whatever another policy says.
+ *
+ * A decorator rather than a rule of its own, because "charge when low" is orthogonal to what a
+ * vehicle does with itself the rest of the time: a fleet that gathers at a staging point and a
+ * fleet that returns to its own home base both need it, and neither should have to reimplement the
+ * other's parking rule to get it.
+ *
+ * **This is not the guard against running flat.** It is consulted only when the dispatcher has no
+ * work for the vehicle, so a fleet that is busy enough never reaches it -- and a busy fleet is
+ * exactly the one that empties its batteries. Pair it with [ChargeReservePolicy], which is what
+ * stops a vehicle accepting work it cannot finish.
+ *
+ * @param threshold the fraction of capacity at or below which the vehicle goes to charge
+ * @param otherwise what it does when it is not low, or when no charger is reachable
+ */
+class ChargeWhenLowDisposition @JvmOverloads constructor(
+    val threshold: Double = 0.25,
+    val otherwise: DispositionPolicyIfc = ReturnToHomeBaseDisposition()
+) : DispositionPolicyIfc {
+
+    init {
+        require(threshold in 0.0..1.0) {
+            "A charging threshold is a fraction of capacity and must be in 0.0..1.0, but was $threshold."
+        }
+    }
+
+    override fun disposition(vehicle: AgvVehicle): Disposition {
+        if (vehicle.battery == null) return otherwise.disposition(vehicle)
+        if (vehicle.fractionCharged > threshold) return otherwise.disposition(vehicle)
+        // No charger it can reach is not an error here. The vehicle is low, not stopped, and it may
+        // still be able to work; refusing to park would strand it for a reason that has nothing to
+        // do with parking.
+        val charger = vehicle.system.nearestCharger(vehicle.currentLocationName)
+            ?: return otherwise.disposition(vehicle)
+        return Disposition.GoCharge(charger)
+    }
+
+    override fun toString(): String = "ChargeWhenLowDisposition(threshold=$threshold, otherwise=$otherwise)"
 }

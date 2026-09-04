@@ -118,6 +118,41 @@ fun interface TransporterArrivalListenerIfc {
 }
 
 /**
+ * Asked, at every zone boundary, whether a transporter may carry on.
+ *
+ * A zone boundary is the only place a transporter can be stopped without leaving the guide path in
+ * a state the space layer cannot describe. Part way into a zone it is physically between two
+ * places: it has claimed the zone ahead and there is nothing there to arrive at, so a stop would
+ * leave a claimed zone with no arrival. Answering `false` here instead lets the transporter
+ * complete the entry it is committed to and halt on a zone it holds -- stationary, still occupying
+ * space, and still owning the rest of its route.
+ *
+ * The space layer neither knows nor asks why. A flat battery, a breakdown, a shift ending, an
+ * operator stopping the line: all of them are the same event to the guide path, which is that a
+ * vehicle stopped where it stands. A halted transporter is [GuidedTransporter.isHalted] and reads
+ * as [TransporterState.IDLE], because that is what it is doing; the reason belongs to whatever
+ * installed the gate and is reported there.
+ *
+ * **A halted transporter does not resume by itself.** Nothing is scheduled for it and nothing waits
+ * on it, which is the honest model of a vehicle stopped mid-aisle: it obstructs everyone behind it
+ * for the rest of the run. [GuidedPathSpace.resumeHaltedTransporter] is what starts it again, and
+ * whatever halted it is responsible for calling that.
+ *
+ * One gate per transporter, because a gate is a veto: two of them would need a rule for what to do
+ * when they disagree, and the only sensible rule -- any veto stops the vehicle -- is something the
+ * installer can write in one line.
+ */
+fun interface TransporterMovementGateIfc {
+
+    /**
+     * @param transporter the transporter that has just completed entry into [zone]
+     * @param zone the zone it now covers
+     * @return true to continue along the route, false to halt here
+     */
+    fun mayContinue(transporter: GuidedTransporter, zone: Zone): Boolean
+}
+
+/**
  * A vehicle on a guide path: a resource of capacity one that occupies space and must claim the
  * space ahead of it before moving into it.
  *
@@ -296,6 +331,18 @@ class GuidedTransporter @JvmOverloads constructor(
                 blockedSince = Double.NaN
             } else if (field != TransporterState.BLOCKED && value == TransporterState.BLOCKED) {
                 blockedSince = time
+            }
+            // The operating clock, kept the same way and for the same reason. It runs whenever the
+            // transporter is anything other than idle -- moving, blocked, loading, unloading -- so
+            // that a wear or service model can be written against time in operation rather than
+            // time on the wall. The same guard against a replication that ended mid-state applies.
+            if (field == TransporterState.IDLE && value != TransporterState.IDLE) {
+                operatingSince = time
+            } else if (field != TransporterState.IDLE && value == TransporterState.IDLE) {
+                if (!operatingSince.isNaN()) {
+                    myCumulativeOperatingTime += time - operatingSince
+                }
+                operatingSince = Double.NaN
             }
             field = value
             myFracTimeMoving.value = isMoving.toDouble()
@@ -492,6 +539,111 @@ class GuidedTransporter @JvmOverloads constructor(
     internal val isBlockedClockRunning: Boolean
         get() = !blockedSince.isNaN()
 
+    // ---- odometers ------------------------------------------------------------------------------
+    //
+    // Two running totals, read on demand rather than stepped by events, in exactly the pattern
+    // `cumulativeBlockedTime` above already uses: an accumulator plus whatever is in progress. A
+    // feature built on these -- a battery, a wear model, a service interval -- therefore costs the
+    // event calendar nothing, which matters for a subsystem that publishes its events per zone
+    // traversal as a performance figure.
+
+    private var myCumulativeOperatingTime: Double = 0.0
+    private var operatingSince: Double = Double.NaN
+
+    /**
+     * How long this transporter has been anything other than idle in this replication.
+     *
+     * Moving, blocked, loading and unloading all count; standing with nothing to do does not. This
+     * is the clock a service interval or a wear model runs on, and it is deliberately not the same
+     * as elapsed time: a fleet with long quiet periods ages differently by the two, and choosing
+     * between them is the modeller's decision rather than one this class should make for them.
+     */
+    val operatingTime: Double
+        get() = if (operatingSince.isNaN()) myCumulativeOperatingTime
+        else myCumulativeOperatingTime + (time - operatingSince)
+
+    private var myCumulativeDistance: Double = 0.0
+    private var traversalDistance: Double = 0.0
+    private var traversalDuration: Double = 0.0
+    private var traversalStartedAt: Double = Double.NaN
+
+    /**
+     * How far this transporter has travelled in this replication, in the network's own length
+     * units, including the part of a traversal still under way.
+     *
+     * The distance is the ground actually covered, which is not always the length of the zones
+     * entered: a transporter that backs out of a spur is credited its own length against the way
+     * out (see [physicalLength]), and it does not travel the distance that credit pays for. The
+     * in-progress term is linear in elapsed time, which is exact -- a traversal runs at one
+     * velocity from the moment it is scheduled.
+     */
+    val distanceTravelled: Double
+        get() {
+            if (traversalStartedAt.isNaN() || traversalDuration <= 0.0) return myCumulativeDistance
+            val fraction = ((time - traversalStartedAt) / traversalDuration).coerceIn(0.0, 1.0)
+            return myCumulativeDistance + traversalDistance * fraction
+        }
+
+    /** Opens a traversal for the odometer. Called by the engine as it schedules the arrival. */
+    internal fun beginTraversal(distance: Double, duration: Double) {
+        traversalDistance = distance
+        traversalDuration = duration
+        traversalStartedAt = time
+    }
+
+    /** Credits a completed traversal and closes it. Called first thing on entering the zone. */
+    internal fun endTraversal() {
+        if (traversalStartedAt.isNaN()) return
+        myCumulativeDistance += traversalDistance
+        traversalDistance = 0.0
+        traversalDuration = 0.0
+        traversalStartedAt = Double.NaN
+    }
+
+    // ---- halting at a zone boundary -------------------------------------------------------------
+
+    private var myMovementGate: TransporterMovementGateIfc? = null
+
+    /**
+     * Installs the gate that is asked, at every zone boundary, whether this transporter may carry
+     * on. Replaces any gate already installed; pass null to remove it.
+     *
+     * See [TransporterMovementGateIfc] for what a refusal means and who is then responsible for
+     * starting the transporter again.
+     */
+    fun attachMovementGate(gate: TransporterMovementGateIfc?) {
+        myMovementGate = gate
+    }
+
+    internal fun mayContinuePast(zone: Zone): Boolean = myMovementGate?.mayContinue(this, zone) ?: true
+
+    /**
+     * True while the transporter is stopped at a zone boundary with route left to run.
+     *
+     * It still holds its zones and still owns its route; nothing is scheduled for it. Distinct from
+     * blocked, which is a transporter waiting for space that someone else will eventually give up:
+     * a halted transporter is waiting for whatever halted it to release it, and if nothing does, it
+     * stands there for the rest of the replication.
+     */
+    var isHalted: Boolean = false
+        private set
+
+    private var stateBeforeHalt: TransporterState = TransporterState.IDLE
+
+    internal fun halt() {
+        if (isHalted) return
+        stateBeforeHalt = transporterState
+        isHalted = true
+        transporterState = TransporterState.IDLE
+    }
+
+    /** Restores the state the transporter was halted out of. The engine restarts the movement. */
+    internal fun releaseHalt() {
+        if (!isHalted) return
+        isHalted = false
+        transporterState = stateBeforeHalt
+    }
+
     // ---- placement and movement ---------------------------------------------------------------
 
     /**
@@ -508,13 +660,21 @@ class GuidedTransporter @JvmOverloads constructor(
         reservedSpur = null
         journeyWait = null
         travellingForward = true
+        isHalted = false
         transporterState = TransporterState.IDLE
         stateBeforeBlocking = TransporterState.IDLE
+        stateBeforeHalt = TransporterState.IDLE
         lengthCreditRemaining = 0.0
         // After the state, so that a transporter still blocked when the previous replication ended
         // leaves that state through the setter above before its running totals are cleared.
         blockedSince = Double.NaN
         myCumulativeBlockedTime = 0.0
+        operatingSince = Double.NaN
+        myCumulativeOperatingTime = 0.0
+        myCumulativeDistance = 0.0
+        traversalDistance = 0.0
+        traversalDuration = 0.0
+        traversalStartedAt = Double.NaN
         currentVelocity = sampleVelocity()
         val zones = system.resolvePlacement(this, initialPlacement)
         for (zone in zones) {

@@ -100,6 +100,51 @@ open class AgvSystem @JvmOverloads constructor(
         myVehicles.add(vehicle)
     }
 
+    private val myChargers = mutableListOf<String>()
+
+    /**
+     * Where a vehicle can charge, in declaration order.
+     *
+     * Ordinary network locations -- an intersection, or a station alias for one -- because a charger
+     * is a place a vehicle drives to and nothing else. Nothing in the space layer changes to have
+     * one, and a charger on a spur behaves like any other spur: one vehicle at a time, with the rest
+     * queueing on the approach.
+     *
+     * Fleet-wide rather than per vehicle, since a charger belongs to the layout. A fleet whose
+     * vehicles take different chargers says so through its disposition policies.
+     */
+    val chargers: List<String>
+        get() = myChargers
+
+    /**
+     * Declares a network location as a charger.
+     *
+     * Checked against the network now rather than when a vehicle is sent there, so a misspelled
+     * charger fails at build time instead of stranding a vehicle several thousand simulated minutes
+     * into a run.
+     */
+    fun addCharger(locationName: String) {
+        require(model.isNotRunning) { "A charger cannot be added while the model is running." }
+        network.requireLocation(locationName)
+        if (locationName !in myChargers) myChargers.add(locationName)
+    }
+
+    /**
+     * The declared charger nearest to a location along the guide path, or null when none is
+     * reachable from there.
+     *
+     * Along the guide path and not as the crow flies, because a one-way network's distances are not
+     * symmetric and the nearest charger by position may be the furthest to actually reach.
+     */
+    fun nearestCharger(fromLocationName: String): String? {
+        val here = network.location(fromLocationName) ?: return null
+        return myChargers
+            .mapNotNull { name -> network.location(name)?.let { name to it } }
+            .filter { (_, there) -> network.isReachable(here, there) }
+            .minByOrNull { (_, there) -> network.distance(here, there) }
+            ?.first
+    }
+
     // ---- the four hold queues ------------------------------------------------------------------
     //
     // Suspension plumbing, not the model's waiting line -- that is the dispatcher's task queue.
@@ -301,6 +346,18 @@ open class AgvSystem @JvmOverloads constructor(
     private val myNumEntitiesNeverResumed = Response(this, "${this.name}:NumEntitiesNeverResumed")
     val numEntitiesNeverResumed: ResponseCIfc get() = myNumEntitiesNeverResumed
 
+    private val myNumVehiclesStranded = Response(this, "${this.name}:NumVehiclesStranded")
+
+    /**
+     * How many vehicles were stopped mid-route for want of charge when the replication ended.
+     *
+     * Written for every replication, zero included, so the across-replication average is the mean
+     * number stranded per run rather than a mean over the runs that went wrong. A figure that is
+     * not zero says the fleet's charging policy does not work at this demand, and every other
+     * statistic in the run was measured on a layout that was quietly missing some of its aisles.
+     */
+    val numVehiclesStranded: ResponseCIfc get() = myNumVehiclesStranded
+
     private val myNumAssignmentsStillOpen = Response(this, "${this.name}:NumAssignmentsStillOpen")
     val numAssignmentsStillOpen: ResponseCIfc get() = myNumAssignmentsStillOpen
 
@@ -403,6 +460,7 @@ open class AgvSystem @JvmOverloads constructor(
         reportTasksNeverAssigned()
         reportEntitiesNeverResumed()
         reportAssignmentsStillOpen()
+        reportVehiclesStranded()
         // After the diagnostics rather than before them: if the audit is about to raise, the three
         // reports above are the context a reader will want, and they are already in the log.
         if (auditAtReplicationEnd) {
@@ -487,6 +545,34 @@ open class AgvSystem @JvmOverloads constructor(
                     append(System.lineSeparator())
                     append("  (${v.name}) was ${a.state} on task (${a.task.name}), ")
                     append("committed at ${a.madeAt} by ${a.decidedBy}")
+                }
+            }
+        }
+    }
+
+    /**
+     * Vehicles that ran out of charge and stopped where they stood.
+     *
+     * Reported apart from an assignment left open, because the two say different things: an open
+     * assignment is work the run was too short to finish, while a stranded vehicle is a hole in the
+     * layout that was there for part of the run. A reader who takes the second for the first
+     * lengthens the run and gets the same answer.
+     */
+    private fun reportVehiclesStranded() {
+        val stranded = myVehicles.filter { it.isStranded }
+        myNumVehiclesStranded.value = stranded.size.toDouble()
+        if (stranded.isEmpty()) return
+        logger.warn {
+            buildString {
+                append("AgvSystem ($name): ${stranded.size} vehicle(s) ran out of charge during ")
+                append("replication ${model.currentReplicationNumber} and stopped on the guide path. ")
+                append("They held their zones for the rest of the run, so every route through those ")
+                append("zones was closed and this run's congestion statistics describe a smaller ")
+                append("network than the one modelled.")
+                for (v in stranded) {
+                    append(System.lineSeparator())
+                    append("  (${v.name}) at (${v.currentLocationName}), holding ")
+                    append("${v.body.heldZones.joinToString { it.name }}")
                 }
             }
         }
@@ -661,6 +747,25 @@ open class AgvSystem @JvmOverloads constructor(
                                 if (q != null) {
                                     hold(q,                                 // SUSPENDS
                                         suspensionName = "${vehicle.name}:repositioning")
+                                }
+                            }
+                            is Disposition.GoCharge -> {
+                                val q = vehicle.beginTravelTo(
+                                    d.locationName, TransporterState.RETURNING_HOME, this@VehicleAgent)
+                                if (q != null) {
+                                    hold(q,                                 // SUSPENDS
+                                        suspensionName = "${vehicle.name}:goingToCharge")
+                                }
+                                // Work may have arrived while it drove and turned it round in
+                                // flight, in which case it is somewhere else on somebody's business
+                                // and there is nothing here to charge.
+                                if (assignment == null) {
+                                    val duration = vehicle.beginCharging()
+                                    if (duration > 0.0) {
+                                        delay(duration,                     // SUSPENDS
+                                            suspensionName = "${vehicle.name}:charging")
+                                    }
+                                    vehicle.endCharging()
                                 }
                             }
                         }

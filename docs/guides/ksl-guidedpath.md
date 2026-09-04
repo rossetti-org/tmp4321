@@ -395,6 +395,55 @@ Always registered, whatever the network size: `numTransportersMoving`,
 `numDeadlocksDetected`, `numObstructionsDetected`, the six per-transport
 responses, and per transporter `fracTimeBlocked` and `numTimesBlocked`.
 
+### …read how far a transporter has travelled, or how long it has worked?
+
+Two odometers on the transporter, reset at the start of every replication:
+
+```kotlin
+val feet    = cart.distanceTravelled   // ground covered, in the network's own length units
+val working = cart.operatingTime       // time spent anything other than idle
+```
+
+Neither is a statistic and neither schedules an event. Both are running
+totals read on demand, in the same pattern `cumulativeBlockedTime` uses:
+an accumulator plus whatever is in progress, so `distanceTravelled` is
+exact part way through a zone traversal as well as at the boundaries.
+
+`operatingTime` counts moving, blocked, loading and unloading; standing
+with nothing to do does not count. It is deliberately not elapsed time — a
+fleet with long quiet periods ages differently by the two, and a wear or
+service model has to choose which it means.
+
+These are what the AGV subsystem's batteries are computed from, and they
+are the same two numbers a maintenance model would need.
+
+### …stop a transporter where it stands?
+
+Attach a movement gate. It is asked at every zone boundary whether the
+transporter may carry on:
+
+```kotlin
+cart.attachMovementGate { transporter, _ -> !outOfService(transporter) }
+```
+
+A zone boundary is the only place a transporter can be stopped without
+leaving the guide path in a state this subsystem cannot describe. Part way
+into a zone it is between two places and has already claimed the space
+ahead, so a stop there would leave a claimed zone with no arrival.
+Answering `false` lets it finish entering the zone and halt on it.
+
+A halted transporter is `isHalted`, reads as `IDLE` because that is what it
+is doing, and **does not resume by itself**: nothing is scheduled for it
+and nobody is waiting on it. `space.resumeHaltedTransporter(cart)` is what
+starts it again, and whatever halted it is responsible for calling that. A
+transporter halted and never released holds its zones for the rest of the
+replication, which is the honest model of a vehicle stopped mid-aisle and
+is exactly as obstructive as it sounds.
+
+The guide path neither knows nor asks why. A flat battery, a breakdown, a
+shift ending and an operator stopping the line are all the same event here:
+a vehicle stopped where it stands.
+
 ### …find out who is suspended in the middle of a journey?
 
 Three queues hold them, split by what the wait *is*:

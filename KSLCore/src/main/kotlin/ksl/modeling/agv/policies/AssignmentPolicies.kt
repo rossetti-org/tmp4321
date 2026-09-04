@@ -551,3 +551,85 @@ class ReassigningPolicy(
     override fun toString(): String =
         "ReassigningPolicy(threshold=$improvementThreshold, inner=$inner)"
 }
+
+/**
+ * Refuses any assignment a vehicle could not finish and still reach a charger.
+ *
+ * A decorator: it does not decide anything, it removes proposals another policy made. That keeps
+ * the reserve orthogonal to the dispatching rule, which is what it has to be -- nearest-vehicle,
+ * least-used and an auction all need the same guard, and none of them should have to know about
+ * batteries to get it.
+ *
+ * **Why this ships with the battery rather than being left to the modeller.** A vehicle that runs
+ * flat on a guide path does not merely stop working: it stands on the zones it holds for the rest
+ * of the replication and obstructs everything routed through them. That is a permanent, silent
+ * change to the layout, and a fleet can lose its throughput to it without anything raising.
+ *
+ * **The reserve covers time as well as distance, and that is the whole difficulty.** Reaching a
+ * charger costs both traction energy and hotel load, so a reserve computed from distance alone
+ * under-reserves exactly when the trip is slow -- which on a guide path means exactly when it is
+ * congested. A reserve that was correct for a model with no idle draw becomes incorrect the moment
+ * one is added, and it fails in the direction that strands vehicles.
+ *
+ * The estimate is a free-running one: distance along the guide path, at the vehicle's last sampled
+ * velocity, with no allowance for blocking, re-routing, or a queue at the charger. [safetyFactor]
+ * is what covers all of that, which is why its default is generous rather than tight. A study that
+ * wants it tighter should check [AgvVehicle.numTimesStranded] is still zero.
+ *
+ * @param inner the policy that actually decides
+ * @param safetyFactor multiplies the estimated draw. Must be >= 1.0.
+ */
+class ChargeReservePolicy @JvmOverloads constructor(
+    val inner: AssignmentPolicyIfc,
+    val safetyFactor: Double = 1.25
+) : AssignmentPolicyIfc {
+
+    init {
+        require(safetyFactor >= 1.0) {
+            "A charge reserve's safety factor must be >= 1.0, but was $safetyFactor."
+        }
+    }
+
+    override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
+        val proposals = with(inner) { assign(context) }
+        if (proposals.isEmpty()) return proposals
+        return proposals.filter { affordable(it, context) }
+    }
+
+    private fun affordable(proposal: AssignmentProposal, context: DispatchContext): Boolean {
+        val vehicle = proposal.vehicle
+        val battery = vehicle.battery ?: return true
+        // Refused loudly rather than passing everything through. A reserve policy with nowhere to
+        // reserve for is a guard that silently does nothing, which is worse than not having one:
+        // the model reads as protected and is not.
+        check(vehicle.system.chargers.isNotEmpty()) {
+            "AgvSystem (${vehicle.system.name}) has a ChargeReservePolicy but no chargers. The " +
+                    "reserve is the charge a vehicle must keep in hand to reach one, so with none " +
+                    "declared there is nothing to reserve for and the policy would pass every " +
+                    "assignment through while appearing to guard them. Declare a charger with " +
+                    "addCharger, or drop the policy."
+        }
+        val network = context.network
+        val task = proposal.task
+        val here = network.location(vehicle.currentLocationName) ?: return false
+        val pickup = network.location(task.pickupLocation) ?: return false
+        val setDown = network.location(task.destination) ?: return false
+        val charger = vehicle.system.nearestCharger(task.destination)
+            ?.let { network.location(it) }
+            ?: return false
+        if (!network.isReachable(here, pickup) || !network.isReachable(pickup, setDown) ||
+            !network.isReachable(setDown, charger)
+        ) {
+            return false
+        }
+        val distance = network.distance(here, pickup) +
+                network.distance(pickup, setDown) +
+                network.distance(setDown, charger)
+        val velocity = vehicle.nominalVelocity
+        if (velocity <= 0.0) return false
+        val needed = battery.drawFor(distance, distance / velocity) * safetyFactor
+        return needed <= vehicle.stateOfCharge
+    }
+
+    override fun toString(): String = "ChargeReservePolicy(inner=$inner, safetyFactor=$safetyFactor)"
+}
