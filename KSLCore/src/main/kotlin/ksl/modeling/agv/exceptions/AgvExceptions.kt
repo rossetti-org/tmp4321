@@ -58,3 +58,13 @@ class AgvProtocolException(message: String) : RuntimeException(message)
  * `ZoneInvariantViolation`: the two say the same kind of thing about the two halves of one model.
  */
 class AgvInvariantViolation(message: String) : IllegalStateException(message)
+
+/**
+ * A tour policy returned a stop order the vehicle cannot execute: it added or dropped a stop, put a
+ * set-down before its pickup, or overfilled the vehicle.
+ *
+ * Raised at the moment of planning rather than at the stop that would have failed, because the
+ * decision and the fault are the policy's and a diagnostic that arrived three stops later would
+ * name the wrong thing.
+ */
+class AgvTourException(message: String) : RuntimeException(message)

@@ -2,6 +2,10 @@ package ksl.modeling.agv
 
 import ksl.modeling.agv.exceptions.AgvDispatchException
 import ksl.modeling.agv.exceptions.AgvProtocolException
+import ksl.modeling.agv.policies.TourPolicyIfc
+import ksl.modeling.agv.policies.CheapestInsertionTourPolicy
+import ksl.modeling.agv.policies.TourContext
+import ksl.modeling.agv.policies.validateTour
 import ksl.modeling.agv.policies.AssignmentPolicyIfc
 import ksl.modeling.agv.policies.NearestVehiclePolicy
 import ksl.modeling.agv.policies.TaskSelectionRuleIfc
@@ -33,6 +37,7 @@ import ksl.utilities.GetValueIfc
 open class Dispatcher @JvmOverloads constructor(
     val system: AgvSystem,
     assignmentPolicy: AssignmentPolicyIfc = NearestVehiclePolicy(),
+    tourPolicy: TourPolicyIfc = CheapestInsertionTourPolicy(),
     discipline: Queue.Discipline = Queue.Discipline.FIFO,
     name: String? = null
 ) : ModelElement(system, name ?: "Dispatcher") {
@@ -43,6 +48,41 @@ open class Dispatcher @JvmOverloads constructor(
             require(model.isNotRunning) { "The assignment policy cannot be changed while the model is running." }
             field = value
         }
+
+    /**
+     * The order a vehicle visits the stops it has committed to. Substitutable while not running.
+     *
+     * The dispatcher's, not the vehicle's: with more than one task the order decides which loads a
+     * vehicle takes and in what sequence, and that is a dispatching decision (`A7`). A vehicle
+     * executes tours and never authors one.
+     */
+    var tourPolicy: TourPolicyIfc = tourPolicy
+        set(value) {
+            require(model.isNotRunning) { "The tour policy cannot be changed while the model is running." }
+            field = value
+        }
+
+    /**
+     * Fits a newly committed task into a vehicle's itinerary, and checks the answer.
+     *
+     * Validation is not distrust of the shipped policies; it is what makes a *modeller's* policy
+     * safe to write. An insertion can be the cheapest available and still infeasible, and a
+     * framework that quietly repaired the order would have taken the decision away from the policy
+     * that made it.
+     */
+    internal fun planTour(
+        vehicle: AgvVehicle,
+        remaining: List<TourStop>,
+        insert: List<TourStop>
+    ): List<TourStop> {
+        val context = TourContext(vehicle, system.network)
+        val planned = tourPolicy.plan(context, remaining, insert)
+        validateTour(
+            tourPolicy, remaining + insert, planned,
+            vehicle.loadCapacity, vehicle.numLoadsAboard, vehicle.name
+        )
+        return planned
+    }
 
     private val myTaskQ: TaskQ = TaskQ(this, "${this.name}:TaskQ", discipline)
 
@@ -213,6 +253,14 @@ open class Dispatcher @JvmOverloads constructor(
          * those delays, and neither is derivable from the other.
          */
         internal var carriedBy: AgvVehicle? = null
+
+        // Marks taken when *this* load went aboard, so that its ride is measured from its own
+        // pickup. With one load per tour the pickup and the start of the loaded leg are the same
+        // instant; with several they are not, and a load collected second would otherwise be
+        // credited with the whole tour since the last leg began.
+        internal var pickedUpAt: Double = Double.NaN
+        internal var distanceAtPickup: Double = 0.0
+        internal var zonesAtPickup: Int = 0
         internal var blockedAtPickup: Double = 0.0
         internal var loadedRouteLength: Double = 0.0
         internal var blockedWhileLoaded: Double = 0.0
@@ -629,6 +677,10 @@ open class Dispatcher @JvmOverloads constructor(
      * itself stays in the loop.
      */
     internal fun applyProposals(proposals: List<AssignmentProposal>) {
+        // How many this pass has already given each vehicle. A vehicle with room may take several
+        // tasks in one pass and make one round of them; what it may not do is take more than it can
+        // carry, and `spareCapacity` alone would not notice because nothing is aboard yet.
+        val takenThisPass = mutableMapOf<AgvVehicle, Int>()
         for (p in proposals) {
             if (!myAvailable.contains(p.vehicle)) {
                 // Two quite different causes, and a modeller should not be told the wrong one. The
@@ -659,6 +711,15 @@ open class Dispatcher @JvmOverloads constructor(
                             "vehicle committed to it (A1)."
                 )
             }
+            val roomLeft = p.vehicle.spareCapacity - (takenThisPass[p.vehicle] ?: 0)
+            if (roomLeft <= 0) {
+                throw AgvDispatchException(
+                    "Policy ($assignmentPolicy) proposed task (${p.task.name}) for vehicle " +
+                            "(${p.vehicle.name}), which already has everything it can carry this " +
+                            "pass. A vehicle holds ${p.vehicle.loadCapacity} load(s); use " +
+                            "DispatchContext.feasible, which excludes a vehicle with no room."
+                )
+            }
             val a = Assignment(p.vehicle, p.task, time, assignmentPolicy.toString(), p.terms)
             // The task STAYS in the queue: it is dequeued at pickup, not here.
             p.task.transitionTo(TaskState.ASSIGNED)
@@ -671,8 +732,19 @@ open class Dispatcher @JvmOverloads constructor(
             }
             myNumAssignmentsMade.increment()
             system.emitAssignment(a)
-            withdraw(p.vehicle)
-            resume(p.vehicle, a)
+            // Recorded now, woken once at the end of the pass. Waking here would start the tour
+            // before the rest of this batch had been added to it, and the vehicle would make one
+            // round per task instead of one round for all of them.
+            p.vehicle.agent?.assignments?.add(a)
+                ?: throw AgvProtocolException("Vehicle (${p.vehicle.name}) has no agent for this replication.")
+            takenThisPass[p.vehicle] = (takenThisPass[p.vehicle] ?: 0) + 1
+        }
+        // Committed now, and not assignable again until the round is over. Growing a tour that is
+        // already under way is a separate capability with its own decisions to make.
+        for (vehicle in takenThisPass.keys) {
+            withdraw(vehicle)
+            val agent = vehicle.agent ?: continue
+            system.deliverAssignments(agent)
         }
         // Everyone who declared and got nothing hears so, exactly once.
         val leftover = myNewlyDeclared.toList()
@@ -685,9 +757,9 @@ open class Dispatcher @JvmOverloads constructor(
             "Vehicle (${vehicle.name}) has no agent for this replication."
         )
         if (assignment != null) {
-            // May be dormant, or may be part-way through a disposition move, in which case it is
-            // turned round in flight rather than being allowed to finish going home first.
-            system.deliverAssignment(a, assignment)
+            a.assignments.add(assignment)
+            withdraw(vehicle)
+            system.deliverAssignments(a)
             return
         }
         // "Nothing for you" is only meaningful to a vehicle that is waiting to hear it. One that is

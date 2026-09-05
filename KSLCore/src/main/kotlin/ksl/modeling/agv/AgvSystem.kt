@@ -483,14 +483,16 @@ open class AgvSystem @JvmOverloads constructor(
      * somewhere on the guide path, and turning it round is exactly what re-tasking means. A vehicle
      * holding a live assignment is never in this position -- it is withdrawn for the whole of a tour.
      */
-    internal fun deliverAssignment(agent: VehicleAgent, assignment: Assignment) {
-        agent.assignment = assignment
+    internal fun deliverAssignments(agent: VehicleAgent) {
+        val first = agent.assignments.firstOrNull() ?: return
         if (availabilityQ.contains(agent)) {
             availabilityQ.removeAndResume(agent)
             return
         }
-        // Under way on a disposition. Turn it round.
-        val pickup = assignment.task.pickupLocation
+        // Under way on a disposition. Turn it round. The target is the first commitment's pickup;
+        // the vehicle's own loop plans the whole round and issues its own leg on waking, so this
+        // only has to stop it going where it no longer needs to go.
+        val pickup = first.task.pickupLocation
         val travelling = agent.vehicle.beginTravelTo(pickup, MovePurpose.SERVICE, agent)
         if (travelling == null) {
             // Already standing where it is now needed. Its journey is over, so nothing will arrive
@@ -945,23 +947,14 @@ open class AgvSystem @JvmOverloads constructor(
                 vehicle.taskStarted()
                 refreshFleetCounts()
                 val allocation = seize(vehicle.body, 1, queue = vehicle.bodyQ)
-                val t = tourFor(a).also { tour = it }
+                // Everything committed at this moment, planned as one itinerary. A vehicle given
+                // several tasks in one dispatching pass makes one round rather than several.
+                val committed = assignments.toList()
+                val t = tourFor(committed).also { tour = it }
                 val blockedAtStart = vehicle.body.cumulativeBlockedTime
                 val failedAtStart = vehicle.cumulativeFailedTime
                 while (!t.isComplete) {
                     val stop = t.nextStop!!
-                    // Taken before the leg rather than after, because the unloading delay that
-                    // follows an arrival is not travelling and does not belong to a move time. The
-                    // passive subsystem draws its loaded interval at the same two boundaries.
-                    val legStarted = time
-                    // Distance and zones come off the vehicle's odometers rather than off the
-                    // route, because a leg may take more than one journey. A vehicle stopped part
-                    // way and pushed to a refuge covers ground on the abandoned route and then more
-                    // on a fresh one; the route it ends up following knows nothing about the first.
-                    // Differences of the odometers are right under interruption and under a mid-leg
-                    // redirection alike.
-                    val distanceAtLegStart = vehicle.body.distanceTravelled
-                    val zonesAtLegStart = vehicle.body.zonesEntered
                     // A leg is re-issued until the vehicle actually gets there. Under an ordinary
                     // journey this loop runs once. It runs again whenever a movement gate stopped
                     // the vehicle short and its policy dealt with whatever stopped it -- which may
@@ -981,7 +974,7 @@ open class AgvSystem @JvmOverloads constructor(
                         // check the loop would go on to collect a load that has been given to
                         // someone else -- and the model would keep running, with two vehicles
                         // believing they had it.
-                        if (assignment !== a) break
+                        if (!stillOurs(stop)) break
                         // Nothing pending means the journey ended the ordinary way: it arrived.
                         val interruption = vehicle.takeInterruption() ?: break
                         with(vehicle.interruptionPolicy) { handle(interruption) }   // SUSPENDS
@@ -993,9 +986,14 @@ open class AgvSystem @JvmOverloads constructor(
                         // A dispatcher told about the breakdown may have taken the task off this
                         // vehicle while its policy ran, and if it did, the stop we were travelling
                         // to belongs to somebody else now.
-                        if (assignment !== a) break
+                        if (!stillOurs(stop)) break
                     }
-                    if (assignment !== a) break
+                    if (!stillOurs(stop)) {
+                        // Revoked while we travelled. Its stops are no longer ours to make, so pass
+                        // over this one; the others in the tour are still this vehicle's work.
+                        t.advance()
+                        continue
+                    }
                     when (val act = stop.action) {
                         is StopAction.PickUp -> {
                             act.task.blockedAtPickup = vehicle.body.cumulativeBlockedTime - blockedAtStart
@@ -1015,22 +1013,28 @@ open class AgvSystem @JvmOverloads constructor(
                             // Aboard. From here the body's moving state is derived rather than
                             // asserted: the next leg is loaded because something is on it.
                             vehicle.body.board(act.task.load)
+                            // This load's own marks, taken now. A vehicle carrying several sets
+                            // them down at different stops, and each ride is measured from the
+                            // moment *that* load went aboard.
+                            act.task.pickedUpAt = time
+                            act.task.distanceAtPickup = vehicle.body.distanceTravelled
+                            act.task.zonesAtPickup = vehicle.body.zonesEntered
                             // Dequeuing the TASK is what ends its recorded wait, and doing it here
                             // rather than at assignment is what makes the queue's time in queue the
                             // load's wait for transport.
-                            dispatcher.tookPossession(a)
+                            dispatcher.tookPossession(assignmentFor(act.task))
                             awaitingPickupHoldQ.removeAndResume(act.task.load)
                         }
                         is StopAction.SetDown -> {
                             act.task.loadedRouteLength =
-                                vehicle.body.distanceTravelled - distanceAtLegStart
+                                vehicle.body.distanceTravelled - act.task.distanceAtPickup
                             act.task.loadedZonesTraversed =
-                                vehicle.body.zonesEntered - zonesAtLegStart
+                                vehicle.body.zonesEntered - act.task.zonesAtPickup
                             // Includes any time the vehicle spent broken down with the load aboard.
                             // These are protocol intervals rather than statements about the
                             // vehicle's state, and the load was aboard throughout; `failedTime`
                             // below is what separates the two out for a study that needs it.
-                            act.task.rideTime = time - legStarted
+                            act.task.rideTime = time - act.task.pickedUpAt
                             if (act.task.unLoadingDelay != ConstantRV.ZERO) {
                                 delay(act.task.unLoadingDelay,              // SUSPENDS
                                     suspensionName = "${vehicle.name}:unloading")
@@ -1047,7 +1051,7 @@ open class AgvSystem @JvmOverloads constructor(
                             // waited for the tour would report four deliveries at the moment of the
                             // fourth, and the three loads set down earlier would each have been
                             // delivered without the fleet counting it yet.
-                            completeAssignment(a)
+                            completeAssignment(assignmentFor(act.task))
                             inTransitHoldQ.removeAndResume(act.task.load)   // the verb returns
                         }
                         StopAction.Reposition -> Unit
@@ -1055,17 +1059,32 @@ open class AgvSystem @JvmOverloads constructor(
                     t.advance()
                 }
                 release(allocation)
-                if (assignment === a) {
+                for (open in committed) if (assignments.any { it === open }) {
                     // Whatever no stop of its own discharged. An errand has no set-down, so this is
                     // where one ends. A tour abandoned part-way through is not a completion, and
                     // counting it as one would let a fleet report more deliveries than there were
                     // loads -- which is why the guard is still on holding the assignment.
-                    completeAssignment(a)
+                    completeAssignment(open)
                 }
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()
             }
+        }
+
+        /**
+         * True when the task this stop acts on is still one of this vehicle's commitments.
+         *
+         * A stop for a task taken back is not this vehicle's to make. Asking per stop rather than
+         * per tour is what lets a revocation take one task off a vehicle that is carrying others.
+         */
+        /** This vehicle's commitment to [task]. */
+        private fun assignmentFor(task: Dispatcher.Task): Assignment =
+            assignments.first { it.task === task }
+
+        private fun stillOurs(stop: TourStop): Boolean {
+            val task = stop.action.taskOrNull() ?: return true
+            return assignments.any { it.task === task }
         }
 
         /**
@@ -1084,15 +1103,29 @@ open class AgvSystem @JvmOverloads constructor(
         /** The route metadata the setdown stop reads is captured before the route is cleared; this
          *  turns one task into the stops that discharge it. A two-stop tour today, and the loop
          *  above does not know that. */
-        private fun tourFor(a: Assignment): Tour = when (val t = a.task) {
-            is Dispatcher.TransportTask -> Tour(
-                listOf(
-                    TourStop(t.origin, StopAction.PickUp(t)),
-                    TourStop(t.destination, StopAction.SetDown(t))
-                )
+        private fun stopsFor(task: Dispatcher.Task): List<TourStop> = when (task) {
+            is Dispatcher.TransportTask -> listOf(
+                TourStop(task.origin, StopAction.PickUp(task)),
+                TourStop(task.destination, StopAction.SetDown(task))
             )
-            is Dispatcher.ServiceTask -> Tour(listOf(TourStop(t.destination, StopAction.Reposition)))
-            else -> throw IllegalStateException("Unknown task type ${t::class.simpleName}")
+            is Dispatcher.ServiceTask -> listOf(TourStop(task.destination, StopAction.Reposition))
+            else -> throw IllegalStateException("Unknown task type ${task::class.simpleName}")
+        }
+
+        /**
+         * Turns everything this vehicle is committed to into one itinerary.
+         *
+         * The tasks are folded in one at a time through the dispatcher's tour policy, which is what
+         * makes the order a *decision* rather than a consequence of the order the dispatcher
+         * happened to hand them over. With one task the policy has nothing to choose and returns
+         * pickup then set-down, which is the tour a single-load transport has always had.
+         */
+        private fun tourFor(committed: List<Assignment>): Tour {
+            var stops = emptyList<TourStop>()
+            for (a in committed) {
+                stops = dispatcher.planTour(vehicle, stops, stopsFor(a.task))
+            }
+            return Tour(stops)
         }
 
     }

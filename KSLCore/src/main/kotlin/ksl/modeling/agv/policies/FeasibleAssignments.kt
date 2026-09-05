@@ -69,9 +69,16 @@ class FeasibleAssignments internal constructor(
             .filter { isFeasible(vehicle, it) }
             .map { AssignmentProposal(vehicle, it, terms = cost(vehicle, it)) }
 
-    /** True when the vehicle can reach the task's pickup along the guide path. */
+    /**
+     * True when the vehicle can reach the task's pickup **and** has room for the load.
+     *
+     * Room belongs here, with reachability, and not in a bidding rule. This class's rule is that
+     * feasibility is a *fact* and everything that is a *judgement* about desirability belongs
+     * elsewhere; a full vehicle cannot take the task in exactly the sense that an unreachable
+     * pickup cannot be reached. A capacity-one fleet is unaffected: every idle vehicle has room.
+     */
     fun isFeasible(vehicle: AgvVehicle, task: Dispatcher.Task): Boolean =
-        cost(vehicle, task).isFinite()
+        vehicle.spareCapacity > 0 && cost(vehicle, task).isFinite()
 
     /**
      * Distance from where the vehicle stands to the task's pickup, **along the guide path**, or

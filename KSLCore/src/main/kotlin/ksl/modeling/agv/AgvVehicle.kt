@@ -44,10 +44,11 @@ import ksl.utilities.random.rvariable.RVariableIfc
  * @property battery the vehicle's energy store, or null for a vehicle whose charge is not modelled.
  * A vehicle with no battery reports no charging statistics, because a row that measures something
  * the model does not have is a question its reader has to answer for themselves every time.
- * @property loadCapacity how many loads the vehicle can carry at once. One load at a time is what
- * this subsystem implements, so any other value is refused at construction; the refusal names the
- * two ways to get the effect instead -- a larger fleet, or consolidating loads into one entity
- * before the transport is requested.
+ * @property loadCapacity how many loads the vehicle can carry at once. A vehicle given more than
+ * one task in a dispatching pass plans a single tour over all of them, in an order the dispatcher's
+ * tour policy chooses. The capacity statistics are registered only when this is above one, because
+ * a row measuring something the model does not have is a question its reader has to answer for
+ * themselves every time.
  */
 open class AgvVehicle @JvmOverloads constructor(
     val system: AgvSystem,
@@ -83,17 +84,6 @@ open class AgvVehicle @JvmOverloads constructor(
         require(loadCapacity >= 1) {
             "Vehicle ($name) was given a load capacity of $loadCapacity. A vehicle must be able to " +
                     "carry at least one load."
-        }
-        // Refused at construction rather than accepted and then ignored: a capacity the subsystem
-        // cannot honour is a promise it does not keep, and a modeller who asks for three and
-        // silently gets one has no way to tell.
-        require(loadCapacity == 1) {
-            "Vehicle ($name) was given a load capacity of $loadCapacity, but this subsystem carries " +
-                    "one load at a time. Multi-load vehicles are a designed extension that is not " +
-                    "yet implemented -- a vehicle holds a single assignment and its tour is built " +
-                    "from one task -- so a capacity above one would be accepted and then ignored. " +
-                    "Use a larger fleet, or model the consolidation upstream by combining loads into " +
-                    "one entity before the transport is requested."
         }
         system.addVehicle(this)
     }
@@ -483,6 +473,14 @@ open class AgvVehicle @JvmOverloads constructor(
      */
     val isCarryingALoad: Boolean
         get() = body.isCarryingLoad
+
+    /** How many loads are aboard. */
+    val numLoadsAboard: Int
+        get() = body.numLoadsAboard
+
+    /** How many more loads this vehicle could take. */
+    val spareCapacity: Int
+        get() = loadCapacity - body.numLoadsAboard
 
     /**
      * Books a failure: counts it, starts the out-of-service clock, and draws the repair time.

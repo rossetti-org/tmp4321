@@ -29,21 +29,19 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
- *  A capacity a vehicle cannot honour is refused at construction rather than accepted and ignored.
+ *  Load capacity, and what it now means.
  *
- *  `loadCapacity` used to be a settable property that **nothing read**. A modeller could ask for
- *  three and get one, with no error, no warning, and no way to tell: the vehicle holds a single
- *  assignment and builds its tour from one task, so the number changed nothing. That is a promise
- *  the subsystem does not keep, and it is the same family of defect as a statistic that is
- *  documented and never fed -- which this suite has already met once, in `PerCarryStatisticsTest`.
+ *  `loadCapacity` began as a settable property that **nothing read**: a modeller could ask for three
+ *  and get one, with no error, no warning and no way to tell. That was refused at construction while
+ *  the seam was unfilled, on the principle that a capacity the subsystem cannot honour is a promise
+ *  it does not keep. The seam is filled, so the refusal is gone and the number does what it says.
  *
- *  The honest behaviour, while the multi-load seam is unfilled, is to say so at construction. The
- *  message names the seam and offers the two things a modeller can actually do instead, because a
- *  refusal that leaves someone stuck is only half an answer.
+ *  Capacity is a **constructor parameter** rather than a `var`, which is what its two siblings
+ *  already were: `lengthInZones` and `physicalLength` are physical properties of a vehicle, fixed
+ *  when it is built, and capacity is the third.
  *
- *  Capacity is also now a **constructor parameter** rather than a `var`, which is what its two
- *  siblings already were: `lengthInZones` and `physicalLength` are physical properties of a vehicle,
- *  fixed when it is built, and capacity is the third. It was the odd one out for no reason.
+ *  What a capacity above one actually buys is in `MultiLoadTourTest`; this class pins the property
+ *  itself and the one value that is still nonsense.
  */
 class LoadCapacityTest {
 
@@ -80,18 +78,13 @@ class LoadCapacityTest {
     }
 
     @Test
-    @DisplayName("a capacity above one is refused, and the message says what to do instead")
-    fun aCapacityAboveOneIsRefused() {
-        val m = Model("TooMany")
-        val thrown = assertFailsWith<IllegalArgumentException> { Shop(m, 3) }
-        val message = thrown.message ?: ""
-        // The number asked for, so the reader knows which vehicle and which value.
-        assertTrue("3" in message, message)
-        // That it is unimplemented rather than invalid -- the distinction a modeller needs, because
-        // one means "you asked for something wrong" and the other means "ask again later".
-        assertTrue("not yet implemented" in message, message)
-        // And a way forward, since a refusal that strands the reader is half an answer.
-        assertTrue("larger fleet" in message, message)
+    @DisplayName("a capacity above one is accepted, and the vehicle reports the room it has")
+    fun aCapacityAboveOneIsAccepted() {
+        val m = Model("Three")
+        val shop = Shop(m, 3)
+        assertEquals(3, shop.vehicle.loadCapacity)
+        assertEquals(3, shop.vehicle.spareCapacity, "an empty vehicle has all of its capacity spare")
+        assertEquals(0, shop.vehicle.numLoadsAboard)
     }
 
     @Test

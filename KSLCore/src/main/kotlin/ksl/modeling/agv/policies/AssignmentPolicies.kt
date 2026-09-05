@@ -344,6 +344,54 @@ private inline fun greedyByDistance(
 }
 
 /**
+ * Fill a vehicle that has room, rather than giving it one task and moving on.
+ *
+ * A decorator, because consolidating is orthogonal to choosing: whichever rule picks the vehicle
+ * for a task -- nearest, least used, an auction -- the question "and could that vehicle also take
+ * the next one?" is the same question. Wrapping keeps the two decisions separate and lets any inner
+ * rule be made capacity-aware without being rewritten.
+ *
+ * **It changes nothing for a fleet of capacity one**, which is the property that makes it safe to
+ * make a default later: with no spare capacity there is never a second task to add.
+ *
+ * The extra tasks are taken in board order — that is, in whatever order the task selection rule
+ * put them — and vehicles are considered by name, so the answer does not depend on the order the
+ * inner policy happened to return its proposals in (`C1`).
+ *
+ * What it does *not* do is decide the order the vehicle visits the stops in. That is the tour
+ * policy's decision and it is made later, once the vehicle knows everything it has been given.
+ */
+class ConsolidatingPolicy @JvmOverloads constructor(
+    val inner: AssignmentPolicyIfc = NearestVehiclePolicy()
+) : AssignmentPolicyIfc {
+
+    override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
+        val proposals = with(inner) { assign(context) }.toMutableList()
+        if (proposals.isEmpty()) return proposals
+        val taken = proposals.mapTo(mutableSetOf<Dispatcher.Task>()) { it.task }
+        val roomLeft = mutableMapOf<AgvVehicle, Int>()
+        for (p in proposals) {
+            roomLeft[p.vehicle] = (roomLeft[p.vehicle] ?: p.vehicle.spareCapacity) - 1
+        }
+        for (vehicle in roomLeft.keys.sortedBy { it.name }) {
+            var remaining = roomLeft[vehicle] ?: 0
+            if (remaining <= 0) continue
+            for (task in context.board.unassigned) {
+                if (remaining <= 0) break
+                if (task in taken) continue
+                if (!context.feasible.isFeasible(vehicle, task)) continue
+                proposals.add(AssignmentProposal(vehicle, task))
+                taken.add(task)
+                remaining--
+            }
+        }
+        return proposals
+    }
+
+    override fun toString(): String = "ConsolidatingPolicy(inner=$inner)"
+}
+
+/**
  * Award each task by Contract-Net auction: the dispatcher calls for proposals, the vehicles bid, the
  * best bid wins.
  *
