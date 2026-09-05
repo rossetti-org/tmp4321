@@ -90,6 +90,17 @@ class ApiKinshipTest {
         //               A breakdown procedure is a wait for a technician, a walk, a look and a
         //               push, so it must be able to consume simulated time for the same reason
         //               `assign` must.
+        //   perform  -- the stop action seam, called as `with(stop.action) { perform(visit) }`.
+        //               What a vehicle does on arriving is a dwell, a boarding, a wait for a
+        //               scheduled departure, or nothing; every one of those but the last takes
+        //               simulated time, so a seam that could not suspend could not express the
+        //               thing it exists for.
+        //   takeAboard, setDown
+        //            -- the two verbs an action is given to move a load, on StopContextIfc. They
+        //               suspend because loading and unloading take time, and they are here rather
+        //               than inside the actions because every per-load interval this subsystem
+        //               reports is recorded in them: an action written outside this library gets
+        //               the statistics by calling them, and gets none by not.
         //
         // The verbs a *modeller* writes in their own process -- `transportByAgv`, `tow`, `charge`
         // -- are top-level extensions and live in KSLProcess.kt with the rest of the process API,
@@ -119,10 +130,12 @@ class ApiKinshipTest {
                     "which simulated time passes.")
 
         assertEquals(
-            setOf("assign", "auction", "handle"), found.map { it.second }.toSet(),
+            setOf("assign", "auction", "handle", "perform", "takeAboard", "setDown"),
+            found.map { it.second }.toSet(),
             "the only permitted KSLProcessBuilder extensions in this package are the seams that " +
                     "@RestrictsSuspension forces into that form -- the assignment policy, the " +
-                    "Contract-Net auction, and the interruption policy. A new name here is a new " +
+                    "Contract-Net auction, the interruption policy, the stop action, and the two " +
+                    "load verbs an action is given. A new name here is a new " +
                     "place a suspension can hide, and should be justified before it is added to " +
                     "this list. Found: $found"
         )

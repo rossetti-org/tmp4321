@@ -79,7 +79,7 @@ class TourEditingTest {
         return shop
     }
 
-    private fun stop(where: String) = TourStop(where, StopAction.Reposition)
+    private fun stop(where: String) = TourStop(where, Reposition)
 
     @Test
     @DisplayName("A stop inserted at position zero is the one the vehicle goes to next")
@@ -131,10 +131,10 @@ class TourEditingTest {
         val two = shop.task("Two", "B", "C")
         val tour = Tour(
             listOf(
-                TourStop("A", StopAction.PickUp(one)),
-                TourStop("B", StopAction.PickUp(two)),
-                TourStop("B", StopAction.SetDown(one)),
-                TourStop("C", StopAction.SetDown(two))
+                TourStop("A", PickUp(one)),
+                TourStop("B", PickUp(two)),
+                TourStop("B", SetDown(one)),
+                TourStop("C", SetDown(two))
             )
         )
         assertEquals(2, tour.remove(one), "both of the task's stops should have gone")
@@ -152,8 +152,8 @@ class TourEditingTest {
         val one = shop.task("One", "A", "B")
         val tour = Tour(
             listOf(
-                TourStop("A", StopAction.PickUp(one)),
-                TourStop("B", StopAction.SetDown(one))
+                TourStop("A", PickUp(one)),
+                TourStop("B", SetDown(one))
             )
         )
         tour.advance()                       // the pickup has happened; the load is aboard
@@ -169,7 +169,7 @@ class TourEditingTest {
         val shop = shop()
         val one = shop.task("One", "A", "B")
         val other = shop.task("Other", "B", "C")
-        val tour = Tour(listOf(TourStop("A", StopAction.PickUp(one)), TourStop("B", StopAction.SetDown(one))))
+        val tour = Tour(listOf(TourStop("A", PickUp(one)), TourStop("B", SetDown(one))))
         assertEquals(0, tour.remove(other))
         assertEquals(2, tour.stops.size)
     }

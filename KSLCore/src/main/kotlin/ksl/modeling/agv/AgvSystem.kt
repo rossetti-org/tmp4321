@@ -10,6 +10,7 @@ import ksl.modeling.agv.policies.NearestVehiclePolicy
 import ksl.modeling.agv.internal.DispatchAudit
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.KSLProcess
+import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathSpace
@@ -993,68 +994,11 @@ open class AgvSystem @JvmOverloads constructor(
                         t.advance()
                         continue
                     }
-                    when (val act = stop.action) {
-                        is StopAction.PickUp -> {
-                            act.task.blockedAtPickup = vehicle.body.cumulativeBlockedTime - blockedAtStart
-                            // From the moment a vehicle was committed to this load, not from the
-                            // moment it began the leg. The two differ by however long the vehicle
-                            // took to disengage from what it was doing, and the passive subsystem
-                            // counts that: its clock starts when the transporter is allocated. The
-                            // row is shared, so it has to mean one thing -- and measured this way
-                            // the two paradigms agree to the digit on the same shop.
-                            act.task.approachTime = time - act.task.assignedAt
-                            act.task.failedBeforePickup = vehicle.cumulativeFailedTime - failedAtStart
-                            if (act.task.loadingDelay != ConstantRV.ZERO) {
-                                delay(act.task.loadingDelay,                // SUSPENDS
-                                    suspensionName = "${vehicle.name}:loading")
-                            }
-                            act.task.carriedBy = vehicle
-                            // Aboard. From here the body's moving state is derived rather than
-                            // asserted: the next leg is loaded because something is on it.
-                            vehicle.body.board(act.task.load)
-                            // This load's own marks, taken now. A vehicle carrying several sets
-                            // them down at different stops, and each ride is measured from the
-                            // moment *that* load went aboard.
-                            act.task.pickedUpAt = time
-                            act.task.distanceAtPickup = vehicle.body.distanceTravelled
-                            act.task.zonesAtPickup = vehicle.body.zonesEntered
-                            // Dequeuing the TASK is what ends its recorded wait, and doing it here
-                            // rather than at assignment is what makes the queue's time in queue the
-                            // load's wait for transport.
-                            dispatcher.tookPossession(assignmentFor(act.task))
-                            awaitingPickupHoldQ.removeAndResume(act.task.load)
-                        }
-                        is StopAction.SetDown -> {
-                            act.task.loadedRouteLength =
-                                vehicle.body.distanceTravelled - act.task.distanceAtPickup
-                            act.task.loadedZonesTraversed =
-                                vehicle.body.zonesEntered - act.task.zonesAtPickup
-                            // Includes any time the vehicle spent broken down with the load aboard.
-                            // These are protocol intervals rather than statements about the
-                            // vehicle's state, and the load was aboard throughout; `failedTime`
-                            // below is what separates the two out for a study that needs it.
-                            act.task.rideTime = time - act.task.pickedUpAt
-                            if (act.task.unLoadingDelay != ConstantRV.ZERO) {
-                                delay(act.task.unLoadingDelay,              // SUSPENDS
-                                    suspensionName = "${vehicle.name}:unloading")
-                            }
-                            act.task.blockedWhileLoaded =
-                                vehicle.body.cumulativeBlockedTime - blockedAtStart - act.task.blockedAtPickup
-                            act.task.failedWhileLoaded = vehicle.cumulativeFailedTime -
-                                    failedAtStart - act.task.failedBeforePickup
-                            act.task.load.currentLocation = network.requireLocation(act.task.destination)
-                            vehicle.body.alight(act.task.load)
-                            act.task.transitionTo(TaskState.COMPLETED)
-                            // Discharged by its own last stop rather than by the tour ending. With
-                            // one task those are the same instant; with several, a vehicle that
-                            // waited for the tour would report four deliveries at the moment of the
-                            // fourth, and the three loads set down earlier would each have been
-                            // delivered without the fleet counting it yet.
-                            completeAssignment(assignmentFor(act.task))
-                            inTransitHoldQ.removeAndResume(act.task.load)   // the verb returns
-                        }
-                        StopAction.Reposition -> Unit
-                    }
+                    // The action decides what arriving means. The loop knows only that the
+                    // vehicle is here, which is why a tour of stops written by somebody else runs
+                    // through exactly this code.
+                    val visit = StopVisit(stop, t, blockedAtStart, failedAtStart)
+                    with(stop.action) { perform(visit) }    // MAY SUSPEND
                     t.advance()
                 }
                 release(allocation)
@@ -1067,12 +1011,16 @@ open class AgvSystem @JvmOverloads constructor(
                 }
                 // What this round actually carried, counted from the tour rather than from the
                 // manifest, which is empty again by now.
-                vehicle.tourCompleted(t.stops.count { it.action is StopAction.PickUp })
+                vehicle.tourCompleted(t.stops.sumOf { maxOf(it.action.loadChange, 0) })
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()
             }
         }
+
+        /** This vehicle's commitment to [task]. */
+        private fun assignmentFor(task: Dispatcher.Task): Assignment =
+            assignments.first { it.task === task }
 
         /**
          * True when the task this stop acts on is still one of this vehicle's commitments.
@@ -1080,12 +1028,8 @@ open class AgvSystem @JvmOverloads constructor(
          * A stop for a task taken back is not this vehicle's to make. Asking per stop rather than
          * per tour is what lets a revocation take one task off a vehicle that is carrying others.
          */
-        /** This vehicle's commitment to [task]. */
-        private fun assignmentFor(task: Dispatcher.Task): Assignment =
-            assignments.first { it.task === task }
-
         private fun stillOurs(stop: TourStop): Boolean {
-            val task = stop.action.taskOrNull() ?: return true
+            val task = stop.action.task ?: return true
             return assignments.any { it.task === task }
         }
 
@@ -1102,15 +1046,96 @@ open class AgvSystem @JvmOverloads constructor(
             vehicle.taskCompleted()
         }
 
+        /**
+         * What an action is handed when the vehicle reaches a stop.
+         *
+         * The two verbs are here rather than on the action because they must be done in exactly one
+         * way and that way reaches into things an action written outside this library cannot see:
+         * the manifest, the dispatcher's account of the commitment, and the hold queues the loads
+         * are suspended in. An action says *that* a load goes aboard; this says what going aboard
+         * consists of.
+         *
+         * The two baselines are the vehicle's blocked and failed clocks as the round began, so that
+         * every interval reported about a load is measured from the vehicle's commitment to it
+         * rather than from the leg that happened to reach it.
+         */
+        private inner class StopVisit(
+            override val stop: TourStop,
+            override val tour: Tour,
+            private val blockedAtTourStart: Double,
+            private val failedAtTourStart: Double
+        ) : StopContextIfc {
+
+            override val vehicle: AgvVehicle
+                get() = this@VehicleAgent.vehicle
+
+            override suspend fun KSLProcessBuilder.takeAboard(task: Dispatcher.TransportTask) {
+                task.blockedAtPickup = vehicle.body.cumulativeBlockedTime - blockedAtTourStart
+                // From the moment a vehicle was committed to this load, not from the moment it
+                // began the leg. The two differ by however long the vehicle took to disengage from
+                // what it was doing, and the passive subsystem counts that: its clock starts when
+                // the transporter is allocated. The row is shared, so it has to mean one thing --
+                // and measured this way the two paradigms agree to the digit on the same shop.
+                task.approachTime = time - task.assignedAt
+                task.failedBeforePickup = vehicle.cumulativeFailedTime - failedAtTourStart
+                if (task.loadingDelay != ConstantRV.ZERO) {
+                    delay(task.loadingDelay,                // SUSPENDS
+                        suspensionName = "${vehicle.name}:loading")
+                }
+                task.carriedBy = vehicle
+                // Aboard. From here the body's moving state is derived rather than asserted: the
+                // next leg is loaded because something is on it.
+                vehicle.body.board(task.load)
+                // This load's own marks, taken now. A vehicle carrying several sets them down at
+                // different stops, and each ride is measured from the moment *that* load went
+                // aboard.
+                task.pickedUpAt = time
+                task.distanceAtPickup = vehicle.body.distanceTravelled
+                task.zonesAtPickup = vehicle.body.zonesEntered
+                // Dequeuing the TASK is what ends its recorded wait, and doing it here rather than
+                // at assignment is what makes the queue's time in queue the load's wait for
+                // transport.
+                dispatcher.tookPossession(assignmentFor(task))
+                awaitingPickupHoldQ.removeAndResume(task.load)
+            }
+
+            override suspend fun KSLProcessBuilder.setDown(task: Dispatcher.TransportTask) {
+                task.loadedRouteLength = vehicle.body.distanceTravelled - task.distanceAtPickup
+                task.loadedZonesTraversed = vehicle.body.zonesEntered - task.zonesAtPickup
+                // Includes any time the vehicle spent broken down with the load aboard. These are
+                // protocol intervals rather than statements about the vehicle's state, and the load
+                // was aboard throughout; `failedWhileLoaded` below is what separates the two out
+                // for a study that needs it.
+                task.rideTime = time - task.pickedUpAt
+                if (task.unLoadingDelay != ConstantRV.ZERO) {
+                    delay(task.unLoadingDelay,              // SUSPENDS
+                        suspensionName = "${vehicle.name}:unloading")
+                }
+                task.blockedWhileLoaded =
+                    vehicle.body.cumulativeBlockedTime - blockedAtTourStart - task.blockedAtPickup
+                task.failedWhileLoaded = vehicle.cumulativeFailedTime -
+                        failedAtTourStart - task.failedBeforePickup
+                task.load.currentLocation = network.requireLocation(task.destination)
+                vehicle.body.alight(task.load)
+                task.transitionTo(TaskState.COMPLETED)
+                // Discharged by its own last stop rather than by the tour ending. With one task
+                // those are the same instant; with several, a vehicle that waited for the tour
+                // would report four deliveries at the moment of the fourth, and the three loads set
+                // down earlier would each have been delivered without the fleet counting it yet.
+                completeAssignment(assignmentFor(task))
+                inTransitHoldQ.removeAndResume(task.load) // the verb returns
+            }
+        }
+
         /** The route metadata the setdown stop reads is captured before the route is cleared; this
          *  turns one task into the stops that discharge it. A two-stop tour today, and the loop
          *  above does not know that. */
         private fun stopsFor(task: Dispatcher.Task): List<TourStop> = when (task) {
             is Dispatcher.TransportTask -> listOf(
-                TourStop(task.origin, StopAction.PickUp(task)),
-                TourStop(task.destination, StopAction.SetDown(task))
+                TourStop(task.origin, PickUp(task)),
+                TourStop(task.destination, SetDown(task))
             )
-            is Dispatcher.ServiceTask -> listOf(TourStop(task.destination, StopAction.Reposition))
+            is Dispatcher.ServiceTask -> listOf(TourStop(task.destination, Reposition))
             else -> throw IllegalStateException("Unknown task type ${task::class.simpleName}")
         }
 

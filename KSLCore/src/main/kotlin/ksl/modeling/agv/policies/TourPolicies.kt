@@ -18,10 +18,8 @@
 package ksl.modeling.agv.policies
 
 import ksl.modeling.agv.AgvVehicle
-import ksl.modeling.agv.StopAction
 import ksl.modeling.agv.TourStop
 import ksl.modeling.agv.exceptions.AgvTourException
-import ksl.modeling.agv.taskOrNull
 import ksl.modeling.guidedpath.GuidedPathNetwork
 
 /**
@@ -174,8 +172,8 @@ class PickUpAllThenDeliverAllPolicy : TourPolicyIfc {
         insert: List<TourStop>
     ): List<TourStop> {
         val all = remaining + insert
-        val pickups = all.filter { it.action is StopAction.PickUp }
-        val rest = all.filter { it.action !is StopAction.PickUp }
+        val pickups = all.filter { it.action.loadChange > 0 }
+        val rest = all.filter { it.action.loadChange <= 0 }
         return pickups + rest
     }
 
@@ -187,23 +185,22 @@ internal fun isFeasible(stops: List<TourStop>, capacity: Int, aboardAlready: Int
     var aboard = aboardAlready
     val collected = mutableSetOf<Int>()
     for (s in stops) {
-        when (val a = s.action) {
-            is StopAction.PickUp -> {
-                aboard++
-                if (aboard > capacity) return false
-                collected.add(System.identityHashCode(a.task))
+        val a = s.action
+        val task = a.task
+        if (a.loadChange > 0) {
+            aboard += a.loadChange
+            if (aboard > capacity) return false
+            if (task != null) collected.add(System.identityHashCode(task))
+        } else if (a.loadChange < 0) {
+            // A set-down whose pickup is not in this sequence belongs to a load already aboard,
+            // which is legitimate: the vehicle collected it before this tour was replanned.
+            if (task != null &&
+                stops.any { it.action.task === task && it.action.loadChange > 0 } &&
+                !collected.contains(System.identityHashCode(task))
+            ) {
+                return false
             }
-            is StopAction.SetDown -> {
-                // A set-down whose pickup is not in this sequence belongs to a load already aboard,
-                // which is legitimate: the vehicle collected it before this tour was replanned.
-                if (stops.any { it.action.taskOrNull() === a.task && it.action is StopAction.PickUp } &&
-                    !collected.contains(System.identityHashCode(a.task))
-                ) {
-                    return false
-                }
-                aboard--
-            }
-            else -> Unit
+            aboard += a.loadChange
         }
     }
     return true
@@ -228,33 +225,33 @@ internal fun validateTour(
     var aboard = aboardAlready
     val collected = mutableSetOf<Int>()
     for ((i, s) in returned.withIndex()) {
-        when (val a = s.action) {
-            is StopAction.PickUp -> {
-                aboard++
-                if (aboard > capacity) {
-                    throw AgvTourException(
-                        "Tour policy ($policy) planning for vehicle ($vehicleName) put $aboard " +
-                                "loads aboard at stop $i (${s.location}), which holds $capacity. An " +
-                                "insertion can be the cheapest available and still infeasible, so a " +
-                                "policy has to check capacity as it searches rather than afterwards."
-                    )
-                }
-                collected.add(System.identityHashCode(a.task))
+        val a = s.action
+        val task = a.task
+        if (a.loadChange > 0) {
+            aboard += a.loadChange
+            if (aboard > capacity) {
+                throw AgvTourException(
+                    "Tour policy ($policy) planning for vehicle ($vehicleName) put $aboard " +
+                            "loads aboard at stop $i (${s.location}), which holds $capacity. An " +
+                            "insertion can be the cheapest available and still infeasible, so a " +
+                            "policy has to check capacity as it searches rather than afterwards."
+                )
             }
-            is StopAction.SetDown -> {
+            if (task != null) collected.add(System.identityHashCode(task))
+        } else if (a.loadChange < 0) {
+            if (task != null) {
                 val hasPickupHere = returned.any {
-                    it.action.taskOrNull() === a.task && it.action is StopAction.PickUp
+                    it.action.task === task && it.action.loadChange > 0
                 }
-                if (hasPickupHere && !collected.contains(System.identityHashCode(a.task))) {
+                if (hasPickupHere && !collected.contains(System.identityHashCode(task))) {
                     throw AgvTourException(
                         "Tour policy ($policy) planning for vehicle ($vehicleName) put the set-down " +
-                                "of task (${a.task.name}) at stop $i, before its pickup. A vehicle " +
+                                "of task (${task.name}) at stop $i, before its pickup. A vehicle " +
                                 "cannot put down what it has not collected."
                     )
                 }
-                aboard--
             }
-            else -> Unit
+            aboard += a.loadChange
         }
     }
 }

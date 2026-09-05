@@ -1,3 +1,20 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
 package ksl.modeling.agv
 
 /**
@@ -74,9 +91,9 @@ class Tour internal constructor(stops: List<TourStop>) {
      * at from the other side.
      */
     internal fun remove(task: Dispatcher.Task): Int {
-        val doomed = myStops.subList(cursor, myStops.size).filter { it.action.taskOrNull() === task }
+        val doomed = myStops.subList(cursor, myStops.size).filter { it.action.task === task }
         if (doomed.isEmpty()) return 0
-        require(doomed.size == myStops.count { it.action.taskOrNull() === task }) {
+        require(doomed.size == myStops.count { it.action.task === task }) {
             "Task (${task.name}) cannot be taken out of this tour: part of it has already been " +
                     "reached, and a stop already reached cannot be changed."
         }
@@ -87,29 +104,7 @@ class Tour internal constructor(stops: List<TourStop>) {
     override fun toString(): String = "Tour(${myStops.size} stops, $cursor completed)"
 }
 
-/** The task a stop acts on, or null for a stop that acts on nobody's behalf. */
-internal fun StopAction.taskOrNull(): Dispatcher.Task? = when (this) {
-    is StopAction.PickUp -> task
-    is StopAction.SetDown -> task
-    StopAction.Reposition -> null
-}
-
 /** One leg of a tour: somewhere to be, and something to do there. */
-class TourStop(val location: String, val action: StopAction) {
+class TourStop(val location: String, val action: StopActionIfc) {
     override fun toString(): String = "TourStop($location, $action)"
-}
-
-/** What a vehicle does when it arrives. */
-sealed class StopAction {
-
-    /** Take possession of a load. */
-    data class PickUp(val task: Dispatcher.TransportTask) : StopAction()
-
-    /** Put a load down. */
-    data class SetDown(val task: Dispatcher.TransportTask) : StopAction()
-
-    /** Be somewhere, and nothing more. */
-    data object Reposition : StopAction()
-
-    // Charge arrives with the battery seam; Repair with the failure seam.
 }
