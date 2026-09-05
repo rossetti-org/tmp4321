@@ -988,7 +988,7 @@ open class AgvSystem @JvmOverloads constructor(
                 // Everything committed at this moment, planned as one itinerary. A vehicle given
                 // several tasks in one dispatching pass makes one round rather than several.
                 val committed = assignments.toList()
-                val t = tourFor(committed).also { tour = it }
+                val t = tourFor(committed).also { it.startedAt = time; tour = it }
                 // A rider does not get off at the end of a cycle. A circular service that set
                 // everybody down each lap could never carry anybody the long way round, which is
                 // most of what a circular service is for; and a load aboard is aboard, whatever the
@@ -1000,6 +1000,29 @@ open class AgvSystem @JvmOverloads constructor(
                 val failedAtStart = vehicle.cumulativeFailedTime
                 while (!t.isComplete) {
                     val stop = t.nextStop!!
+                    // Asked BEFORE the leg, which is what makes a skip mean "do not make this
+                    // journey" rather than "drive all the way there and then refuse". The vehicle
+                    // may still pass through the place, because the route between the two remaining
+                    // stops belongs to the space layer and knows nothing about tours -- and that is
+                    // exactly express running.
+                    val instruction =
+                        with(vehicle.stopControl) { instruct(vehicle, stop, t) }   // MAY SUSPEND
+                    if (instruction is StopInstruction.Skip) {
+                        if (stop.action.task != null) {
+                            throw AgvProtocolException(
+                                "Vehicle (${vehicle.name}) was instructed to skip a stop serving " +
+                                        "task (${stop.action.task!!.name}). A control may run past " +
+                                        "a service stop; it may not skip a commitment the " +
+                                        "dispatcher made, because there is a load suspended on it " +
+                                        "that nothing else would ever set down."
+                            )
+                        }
+                        val carried = vehicle.ridersBoundFor(stop.location).size
+                        vehicle.stopSkipped(carried)
+                        stop.action.servesStop?.passedBySkipped()
+                        t.advance()
+                        continue
+                    }
                     // A leg is re-issued until the vehicle actually gets there. Under an ordinary
                     // journey this loop runs once. It runs again whenever a movement gate stopped
                     // the vehicle short and its policy dealt with whatever stopped it -- which may
@@ -1044,7 +1067,18 @@ open class AgvSystem @JvmOverloads constructor(
                     // through exactly this code.
                     val visit = StopVisit(stop, t, blockedAtStart, failedAtStart)
                     with(stop.action) { perform(visit) }    // MAY SUSPEND
+                    // Held after the action rather than before it, because a departure time is a
+                    // statement about leaving and a vehicle that has not served the stop has not
+                    // arrived in any sense that matters. An instant already past holds nothing,
+                    // which is what a service running late does.
+                    if (instruction is StopInstruction.Serve && time < instruction.departNotBefore) {
+                        delay(instruction.departNotBefore - time,        // SUSPENDS
+                            suspensionName = "${vehicle.name}:holdingFor:${stop.location}")
+                    }
                     t.advance()
+                    // A short turn ends the round here. Whatever it had left is discharged below,
+                    // exactly as a tour abandoned any other way is.
+                    if (instruction is StopInstruction.ServeAndEndTour) break
                 }
                 release(allocation)
                 for (open in committed) if (assignments.any { it === open }) {

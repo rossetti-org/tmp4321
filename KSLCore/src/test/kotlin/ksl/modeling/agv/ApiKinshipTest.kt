@@ -95,6 +95,11 @@ class ApiKinshipTest {
         //               scheduled departure, or nothing; every one of those but the last takes
         //               simulated time, so a seam that could not suspend could not express the
         //               thing it exists for.
+        //   instruct -- the stop control seam, called as
+        //               `with(vehicle.stopControl) { instruct(vehicle, stop, tour) }`. Asking a
+        //               controller whether to serve the next stop may be a radio call or a
+        //               decision epoch, so it must be able to consume simulated time; one that
+        //               answers immediately reduces to a synchronous rule and costs nothing.
         //   holdAt   -- StopContextIfc's other verb: a vehicle waiting at a stop for somebody to
         //               turn up. It suspends for the obvious reason, and it is a verb rather than a
         //               delay because the wait ends either at a deadline or at an arrival, and only
@@ -134,12 +139,15 @@ class ApiKinshipTest {
                     "which simulated time passes.")
 
         assertEquals(
-            setOf("assign", "auction", "handle", "perform", "takeAboard", "setDown", "holdAt"),
+            setOf(
+                "assign", "auction", "handle", "perform", "takeAboard", "setDown", "holdAt",
+                "instruct"
+            ),
             found.map { it.second }.toSet(),
             "the only permitted KSLProcessBuilder extensions in this package are the seams that " +
                     "@RestrictsSuspension forces into that form -- the assignment policy, the " +
-                    "Contract-Net auction, the interruption policy, the stop action, and the " +
-                    "verbs an action is given. A new name here is a new " +
+                    "Contract-Net auction, the interruption policy, the stop action, the stop " +
+                    "control, and the verbs an action is given. A new name here is a new " +
                     "place a suspension can hide, and should be justified before it is added to " +
                     "this list. Found: $found"
         )

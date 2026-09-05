@@ -1,5 +1,6 @@
 package ksl.modeling.agv
 
+import ksl.modeling.agv.policies.AlwaysServe
 import ksl.modeling.agv.policies.BidPolicyIfc
 import ksl.modeling.agv.policies.DispositionPolicyIfc
 import ksl.modeling.agv.policies.NetworkDistanceBid
@@ -145,6 +146,15 @@ open class AgvVehicle @JvmOverloads constructor(
      * rarely all one age. The default repairs where the vehicle stands and leaves a flat one flat.
      */
     var interruptionPolicy: InterruptionPolicyIfc = RepairInPlacePolicy()
+
+    /**
+     * Who decides, stop by stop, whether this vehicle serves the next place in its tour.
+     *
+     * `AlwaysServe` by default, which is what every fleet did before there was a control to ask, so
+     * setting nothing changes nothing. Replace it with `TimetableControl` for a scheduled service or
+     * `DispatcherStopControl` for one a controller can run express or turn short.
+     */
+    var stopControl: StopControlIfc = AlwaysServe()
 
     /** The live agent for this replication. Non-null only between `initialize` and the horizon, and
      *  **replaced** rather than reused each replication -- a retained agent would read the previous
@@ -546,6 +556,35 @@ open class AgvVehicle @JvmOverloads constructor(
 
     internal fun rideAlighted(ride: Stop.Ride) {
         myRides.removeAll { it === ride }
+    }
+
+    // ---- what expressing costs -----------------------------------------------------------------
+    //
+    // A skipped stop has two victims and they are different, so they are counted apart. The stop
+    // records that a vehicle went past it; these record what the *vehicle* did and to whom.
+
+    private val myNumStopsSkipped = Counter(this, "${this.name}:NumStopsSkipped")
+
+    /** How much expressing this vehicle did. Zero for a fleet whose control never says `Skip`. */
+    val numStopsSkipped: CounterCIfc
+        get() = myNumStopsSkipped
+
+    private val myNumCarriedPast = Counter(this, "${this.name}:NumCarriedPast")
+
+    /**
+     * Loads that were aboard, bound for a stop this vehicle was told past, and stayed on.
+     *
+     * Being carried past your stop is a service failure and one of the things a route study exists
+     * to measure, which is why skipping a stop with somebody aboard bound for it is permitted
+     * rather than refused. A control that will not do it can see who is aboard, through
+     * [ridersBoundFor], and decline.
+     */
+    val numCarriedPast: CounterCIfc
+        get() = myNumCarriedPast
+
+    internal fun stopSkipped(ridersBoundThere: Int) {
+        myNumStopsSkipped.increment()
+        if (ridersBoundThere > 0) myNumCarriedPast.increment(ridersBoundThere.toDouble())
     }
 
     /**

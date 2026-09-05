@@ -52,6 +52,15 @@ class Tour internal constructor(
     val stops: List<TourStop>
         get() = myStops
 
+    /**
+     * When the round began: the instant the vehicle was committed to it.
+     *
+     * Set once, by the agent that built the tour. A cycle-relative timetable is read from this, so
+     * that the same table serves every vehicle running the same line whatever time it set out.
+     */
+    var startedAt: Double = Double.NaN
+        internal set
+
     private var cursor: Int = 0
 
     /** The stop the vehicle is travelling to, or null when the tour is done. */

@@ -927,6 +927,8 @@ not.
 | `StopContextIfc` | What an action is handed: the vehicle, the stop, the tour, and the verbs `takeAboard`, `setDown`, `holdAt`. |
 | `Stop` | A permanent place where loads wait to board. Owns the second waiting line and reports it. |
 | `Line` / `LineStop` | A declared service: a fixed sequence of stops, run cycle after cycle. Shared, never consumed. |
+| `StopControlIfc` | Decides, stop by stop, whether a vehicle serves the next place. Asked **before the leg**; suspending. One per vehicle. |
+| `StopInstruction` | `Serve(departNotBefore)`, `Skip`, `ServeAndEndTour` — hold, run express, turn short. |
 | `TransitResult` | What a ride cost the load that took it. No `waitForAssignment` term: nobody decided. |
 | `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
 | `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
@@ -1088,6 +1090,46 @@ class BoardOnePerMinute(val stop: Stop) : StopActionIfc {
 | `NumPassedBySkipped` | visits a vehicle was instructed past. Kept apart from the row above because the remedies are opposite: more capacity for one, less expressing for the other |
 
 and per rider, `TransitResult.numVehiclesPassed` is how many it watched go without room.
+
+### How do I hold, run express, or turn a service short?
+
+Give the vehicle a `stopControl`. It is asked **before each leg**, which is what makes `Skip` mean
+*do not make this journey* rather than *drive all the way there and then refuse*:
+
+```kotlin
+// Hold at each stop until its scheduled departure, measured from the start of the cycle.
+bus.stopControl = TimetableControl(mapOf(stopA to 0.0, stopB to 8.0, stopC to 17.0))
+
+// Or let a controller decide, cycle by cycle.
+bus.stopControl = DispatcherStopControl()
+fleet.dispatcher.instruct(bus, StopInstruction.Skip)             // run it past the next stop
+fleet.dispatcher.instruct(bus, StopInstruction.ServeAndEndTour)  // short-turn it
+```
+
+The instruction is collected at the vehicle's next ask, not applied the instant it is left: a
+vehicle mid-leg is somewhere, and an instruction about nothing is not an instruction. Both
+directions of initiative go through one seam — the vehicle asks, and `instruct` is how a controller
+answers before being asked.
+
+> **The control decides *where* — go, skip, or stop here. The action decides *what and how long*.**
+
+An instruction that depends on how late the vehicle actually is cannot be computed before the leg.
+That is not a gap: a stop action runs on arrival and may suspend, so express that as an action.
+
+**Skipping a stop with somebody aboard bound for it is permitted, and counted.** Being carried past
+your stop is one of the things a route study exists to measure. A control that will not do it can
+see who is aboard, through `vehicle.ridersBoundFor(location)`, and decline. Skipping a stop that
+serves a *posted task* is refused outright: there is a load suspended on it that nothing else would
+ever set down.
+
+The two costs are counted apart, because their remedies are opposite:
+
+| Row | Where | Means |
+|---|---|---|
+| `NumPassedByFull` | the stop | a vehicle came and had no room — buy capacity |
+| `NumPassedBySkipped` | the stop | a vehicle was instructed past — express less |
+| `NumCarriedPast` | the vehicle | loads aboard bound for a stop it was told past |
+| `NumStopsSkipped` | the vehicle | how much expressing this vehicle did |
 
 **A transfer needs no machinery.** A rider whose process rides, then rides again, *is* a transfer
 itinerary; the connection time is the second ride's `waitForVehicle`:

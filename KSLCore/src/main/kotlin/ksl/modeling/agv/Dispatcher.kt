@@ -140,6 +140,36 @@ open class Dispatcher @JvmOverloads constructor(
     /** Set when the dispatcher is woken while it is not dormant, so the wake is not lost. */
     private var wakePending: Boolean = false
 
+    /**
+     * Instructions a controller has left for particular vehicles, consumed on the vehicle's next
+     * ask.
+     *
+     * The push half of the stop-control seam. It is a pending slot rather than a queue because a
+     * controller that has changed its mind has changed its mind: the second instruction replaces
+     * the first, and an instruction the vehicle never got round to asking for is stale by the time
+     * it would have been read.
+     */
+    private val myInstructions = mutableMapOf<AgvVehicle, StopInstruction>()
+
+    /**
+     * Tells [vehicle] what to do about the next stop it asks about.
+     *
+     * The "be told" direction of stop control: a controller that has decided this vehicle is
+     * running late leaves a `Skip` here, and the vehicle collects it when its
+     * [ksl.modeling.agv.policies.DispatcherStopControl] next asks. Nothing happens until it does,
+     * which is deliberate -- a vehicle mid-leg is somewhere, and an instruction that took effect
+     * between stops would be an instruction about nothing.
+     *
+     * Has no effect on a vehicle whose control does not consult the dispatcher.
+     */
+    fun instruct(vehicle: AgvVehicle, instruction: StopInstruction) {
+        myInstructions[vehicle] = instruction
+    }
+
+    /** Takes whatever was left for this vehicle, if anything. */
+    internal fun takeInstruction(vehicle: AgvVehicle): StopInstruction? =
+        myInstructions.remove(vehicle)
+
 
     // ---- tasks -----------------------------------------------------------------------------
     // Task types are inner classes because QObject is an inner class of ModelElement, exactly as
@@ -847,6 +877,7 @@ open class Dispatcher @JvmOverloads constructor(
         super.afterReplication()
         myAvailable.clear()
         myNewlyDeclared.clear()
+        myInstructions.clear()
         wakePending = false
         agent = null
     }
