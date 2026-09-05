@@ -294,6 +294,35 @@ open class Dispatcher @JvmOverloads constructor(
             get() = failedBeforePickup + failedWhileLoaded
     }
 
+    /**
+     * One cycle of a declared service.
+     *
+     * The third way a tour comes into existence, and the one that makes a route system a
+     * configuration rather than a special case: where a transport task becomes two stops and an
+     * errand becomes one, this becomes the line's own list of them. Nothing is suspended on it --
+     * the riders are suspended at their stops, not on the vehicle's work -- so it behaves like an
+     * errand in every respect that matters to the protocol: it may be cancelled, and it never
+     * passes through `IN_PROGRESS`.
+     *
+     * **A vehicle is assigned a line each cycle rather than owning one.** That is what keeps a
+     * fleet's allocation across its services visible as a dispatching decision, and what puts a
+     * decision point at the end of every cycle instead of committing a vehicle to a service for the
+     * whole run.
+     */
+    inner class LineTask internal constructor(
+        val line: Line
+    ) : Task("Line:${line.name}") {
+
+        override val destination: String
+            get() = line.terminus
+
+        override val pickupLocation: String
+            get() = line.origin
+
+        override val waitingEntity: ProcessModel.Entity?
+            get() = null
+    }
+
     /** Something a vehicle does for itself. Nothing is suspended on it. */
     inner class ServiceTask internal constructor(
         override val destination: String,
@@ -424,6 +453,43 @@ open class Dispatcher @JvmOverloads constructor(
     ): ServiceTask {
         system.network.requireLocation(destination)
         val task = ServiceTask(destination, kind)
+        task.priority = priority
+        myTaskQ.enqueue(task)
+        myNumTasksPosted.increment()
+        wake()
+        return task
+    }
+
+    /**
+     * Asks the fleet to run one cycle of a line.
+     *
+     * Posted onto the same board as everything else and decided by the same policy, so a fleet that
+     * runs services and also carries posted loads allocates between the two through one decision
+     * rather than two -- which is the whole reason a route system is a configuration here and not a
+     * second subsystem.
+     *
+     * **One post is one cycle.** A service that runs all day is a model that posts again when the
+     * previous cycle ends, which is a decision the modeller can make on headway, on a timetable, or
+     * on whatever else the study is about. A cycle that is never re-posted simply stops running,
+     * visibly, rather than a vehicle silently continuing to circle.
+     *
+     * Nothing is suspended on it, so it may be [cancel]led: taking a service off for the rest of an
+     * hour strands nobody aboard, because a rider whose vehicle is withdrawn is set down by the
+     * end of the tour and its own process asks again.
+     *
+     * @param line the service to run one cycle of
+     * @param priority orders this against other work posted at the same instant
+     * @return the posted task, which may be passed to [cancel]
+     */
+    @JvmOverloads
+    fun postLine(line: Line, priority: Int = 1): LineTask {
+        for (ls in line.stops) {
+            require(ls.stop.system === system) {
+                "Line (${line.name}) calls at stop (${ls.stop.name}), which belongs to a " +
+                        "different fleet than ${this.name}."
+            }
+        }
+        val task = LineTask(line)
         task.priority = priority
         myTaskQ.enqueue(task)
         myNumTasksPosted.increment()

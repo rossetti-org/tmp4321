@@ -95,6 +95,10 @@ class ApiKinshipTest {
         //               scheduled departure, or nothing; every one of those but the last takes
         //               simulated time, so a seam that could not suspend could not express the
         //               thing it exists for.
+        //   holdAt   -- StopContextIfc's other verb: a vehicle waiting at a stop for somebody to
+        //               turn up. It suspends for the obvious reason, and it is a verb rather than a
+        //               delay because the wait ends either at a deadline or at an arrival, and only
+        //               the stop can see an arrival.
         //   takeAboard, setDown
         //            -- the two verbs an action is given to move a load, on StopContextIfc. They
         //               suspend because loading and unloading take time, and they are here rather
@@ -130,12 +134,12 @@ class ApiKinshipTest {
                     "which simulated time passes.")
 
         assertEquals(
-            setOf("assign", "auction", "handle", "perform", "takeAboard", "setDown"),
+            setOf("assign", "auction", "handle", "perform", "takeAboard", "setDown", "holdAt"),
             found.map { it.second }.toSet(),
             "the only permitted KSLProcessBuilder extensions in this package are the seams that " +
                     "@RestrictsSuspension forces into that form -- the assignment policy, the " +
-                    "Contract-Net auction, the interruption policy, the stop action, and the two " +
-                    "load verbs an action is given. A new name here is a new " +
+                    "Contract-Net auction, the interruption policy, the stop action, and the " +
+                    "verbs an action is given. A new name here is a new " +
                     "place a suspension can hide, and should be justified before it is added to " +
                     "this list. Found: $found"
         )

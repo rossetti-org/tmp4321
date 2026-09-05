@@ -8,6 +8,7 @@ import ksl.modeling.agv.policies.DispatchContext
 import ksl.modeling.agv.policies.Disposition
 import ksl.modeling.agv.policies.NearestVehiclePolicy
 import ksl.modeling.agv.internal.DispatchAudit
+import ksl.modeling.agv.exceptions.AgvProtocolException
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.KSLProcess
 import ksl.modeling.entity.KSLProcessBuilder
@@ -206,6 +207,16 @@ open class AgvSystem @JvmOverloads constructor(
     // with a measurement.
 
     internal val awaitingPickupHoldQ = HoldQueue(this, "${this.name}:AwaitingPickupHoldQ")
+
+    /**
+     * Where a rider standing at a stop is suspended.
+     *
+     * Distinct from [awaitingPickupHoldQ] because the two waits are for different things and end in
+     * different ways: a posted load is woken by the vehicle the dispatcher sent for it, a rider by
+     * whichever vehicle happened to come past with room. Keeping them apart is also what lets the
+     * closing audit say which of the two a stranded load was doing.
+     */
+    internal val awaitingBoardingHoldQ = HoldQueue(this, "${this.name}:AwaitingBoardingHoldQ")
     internal val inTransitHoldQ = HoldQueue(this, "${this.name}:InTransitHoldQ")
     internal val availabilityQ = HoldQueue(this, "${this.name}:AvailabilityQ")
     internal val dispatcherIdleQ = HoldQueue(this, "${this.name}:DispatcherIdleQ")
@@ -228,6 +239,26 @@ open class AgvSystem @JvmOverloads constructor(
     /** The loads suspended aboard a vehicle. */
     internal val loadsInTransit: List<ProcessModel.Entity>
         get() = inTransitHoldQ.immutableList
+
+    /** The riders suspended at a stop, waiting for something to come by. */
+    internal val loadsAwaitingBoarding: List<ProcessModel.Entity>
+        get() = awaitingBoardingHoldQ.immutableList
+
+    private val myStops = mutableListOf<Stop>()
+
+    /**
+     * The permanent stops declared on this fleet.
+     *
+     * A registry rather than a lookup: nothing here resolves a stop by name, because a stop is
+     * named by holding the object. It exists so that the closing audit can ask every stop whether
+     * anybody is still standing at it, and so that a report can be walked.
+     */
+    val stops: List<Stop>
+        get() = myStops
+
+    internal fun register(stop: Stop) {
+        myStops.add(stop)
+    }
 
     init {
         statisticalReportingForHoldQueues(false)
@@ -254,7 +285,8 @@ open class AgvSystem @JvmOverloads constructor(
      */
     fun statisticalReportingForHoldQueues(option: Boolean) {
         val queues = listOf(
-            awaitingPickupHoldQ, inTransitHoldQ, availabilityQ, dispatcherIdleQ, outOfServiceQ
+            awaitingPickupHoldQ, awaitingBoardingHoldQ, inTransitHoldQ, availabilityQ,
+            dispatcherIdleQ, outOfServiceQ
         )
         // The space layer's three movement queues are switched through its own method rather than
         // reached into from here, so that this system does not have to know how many there are.
@@ -887,6 +919,12 @@ open class AgvSystem @JvmOverloads constructor(
                 }
                 val a = assignment
                 if (a == null) {
+                    // The dispatcher has had its pass and has nothing, so anybody still aboard is
+                    // set down where the vehicle stands. This is the only place it happens: between
+                    // one cycle of a service and the next the vehicle passes through the
+                    // availability hold above with people aboard, and setting them down there would
+                    // make a circular service put its passengers off every lap.
+                    putDownRidersNotServedBy(emptySet())
                     // Work beats disposition, structurally: we are only here because the dispatcher
                     // has already had its pass and declined.
                     if (disposed) {
@@ -951,6 +989,13 @@ open class AgvSystem @JvmOverloads constructor(
                 // several tasks in one dispatching pass makes one round rather than several.
                 val committed = assignments.toList()
                 val t = tourFor(committed).also { tour = it }
+                // A rider does not get off at the end of a cycle. A circular service that set
+                // everybody down each lap could never carry anybody the long way round, which is
+                // most of what a circular service is for; and a load aboard is aboard, whatever the
+                // vehicle's paperwork says. What it cannot do is stay on a vehicle that is no
+                // longer going where it is going, so this round's stops decide who keeps their
+                // seat.
+                putDownRidersNotServedBy(t.stops.map { it.location }.toSet())
                 val blockedAtStart = vehicle.body.cumulativeBlockedTime
                 val failedAtStart = vehicle.cumulativeFailedTime
                 while (!t.isComplete) {
@@ -1018,6 +1063,25 @@ open class AgvSystem @JvmOverloads constructor(
             }
         }
 
+        /**
+         * Sets down every rider bound for somewhere not in [served], where the vehicle stands.
+         *
+         * Not a suspension: unloading a rider whose service was withdrawn is not the unloading
+         * delay of a planned set-down, and charging one would put time on the clock for an event
+         * that did not happen.
+         */
+        private fun putDownRidersNotServedBy(served: Set<String>) {
+            for (ride in vehicle.ridersAboard.toList()) {
+                if (ride.destination in served) continue
+                val here = vehicle.currentLocationName
+                ride.rider.currentLocation = network.requireLocation(here)
+                vehicle.body.alight(ride.rider)
+                vehicle.rideAlighted(ride)
+                stops.firstOrNull { it.location == here }?.alighted()
+                inTransitHoldQ.removeAndResume(ride.rider)
+            }
+        }
+
         /** This vehicle's commitment to [task]. */
         private fun assignmentFor(task: Dispatcher.Task): Assignment =
             assignments.first { it.task === task }
@@ -1068,6 +1132,16 @@ open class AgvSystem @JvmOverloads constructor(
 
             override val vehicle: AgvVehicle
                 get() = this@VehicleAgent.vehicle
+
+            override val onwardLocations: Set<String>
+                get() = if (tour.cyclic) {
+                    // A round trip comes back, so everywhere it calls is still ahead of it -- on
+                    // this lap or the next one, which is the same vehicle either way. Only where
+                    // the vehicle is standing is behind it.
+                    tour.stops.map { it.location }.toSet() - stop.location
+                } else {
+                    tour.remainingStops.drop(1).map { it.location }.toSet()
+                }
 
             override suspend fun KSLProcessBuilder.takeAboard(task: Dispatcher.TransportTask) {
                 task.blockedAtPickup = vehicle.body.cumulativeBlockedTime - blockedAtTourStart
@@ -1125,6 +1199,42 @@ open class AgvSystem @JvmOverloads constructor(
                 completeAssignment(assignmentFor(task))
                 inTransitHoldQ.removeAndResume(task.load) // the verb returns
             }
+
+            override suspend fun KSLProcessBuilder.takeAboard(ride: Stop.Ride) {
+                if (vehicle.spareCapacity <= 0) {
+                    throw AgvProtocolException(
+                        "Vehicle (${vehicle.name}) was asked to board (${ride.rider.name}) at " +
+                                "(${ride.stop.name}) with no room: it holds " +
+                                "${vehicle.numLoadsAboard} of ${vehicle.loadCapacity}. A boarding " +
+                                "action must check spareCapacity as it takes people, because how " +
+                                "many it can take is not known until it arrives."
+                    )
+                }
+                // Out of the stop's line first, so the wait it reports ends at the instant the
+                // vehicle took the rider rather than at the end of the whole visit.
+                ride.stop.departing(ride)
+                ride.boardedAt = time
+                ride.carriedBy = vehicle
+                vehicle.body.board(ride.rider)
+                vehicle.rideBoarded(ride)
+                awaitingBoardingHoldQ.removeAndResume(ride.rider)
+            }
+
+            override suspend fun KSLProcessBuilder.setDown(ride: Stop.Ride) {
+                val here = network.requireLocation(ride.destination)
+                ride.rider.currentLocation = here
+                vehicle.body.alight(ride.rider)
+                vehicle.rideAlighted(ride)
+                ride.stop.system.stops.firstOrNull { it.location == ride.destination }
+                    ?.alighted()
+                inTransitHoldQ.removeAndResume(ride.rider)      // the verb returns
+            }
+
+            override suspend fun KSLProcessBuilder.holdAt(stop: Stop, until: Double) {
+                stop.wakeHoldingVehiclesAt(until)
+                hold(stop.vehiclesHolding,                      // SUSPENDS
+                    suspensionName = "${vehicle.name}:holdingAt:${stop.name}")
+            }
         }
 
         /** The route metadata the setdown stop reads is captured before the route is cleared; this
@@ -1136,6 +1246,9 @@ open class AgvSystem @JvmOverloads constructor(
                 TourStop(task.destination, SetDown(task))
             )
             is Dispatcher.ServiceTask -> listOf(TourStop(task.destination, Reposition))
+            // A declared service contributes its whole cycle, which is the point: the loop that
+            // walks a two-stop transport is the loop that walks a twelve-stop bus route.
+            is Dispatcher.LineTask -> task.line.cycle()
             else -> throw IllegalStateException("Unknown task type ${task::class.simpleName}")
         }
 
@@ -1152,7 +1265,11 @@ open class AgvSystem @JvmOverloads constructor(
             for (a in committed) {
                 stops = dispatcher.planTour(vehicle, stops, stopsFor(a.task))
             }
-            return Tour(stops)
+            // A round trip only where the whole round is one declared loop. A cycle with other work
+            // spliced into it is no longer a promise to come back, so a boarding action must not be
+            // told that it is.
+            val line = (committed.singleOrNull()?.task as? Dispatcher.LineTask)?.line
+            return Tour(stops, cyclic = line?.cyclic == true)
         }
 
     }

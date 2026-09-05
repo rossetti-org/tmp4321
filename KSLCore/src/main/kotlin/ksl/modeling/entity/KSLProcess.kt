@@ -39,6 +39,8 @@ import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.AgvTransportResult
 import ksl.modeling.agv.Dispatcher
+import ksl.modeling.agv.Stop
+import ksl.modeling.agv.TransitResult
 import ksl.modeling.spatial.*
 import ksl.simulation.ModelElement
 import ksl.utilities.GetValueIfc
@@ -2573,6 +2575,85 @@ interface KSLProcessBuilder {
             routeLength = task.loadedRouteLength,
             vehicleName = task.carriedBy?.name ?: "",
             numReassignments = task.numReassignments
+        )
+    }
+
+    // ---- riding a declared service -------------------------------------------------------------
+    //
+    // The third protocol, and the one that is neither of the other two. Under the passive verbs the
+    // entity holds a claim on a particular transporter and steers it. Under the active verbs it
+    // states what it needs and a dispatcher decides who comes. Here it does neither: it stands at a
+    // stop and gets on whatever comes past with room and somewhere useful to go. Nothing is posted,
+    // nothing is assigned, and the wait is a function of headway and capacity rather than of any
+    // decision -- which is why a stop reports its own waiting line rather than sharing the
+    // dispatcher's (`A11`).
+
+    /**
+     * Waits at a stop for a service going to [destination], rides it, and gets off there.
+     *
+     * The whole of an ordinary ride in one call. Use [requestRide]/[awaitRide] where the process
+     * must act between joining the line and being carried.
+     *
+     * **A vehicle takes it only if the vehicle is going where it is going**, which is read from
+     * that vehicle's remaining tour rather than from any timetable. A destination no service calls
+     * at is therefore not an error and not a hang that raises: it is a load that stands at the stop
+     * for the rest of the replication and is reported, by the stop's queue, as having done so.
+     *
+     * @param stop where to wait
+     * @param destination the location to be carried to
+     * @param suspensionName names this suspension point when a process has several
+     * @return what the ride cost
+     */
+    suspend fun rideFrom(
+        stop: Stop,
+        destination: String,
+        suspensionName: String? = null
+    ): TransitResult = awaitRide(requestRide(stop, destination), suspensionName)
+
+    /**
+     * Joins the line at a stop and returns immediately, without waiting to be carried.
+     *
+     * For a process that must do something between joining and boarding. The returned ride must be
+     * passed to [awaitRide]; abandoning it would leave a vehicle to collect a load that never
+     * suspends.
+     *
+     * @return the ride, which is also where its wait is recorded
+     */
+    suspend fun requestRide(stop: Stop, destination: String): Stop.Ride =
+        stop.join(entity, destination)
+
+    /**
+     * Waits until a ride joined by [requestRide] has been taken and completed.
+     *
+     * @param ride the ride returned by [requestRide]
+     * @param suspensionName names this suspension point when a process has several
+     * @return what the ride cost
+     */
+    suspend fun awaitRide(
+        ride: Stop.Ride,
+        suspensionName: String? = null
+    ): TransitResult {
+        require(ride.rider === entity) {
+            "Entity (${entity.name}) tried to wait on a ride belonging to entity " +
+                    "(${ride.rider.name})."
+        }
+        val system = ride.stop.system
+        val joined = ride.timeEnteredQueue
+        // Two holds, neither of which reports anything: the wait itself is recorded by the stop's
+        // own queue, and riding is not a waiting line at all.
+        hold(system.awaitingBoardingHoldQ, suspensionName = "$suspensionName:awaitingVehicle")
+        val boarded = system.time
+        hold(system.inTransitHoldQ, suspensionName = "$suspensionName:riding")
+        // The vehicle resumed us, having set currentLocation before doing so.
+        val alighted = system.time
+        return TransitResult(
+            totalTime = alighted - joined,
+            waitForVehicle = boarded - joined,
+            timeAboard = alighted - boarded,
+            origin = ride.stop.location,
+            destination = entity.currentLocation.name,
+            vehicleName = ride.carriedBy?.name ?: "",
+            numVehiclesPassed = ride.numVehiclesPassed
         )
     }
 

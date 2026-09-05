@@ -25,8 +25,9 @@ enum class TaskState {
  * Sealed rather than an enum so that adding a kind is a compile error at every exhaustive `when`
  * that must handle it. This is where the exhaustiveness argument actually bites: `Task` itself
  * cannot be sealed, because it must be a `QObject` and `QObject` is an inner class, and Kotlin
- * refuses `sealed inner`. `Task`'s hierarchy is closed at two members by construction, whereas the
- * service kinds are the thing later work extends.
+ * refuses `sealed inner`. `Task`'s hierarchy is closed by construction -- a transport, an errand
+ * and a line cycle, all created by the dispatcher -- whereas the service kinds are the thing later
+ * work extends.
  */
 sealed class ServiceKind {
 

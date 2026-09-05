@@ -54,6 +54,7 @@ internal class DispatchAudit(
         checkNoTaskIsHeldTwice()
         checkQueuedTasksAgreeWithVehicles()
         checkSuspendedLoadsHaveLiveTasks()
+        checkSuspendedRidersHaveSomewhereToBe()
         checkTaskConservation()
         checkAssignmentConservation()
     }
@@ -191,12 +192,63 @@ internal class DispatchAudit(
                 )
             }
         }
+        // Riders are checked by checkSuspendedRidersHaveSomewhereToBe, which knows about the
+        // manifest; this queue holds both kinds and a task-only reading of it would report every
+        // rider as lost.
+        val riders = system.vehicles.flatMap { v -> v.ridersAboard }.map { it.rider }.toSet()
         for (entity in system.loadsInTransit) {
-            if (entity !in aboard) {
+            if (entity !in aboard && entity !in riders) {
                 violate(
                     "load (${entity.name}) is suspended aboard a vehicle, but no task in progress " +
                             "names it: nothing will ever set it down"
                 )
+            }
+        }
+    }
+
+    /**
+     * Every rider suspended in this subsystem is suspended on something that still exists.
+     *
+     * The same statement as [checkSuspendedLoadsHaveLiveTasks] makes about posted work, and it has
+     * to be made separately because a rider has no task: it is woken by a stop's line or by a
+     * vehicle's manifest, and neither of those is anything the task checks look at. The failure it
+     * catches is the one that would otherwise be invisible -- a rider taken out of a stop's line by
+     * a boarding that then did not put it on the manifest is not slow, it is lost, and the horizon
+     * diagnostic would report it as though the run had merely been too short.
+     */
+    private fun checkSuspendedRidersHaveSomewhereToBe() {
+        val waiting = system.stops.flatMap { it.waiting }.map { it.rider }.toSet()
+        for (entity in system.loadsAwaitingBoarding) {
+            if (entity !in waiting) {
+                violate(
+                    "load (${entity.name}) is suspended waiting to board, but no stop's line " +
+                            "names it: nothing will ever take it"
+                )
+            }
+        }
+        val aboard = system.vehicles.flatMap { it.ridersAboard }.map { it.rider }.toSet()
+        val carried = system.vehicles.flatMap { v -> v.assignments.map { it.task } }
+            .filter { it.state == TaskState.IN_PROGRESS }
+            .mapNotNull { it.waitingEntity }.toSet()
+        for (entity in system.loadsInTransit) {
+            if (entity !in aboard && entity !in carried) {
+                violate(
+                    "load (${entity.name}) is suspended aboard a vehicle, but neither a task in " +
+                            "progress nor any vehicle's rider list names it: nothing will ever " +
+                            "set it down"
+                )
+            }
+        }
+        // A rider on a manifest is a rider on exactly one manifest.
+        val holders = HashMap<Any, String>()
+        for (vehicle in system.vehicles) {
+            for (ride in vehicle.ridersAboard) {
+                val already = holders.put(ride, vehicle.name)
+                if (already != null) {
+                    violate(
+                        "ride (${ride.name}) is aboard both ($already) and (${vehicle.name})"
+                    )
+                }
             }
         }
     }

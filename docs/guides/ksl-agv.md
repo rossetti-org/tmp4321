@@ -920,6 +920,14 @@ not.
 | `Dispatcher.Task` | Something a vehicle may be asked to do. A `QObject`, so the *task* carries the wait. |
 | `Dispatcher.TransportTask` | A load to collect and deliver. What `requestAgvTransport` returns. |
 | `Dispatcher.ServiceTask` | A self-directed errand, by `ServiceKind` — currently `Reposition`. Posted with `postService`; cancellable. |
+| `Dispatcher.LineTask` | One cycle of a declared service. Posted with `postLine`; cancellable. |
+| `Tour` | The itinerary that discharges what a vehicle is committed to: stops in order, plus a cursor. |
+| `TourStop` | Somewhere to be, and something to do there. Per-tour; names a location. |
+| `StopActionIfc` | What a vehicle does on arriving. Open and **suspending**: a dwell, a boarding, a wait. |
+| `StopContextIfc` | What an action is handed: the vehicle, the stop, the tour, and the verbs `takeAboard`, `setDown`, `holdAt`. |
+| `Stop` | A permanent place where loads wait to board. Owns the second waiting line and reports it. |
+| `Line` / `LineStop` | A declared service: a fixed sequence of stops, run cycle after cycle. Shared, never consumed. |
+| `TransitResult` | What a ride cost the load that took it. No `waitForAssignment` term: nobody decided. |
 | `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
 | `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
 | `Interruption` | A vehicle has stopped: `Failed` or `OutOfCharge`, with where, what it holds, and who is stuck behind it. |
@@ -1001,6 +1009,97 @@ because the vehicle gets round to everybody sooner. Which term wins is a propert
 fleet is, not a law: where the vehicle is the bottleneck the wait dominates and time in system falls,
 and where it is not there is little to consolidate and little to gain. Capacity is worth most exactly
 where the fleet is the constraint.
+
+---
+
+### How do I run a fixed route — a bus line, a milk run, a line-haul?
+
+Declare the places loads wait, string them into a line, and post a cycle of it. Nothing is posted on
+a rider's behalf and no vehicle is assigned to one: a rider stands at a stop, and whatever comes past
+with room and somewhere useful to go takes it.
+
+```kotlin
+val depot = Stop(fleet, "Depot")
+val cell1 = Stop(fleet, "Cell1")
+val cell2 = Stop(fleet, "Cell2")
+
+// A LineStop's default action is what serving a stop ordinarily means: put down everyone bound for
+// here, then take whoever is waiting for somewhere further along.
+val milkRun = Line("MilkRun", listOf(LineStop(depot), LineStop(cell1), LineStop(cell2)))
+
+// One post is one cycle. A service that runs all day is a model that posts again --
+// on a headway, on a timetable, or when the previous cycle ends.
+fleet.dispatcher.postLine(milkRun)
+```
+
+and a load rides it:
+
+```kotlin
+val part = process {
+    currentLocation = network.requireLocation("Cell1")
+    val r = rideFrom(cell1, "Cell2")      // waits at the stop, boards, is set down
+    timeToCross.value = r.totalTime
+}
+```
+
+Use `requestRide` and `awaitRide` where the process has to do something between joining the line and
+being carried, exactly as `requestAgvTransport`/`awaitAgvTransport` split the posted protocol.
+
+**A vehicle takes you only if it is going where you are going**, read from its own remaining tour
+rather than from any timetable. On a `cyclic` line every stop counts as ahead of it, because it comes
+back round; on a one-way line only the stops it has not reached yet do. A destination that no service
+reaches is therefore not an error and not a hang: the load stands at the stop and the stop reports
+that it did.
+
+**A rider keeps its seat across the cycle boundary.** That is what lets a circular service carry
+somebody the long way round. A rider is put down early only when the vehicle's next round does not
+go where the rider is going, or when the vehicle runs out of work altogether — a service withdrawn
+under you is a real outcome, and the rider's process is what decides what to do about it.
+
+**Writing your own action.** `StopActionIfc` is open and its `perform` suspends, so a stop that
+dwells, meters boarding, or asks a question and waits for the answer is an ordinary implementation:
+
+```kotlin
+class BoardOnePerMinute(val stop: Stop) : StopActionIfc {
+    override val servesStop = stop
+    override suspend fun KSLProcessBuilder.perform(context: StopContextIfc) {
+        with(context) {
+            for (ride in stop.waitingFor(onwardLocations)) {
+                if (vehicle.spareCapacity <= 0) break
+                delay(1.0)
+                takeAboard(ride)
+            }
+        }
+    }
+}
+```
+
+> **Move loads with the context's verbs, never by hand.** `takeAboard` and `setDown` are where every
+> per-load interval this subsystem reports is recorded. An action that puts something on a vehicle
+> another way will run, and will be missing from every statistic.
+
+**What a stop reports.**
+
+| Row | Answers |
+|---|---|
+| `Q:NumInQ`, `Q:TimeInQ` | how many wait here and for how long — the wait for a *service*, not for a decision |
+| `NumBoarded` / `NumAlighted` | the flow through this place |
+| `NumPassedByFull` | **is the capacity binding?** visits at which a vehicle served the stop and left somebody standing |
+| `NumPassedBySkipped` | visits a vehicle was instructed past. Kept apart from the row above because the remedies are opposite: more capacity for one, less expressing for the other |
+
+and per rider, `TransitResult.numVehiclesPassed` is how many it watched go without room.
+
+**A transfer needs no machinery.** A rider whose process rides, then rides again, *is* a transfer
+itinerary; the connection time is the second ride's `waitForVehicle`:
+
+```kotlin
+val shipment = process {
+    val toHub = rideFrom(originStop, "Hub")
+    val onward = rideFrom(hubStop, "Destination")
+    connectionTime.value = onward.waitForVehicle
+    numTransfers.value = 1.0
+}
+```
 
 ## 6. Gotchas & best practices
 
@@ -1117,16 +1216,32 @@ auction deadline of zero mean "everyone has bid" rather than "nobody had
 time to". If you find yourself wanting to consume time inside a bid, the
 thing you want is a longer deadline on the policy, not a suspending bid.
 
+### There are two waiting lines, and they must not be summed
+
+The dispatcher's `TaskQ` is the waiting line **for work**: a task sits in
+it from posting until a vehicle takes possession, so its time in queue is
+how long a load waited for a *decision* and the arrival that followed it.
+
+A `Stop`'s queue is the waiting line **for a service**. A rider standing
+at a stop is not waiting for a decision — there is no decision to wait
+for. It is waiting for the next vehicle that comes past with room, which
+is a function of headway and capacity.
+
+Both are real, both are reported, and they answer different questions.
+Adding them together produces a number that means nothing. A model that
+uses only one of the two paradigms sees only one of the two rows.
+
 ### The dispatcher's queue is the waiting line; the hold queues are not
 
-Four hold queues carry suspensions — awaiting pickup, in transit,
-availability, dispatcher idle — and all four report nothing by default.
+Five hold queues carry suspensions — awaiting pickup, awaiting boarding,
+in transit, availability, dispatcher idle — and all five report nothing by
+default.
 `statisticalReportingForHoldQueues(true)` switches them on for debugging,
 and reaches down to the [space layer's three](ksl-guidedpath.md#find-out-who-is-suspended-in-the-middle-of-a-journey)
-as well, so a model being debugged shows all seven. Turn them off again:
+as well, so a model being debugged shows all eight. Turn them off again:
 they put rows on the report that look like waiting lines, and two of them
-— riding, and the space layer's driving queue — are not. The queue to read
-is `dispatcher.taskQ`.
+— riding, and the space layer's driving queue — are not. The queues to
+read are `dispatcher.taskQ` and each `Stop`'s own.
 
 Note which of the space layer's three the vehicles use. A vehicle agent
 waits in `drivingHoldQ` for its own body, never in `ridingHoldQ`: under

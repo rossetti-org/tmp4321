@@ -516,6 +516,38 @@ open class AgvVehicle @JvmOverloads constructor(
     val spareCapacity: Int
         get() = body.spareCapacity
 
+    // ---- riders ------------------------------------------------------------------------------
+    //
+    // A vehicle carries two kinds of thing and the difference is who asked. A *task* was posted to
+    // a dispatcher, which decided that this vehicle would serve it. A *ride* was not posted to
+    // anybody: somebody stood at a stop and got on whatever came by. Both are on the same manifest,
+    // because the manifest is about what is physically aboard and the physics does not care; the
+    // list here is the part that had no task, which is what a stop action reads to decide who gets
+    // off.
+
+    private val myRides = mutableListOf<Stop.Ride>()
+
+    /** Who is aboard without a task, in the order they boarded. */
+    val ridersAboard: List<Stop.Ride>
+        get() = myRides
+
+    /**
+     * Who aboard is bound for [location].
+     *
+     * Read by an alighting action to decide who gets off, and by a stop control before deciding to
+     * run past a stop -- so that a policy which will not carry anybody past their stop can say so.
+     */
+    fun ridersBoundFor(location: String): List<Stop.Ride> =
+        myRides.filter { it.destination == location }
+
+    internal fun rideBoarded(ride: Stop.Ride) {
+        myRides.add(ride)
+    }
+
+    internal fun rideAlighted(ride: Stop.Ride) {
+        myRides.removeAll { it === ride }
+    }
+
     /**
      * Books a failure: counts it, starts the out-of-service clock, and draws the repair time.
      *
@@ -696,6 +728,7 @@ open class AgvVehicle @JvmOverloads constructor(
     )
 
     override fun initialize() {
+        myRides.clear()
         myFracTimeOnTask.value = 0.0
         chargeAdded = 0.0
         chargeClockStartedAt = time

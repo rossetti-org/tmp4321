@@ -24,7 +24,17 @@ package ksl.modeling.agv
  * has. That is the whole point: multi-load work adds stops rather than adding a code path, so the
  * loop written here is the loop that will still be running when a vehicle carries four things.
  */
-class Tour internal constructor(stops: List<TourStop>) {
+class Tour internal constructor(
+    stops: List<TourStop>,
+    /**
+     * True when this round comes back to where it began.
+     *
+     * Read by a boarding action, which may take somebody bound for a stop this round has already
+     * been past: on a loop the vehicle will reach it again, and a rider keeps its seat across the
+     * cycle boundary for exactly that reason.
+     */
+    val cyclic: Boolean = false
+) {
 
     init {
         require(stops.isNotEmpty()) { "A tour must have at least one stop." }
