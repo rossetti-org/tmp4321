@@ -943,6 +943,65 @@ are documented there.
 
 ---
 
+### How do I carry more than one load at a time?
+
+Give the vehicle a `loadCapacity`, and give the dispatcher a way to hand it more than one task at
+once:
+
+```kotlin
+val cart = AgvVehicle(agv, TransporterPlacement.At("Depot"), ConstantRV(60.0),
+                      name = "Cart", loadCapacity = 4)
+
+// A vehicle only carries several if it is *given* several. A batching window collects the tasks;
+// ConsolidatingPolicy is what fills a vehicle that still has room.
+val agv = AgvSystem(this, network,
+    assignmentPolicy = BatchedAssignmentPolicy(window = 5.0, inner = ConsolidatingPolicy()))
+```
+
+The **order** the vehicle visits its stops in is a separate decision, and it belongs to the
+dispatcher:
+
+```kotlin
+agv.dispatcher.tourPolicy = CheapestInsertionTourPolicy()   // the default
+// or PickUpAllThenDeliverAllPolicy() -- a literal milk run
+// or AppendTourPolicy()             -- the naive baseline, useful as a comparison
+```
+
+**Reading the results, and the one row that will mislead you.** `FracTimeTransporting` reads 1.0
+whether a vehicle is carrying one load or four: it is a fraction of *time*, not of *capacity*. A
+fleet moving one pallet at a time in a four-pallet body reports as fully utilised by that row. The
+row that answers the question people read it as answering is **`CapacityUtilization`**.
+
+| Row | Answers |
+|---|---|
+| `CapacityUtilization` | how much of the room was used, time-weighted |
+| `FracTimeAtCapacity` | **is the capacity binding?** Mean utilization cannot say: a fleet at 50% could be alternately empty and full, which wants more vehicles, or steadily half full, which wants smaller ones |
+| `NumLoadsAboard` | the mean number aboard |
+| `LoadsPerLoadedMove` | **is consolidation happening?** A capacity-four fleet averaging 1.02 has the room and is not using it |
+| `LoadsPerTour` | the same question at the round level, which is where a dispatching policy can be blamed for it |
+| `FracTimeMovingEmpty` | the payoff: multi-load that does not reduce this bought nothing |
+
+These are registered **only when `loadCapacity > 1`**. A row measuring something your model does not
+have is a question its reader has to answer every time they meet it.
+
+**The attribution rule, which you have to know before you sum anything.** When several loads ride
+together and the vehicle is blocked for five units, **each load records five**. Per load that is
+right — each of them waited five. Summed across loads it is fifteen against five units of vehicle
+time.
+
+> **Per-load rows are per-load. Do not add them up to get vehicle time.**
+
+The same holds for `routeLength` and `timeAboard` in an `AgvTransportResult`. Questions about the
+*vehicle* are answered by the vehicle's own time-weighted rows, which cannot double-count because
+there is only ever one vehicle-second in a vehicle-second.
+
+**What to expect from a study, and what not to.** Carrying more than one load lengthens the *ride* —
+a load collected first waits aboard while the vehicle collects another — and shortens the *wait*,
+because the vehicle gets round to everybody sooner. Which term wins is a property of how loaded your
+fleet is, not a law: where the vehicle is the bottleneck the wait dominates and time in system falls,
+and where it is not there is little to consolidate and little to gain. Capacity is worth most exactly
+where the fleet is the constraint.
+
 ## 6. Gotchas & best practices
 
 ### Everything in the passive guide's §6 still applies

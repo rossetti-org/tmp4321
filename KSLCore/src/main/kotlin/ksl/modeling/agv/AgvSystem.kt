@@ -688,7 +688,7 @@ open class AgvSystem @JvmOverloads constructor(
                 for (v in failed) {
                     append(System.lineSeparator())
                     append("  (${v.name}) at (${v.currentLocationName})")
-                    v.currentAssignment?.let { append(", holding task (${it.task.name})") }
+                    for (a in v.assignments) append(", holding task (${a.task.name})")
                 }
             }
         }
@@ -756,12 +756,8 @@ open class AgvSystem @JvmOverloads constructor(
          * becomes a plan over several. Reading and writing through here keeps that loop unchanged
          * while the storage underneath it is already plural.
          */
-        internal var assignment: Assignment?
+        internal val assignment: Assignment?
             get() = assignments.firstOrNull()
-            set(value) {
-                assignments.clear()
-                if (value != null) assignments.add(value)
-            }
 
         /** True when this vehicle is committed to anything at all. */
         internal val hasAssignment: Boolean
@@ -805,9 +801,12 @@ open class AgvSystem @JvmOverloads constructor(
          * flight through `deliverAssignment` or leaves it to finish where it was going and then ask
          * for work. Redirecting from here as well would race with that.
          */
-        internal fun abandonAssignment() {
-            assignments.clear()
-            tour = null
+        internal fun abandonAssignment(assignment: Assignment) {
+            assignments.removeAll { it === assignment }
+            // The tour keeps its stops. `stillOurs` passes over any whose task is no longer this
+            // vehicle's, and editing a tour while it is being walked would shift the very stop the
+            // loop is pointing at. A vehicle carrying two loads that has one taken back still has
+            // the other to deliver, and its round is still its round.
         }
 
         private fun respond(message: AgentMessage) {
@@ -1066,6 +1065,9 @@ open class AgvSystem @JvmOverloads constructor(
                     // loads -- which is why the guard is still on holding the assignment.
                     completeAssignment(open)
                 }
+                // What this round actually carried, counted from the tour rather than from the
+                // manifest, which is empty again by now.
+                vehicle.tourCompleted(t.stops.count { it.action is StopAction.PickUp })
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()

@@ -69,8 +69,8 @@ internal class DispatchAudit(
      */
     private fun checkAssignmentsAgreeWithTasks() {
         for (vehicle in system.vehicles) {
-            val assignment = vehicle.currentAssignment ?: continue
-            val task = assignment.task
+            for (assignment in vehicle.assignments) {
+                val task = assignment.task
             if (task.isTerminal) {
                 violate(
                     "vehicle (${vehicle.name}) still holds an assignment on task (${task.name}), " +
@@ -98,11 +98,12 @@ internal class DispatchAudit(
                             "the dispatcher disagree about how far along the same commitment is"
                 )
             }
-            if (task.dispatcher !== dispatcher) {
-                violate(
-                    "vehicle (${vehicle.name}) holds an assignment on task (${task.name}), which " +
-                            "belongs to a different dispatcher"
-                )
+                if (task.dispatcher !== dispatcher) {
+                    violate(
+                        "vehicle (${vehicle.name}) holds an assignment on task (${task.name}), " +
+                                "which belongs to a different dispatcher"
+                    )
+                }
             }
         }
     }
@@ -111,13 +112,14 @@ internal class DispatchAudit(
     private fun checkNoTaskIsHeldTwice() {
         val holders = HashMap<Dispatcher.Task, String>()
         for (vehicle in system.vehicles) {
-            val task = vehicle.currentAssignment?.task ?: continue
-            val already = holders.put(task, vehicle.name)
-            if (already != null) {
-                violate(
-                    "task (${task.name}) is held by both ($already) and (${vehicle.name}): two " +
-                            "vehicles are on their way to collect one load"
-                )
+            for (task in vehicle.assignments.map { it.task }) {
+                val already = holders.put(task, vehicle.name)
+                if (already != null) {
+                    violate(
+                        "task (${task.name}) is held by both ($already) and (${vehicle.name}): " +
+                                "two vehicles are on their way to collect one load"
+                    )
+                }
             }
         }
     }
@@ -131,7 +133,7 @@ internal class DispatchAudit(
      * the only kind of comparison worth making.
      */
     private fun checkQueuedTasksAgreeWithVehicles() {
-        val assigned = system.vehicles.mapNotNull { it.currentAssignment?.task }.toSet()
+        val assigned = system.vehicles.flatMap { v -> v.assignments.map { it.task } }.toSet()
         for (task in dispatcher.board.tasks) {
             val hasVehicle = task in assigned
             when (task.state) {
@@ -217,7 +219,7 @@ internal class DispatchAudit(
         val cancelled = dispatcher.numTasksCancelled.value
         val queued = dispatcher.board.tasks.size
         val underway = system.vehicles.count {
-            it.currentAssignment?.state == AssignmentState.IN_PROGRESS
+            it.assignments.any { a -> a.state == AssignmentState.IN_PROGRESS }
         }
         val accountedFor = completed + cancelled + queued + underway
         if (posted != accountedFor) {
@@ -243,7 +245,7 @@ internal class DispatchAudit(
         val made = dispatcher.numAssignmentsMade.value
         val revoked = dispatcher.numAssignmentsRevoked.value
         val completed = dispatcher.numTasksCompleted.value
-        val open = system.vehicles.count { it.currentAssignment != null }
+        val open = system.vehicles.sumOf { it.assignments.size }
         val accountedFor = revoked + completed + open
         if (made != accountedFor) {
             violate(
@@ -257,7 +259,7 @@ internal class DispatchAudit(
     /** Every task the model still knows about: those in the queue, and those being carried out. */
     private fun liveTasks(): List<Dispatcher.Task> {
         val queued = dispatcher.board.tasks
-        val underway = system.vehicles.mapNotNull { it.currentAssignment?.task }
+        val underway = system.vehicles.flatMap { v -> v.assignments.map { it.task } }
         return (queued + underway).distinct()
     }
 

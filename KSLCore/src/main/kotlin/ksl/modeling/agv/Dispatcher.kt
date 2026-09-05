@@ -129,7 +129,10 @@ open class Dispatcher @JvmOverloads constructor(
      */
     fun assignmentFor(task: Task): Assignment? =
         system.vehicles.firstNotNullOfOrNull { v ->
-            v.currentAssignment?.takeIf { it.task === task }
+            // Every commitment, not the first. A vehicle that holds several has a second, and a
+            // search that stopped at the first would report a live assignment as absent -- which is
+            // how a task ends up looking abandoned while a vehicle is on its way to collect it.
+            v.assignments.firstOrNull { it.task === task }
         }
 
     internal var agent: AgvSystem.DispatcherAgent? = null
@@ -508,7 +511,7 @@ open class Dispatcher @JvmOverloads constructor(
         // without an intervening wake -- unless the vehicle is out of service, in which case
         // `declareAvailable` declines on its behalf and it declares itself when it is fit again.
         declareAvailable(assignment.vehicle)
-        assignment.vehicle.agent?.abandonAssignment()
+        assignment.vehicle.agent?.abandonAssignment(assignment)
     }
 
     /**
@@ -765,7 +768,9 @@ open class Dispatcher @JvmOverloads constructor(
         // "Nothing for you" is only meaningful to a vehicle that is waiting to hear it. One that is
         // already moving for its own reasons has nothing to be told.
         if (system.availabilityQ.contains(a)) {
-            a.assignment = null
+            // Nothing is cleared here. A vehicle waiting to hear this holds no commitments, and if
+            // it somehow did, dropping them would be exactly the wrong thing: the tasks would stay
+            // recorded as assigned with nothing coming for them.
             system.availabilityQ.removeAndResume(a)
         }
     }

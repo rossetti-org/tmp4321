@@ -103,7 +103,7 @@ class CompletionTimeBid : BidPolicyIfc {
 class DeclineWhenBusyBid(private val inner: BidPolicyIfc = NetworkDistanceBid()) : BidPolicyIfc {
 
     override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-        if (vehicle.currentAssignment != null) return null
+        if (vehicle.hasAssignment) return null
         return inner.bid(vehicle, cfp, network)
     }
 

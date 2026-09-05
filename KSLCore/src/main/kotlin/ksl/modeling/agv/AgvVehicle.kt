@@ -58,7 +58,7 @@ open class AgvVehicle @JvmOverloads constructor(
     zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
     name: String? = null,
     physicalLength: Double? = null,
-    val loadCapacity: Int = 1,
+    loadCapacity: Int = 1,
     val battery: Battery? = null,
     val failureModel: FailureModel? = null
 ) : ModelElement(system, name) {
@@ -70,8 +70,18 @@ open class AgvVehicle @JvmOverloads constructor(
      */
     internal val body: GuidedTransporter = GuidedTransporter(
         system.spaceSystem, initialPlacement, velocity, lengthInZones, zoneControlRule,
-        "${this.name}:Body", physicalLength
+        "${this.name}:Body", physicalLength, loadCapacity
     )
+
+    /**
+     * How many loads this vehicle can carry at once.
+     *
+     * On the body rather than here, because how much a vehicle holds is physical and every
+     * paradigm's vehicle has it -- the same reasoning that put the manifest there. The capacity
+     * statistics live beside it for the same reason.
+     */
+    val loadCapacity: Int
+        get() = body.loadCapacity
 
     /**
      * Required by `seize`, which always takes a queue. Nothing ever waits here: a vehicle's body is
@@ -211,6 +221,30 @@ open class AgvVehicle @JvmOverloads constructor(
         get() = myFracTimeOnTask
 
     private val myNumTasksCompleted = Counter(this, "${this.name}:NumTasksCompleted")
+
+    private val myLoadsPerTour: Response? =
+        if (loadCapacity <= 1) null else Response(this, "${this.name}:LoadsPerTour")
+
+    /**
+     * How many loads each completed round carried.
+     *
+     * The tour-level twin of the body's `LoadsPerLoadedMove`, and the two answer the same question
+     * at different scales: whether the room is being used, and whether the *dispatcher* is filling
+     * it. A fleet whose loaded moves average two but whose tours average two as well is
+     * consolidating within a round and never batching across one, which is a dispatching finding
+     * rather than a physical one.
+     *
+     * It is here rather than on the body because a tour is not physical: the guide path knows
+     * nothing about rounds, only about journeys.
+     */
+    val loadsPerTour: ResponseCIfc?
+        get() = myLoadsPerTour
+
+    /** Records what a finished round carried. Called once per tour, whatever it was for. */
+    internal fun tourCompleted(loadsCarried: Int) {
+        val r = myLoadsPerTour ?: return
+        r.value = loadsCarried.toDouble()
+    }
     val numTasksCompleted: CounterCIfc
         get() = myNumTasksCompleted
 
@@ -480,7 +514,7 @@ open class AgvVehicle @JvmOverloads constructor(
 
     /** How many more loads this vehicle could take. */
     val spareCapacity: Int
-        get() = loadCapacity - body.numLoadsAboard
+        get() = body.spareCapacity
 
     /**
      * Books a failure: counts it, starts the out-of-service clock, and draws the repair time.

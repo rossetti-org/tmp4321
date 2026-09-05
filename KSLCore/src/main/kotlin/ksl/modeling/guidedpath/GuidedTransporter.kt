@@ -30,6 +30,8 @@ import ksl.modeling.spatial.SpatialElement
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.modeling.variable.RandomVariableCIfc
 import ksl.modeling.variable.TWResponse
 import ksl.modeling.variable.TWResponseCIfc
@@ -205,7 +207,8 @@ class GuidedTransporter @JvmOverloads constructor(
     val lengthInZones: Int = 1,
     val zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
     name: String? = null,
-    val physicalLength: Double? = null
+    val physicalLength: Double? = null,
+    val loadCapacity: Int = 1
 ) : Resource(system, name, 1), ksl.modeling.spatial.VehicleMovementIfc {
 
     init {
@@ -360,6 +363,10 @@ class GuidedTransporter @JvmOverloads constructor(
             myFracTimeMoving.value = isMoving.toDouble()
             myFracTimeBlocked.value = (value == TransporterState.BLOCKED).toDouble()
             myFracTimeTransporting.value = (value == TransporterState.MOVING_LOADED).toDouble()
+            if (value == TransporterState.MOVING_LOADED) {
+                val r = myLoadsPerLoadedMove
+                if (r != null) r.value = myManifest.size.toDouble()
+            }
             myFracTimeMovingEmpty.value =
                 (value == TransporterState.MOVING_EMPTY || value == TransporterState.RETURNING_HOME).toDouble()
             system.emitTransporterState(this, value)
@@ -668,9 +675,81 @@ class GuidedTransporter @JvmOverloads constructor(
     val numLoadsAboard: Int
         get() = myManifest.size
 
+    /** How many more this transporter could take. */
+    val spareCapacity: Int
+        get() = loadCapacity - myManifest.size
+
     /** True when anything at all is aboard. */
     val isCarryingLoad: Boolean
         get() = myManifest.isNotEmpty()
+
+    /** True when it can take no more. */
+    val isAtCapacity: Boolean
+        get() = myManifest.size >= loadCapacity
+
+    // ---- what the capacity is doing --------------------------------------------------------------
+    //
+    // Registered only for a transporter that can carry more than one, on the convention this
+    // subsystem keeps throughout: a row measuring something the model does not have is a question
+    // its reader has to answer for themselves every time. They live here, with the manifest, rather
+    // than in either protocol, so that a dispatched fleet and a fixed-route service report the same
+    // numbers without either of them computing them.
+
+    private val myNumLoadsAboard: TWResponse? =
+        if (loadCapacity <= 1) null else TWResponse(this, "${this.name}:NumLoadsAboard")
+
+    /** The mean number of loads aboard, over the replication. Null for a single-load transporter. */
+    val numLoadsAboardResponse: TWResponseCIfc?
+        get() = myNumLoadsAboard
+
+    private val myCapacityUtilization: TWResponse? =
+        if (loadCapacity <= 1) null else TWResponse(this, "${this.name}:CapacityUtilization")
+
+    /**
+     * How much of the capacity was used, as a time-weighted fraction.
+     *
+     * **This is the row `FracTimeTransporting` is mistaken for.** That one reads 1.0 whether a
+     * vehicle carries one load or four: it is a fraction of *time*, not of *capacity*, and reading
+     * it as utilization on a multi-load fleet reports a vehicle moving one pallet at a time in a
+     * four-pallet body as fully utilised. This is the one that answers the question people mean.
+     */
+    val capacityUtilization: TWResponseCIfc?
+        get() = myCapacityUtilization
+
+    private val myFracTimeAtCapacity: TWResponse? =
+        if (loadCapacity <= 1) null else TWResponse(this, "${this.name}:FracTimeAtCapacity")
+
+    /**
+     * The fraction of time the transporter was full.
+     *
+     * **Mean utilization cannot answer this**, and that is why it is a separate row. A fleet at 50%
+     * mean utilization could be alternately empty and full, which wants more vehicles, or steadily
+     * half full, which wants smaller ones. The two call for opposite decisions and the mean is the
+     * same.
+     */
+    val fracTimeAtCapacity: TWResponseCIfc?
+        get() = myFracTimeAtCapacity
+
+    private val myLoadsPerLoadedMove: Response? =
+        if (loadCapacity <= 1) null else Response(this, "${this.name}:LoadsPerLoadedMove")
+
+    /**
+     * How many loads were aboard each time a loaded movement began.
+     *
+     * **Is consolidation actually happening?** A capacity-four fleet whose loaded moves average 1.02
+     * has bought nothing: it has the room and is not using it, and no time-weighted row says so as
+     * plainly. Observed when a movement begins rather than per journey, so a transporter redirected
+     * mid-move records the new movement as well -- which is right, because it is a different move.
+     */
+    val loadsPerLoadedMove: ResponseCIfc?
+        get() = myLoadsPerLoadedMove
+
+    /** Republishes what the manifest currently is. Called whenever it changes. */
+    private fun observeCapacity() {
+        myNumLoadsAboard?.value = myManifest.size.toDouble()
+        myCapacityUtilization?.value = myManifest.size.toDouble() / loadCapacity
+        myFracTimeAtCapacity?.value = isAtCapacity.toDouble()
+    }
 
     /** Takes a load aboard. Refuses one that is already aboard, which would corrupt the count. */
     internal fun board(load: ProcessModel.Entity) {
@@ -678,6 +757,10 @@ class GuidedTransporter @JvmOverloads constructor(
             "Load (${load.name}) is already aboard transporter (${this.name})."
         }
         myManifest.add(load)
+        require(myManifest.size <= loadCapacity) {
+            "Transporter (${this.name}) was given ${myManifest.size} loads but holds $loadCapacity."
+        }
+        observeCapacity()
     }
 
     /** Sets a load down. Refuses one that is not aboard. */
@@ -686,6 +769,7 @@ class GuidedTransporter @JvmOverloads constructor(
         require(removed) {
             "Load (${load.name}) is not aboard transporter (${this.name}) and cannot be set down."
         }
+        observeCapacity()
     }
 
     /**
@@ -845,6 +929,7 @@ class GuidedTransporter @JvmOverloads constructor(
         claimedZone = null
         pendingDestination = null
         myManifest.clear()
+        observeCapacity()
         awaitedZone = null
         awaitedLink = null
         reservedSpur = null
