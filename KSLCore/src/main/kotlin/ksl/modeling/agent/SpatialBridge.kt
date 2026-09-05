@@ -73,7 +73,9 @@ fun LocationIfc.toPoint2D(): Point2D? = when (this) {
  *     independent even when they share coordinates.
  *   - Each call to [ContinuousProjection.asSpatialModel] produces
  *     a *new* `ProjectionSpatialModel`. Locations created in one
- *     are not valid for another. Call once and store the result.
+ *     are not valid for another. Prefer
+ *     [ContinuousProjection.spatialModel], which is one per
+ *     projection and created on first use.
  *
  *  Deeper integration — including a `MovableResource` whose
  *  position is the projection's source of truth — is a separate

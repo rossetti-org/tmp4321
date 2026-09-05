@@ -21,7 +21,6 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 /**
@@ -88,13 +87,27 @@ abstract class VehicleMovementConformance {
         goNowhere: Boolean = false
     ): Pair<Scenario, Trace>
 
+    /**
+     *  Same place, by the substrate's own reckoning.
+     *
+     *  **Not by name**, and the difference is a Gate 4 finding rather than a detail. A guide path
+     *  has named places, so a location's name identifies it; a continuous projection has
+     *  coordinates, and a location built for "where the vehicle is now" is a fresh object with a
+     *  generated name that names nothing. Comparing names asserted a property of the first
+     *  substrate. `isLocationEqualTo` asks the spatial model whether the two are the same place,
+     *  which is what these tests always meant.
+     */
+    private fun samePlace(a: LocationIfc?, b: LocationIfc?): Boolean =
+        a != null && b != null && a.isLocationEqualTo(b)
+
     @Test
     @DisplayName("A vehicle sent somewhere gets there, and says it is not halted")
     fun itArrives() {
         val (s, t) = scenario()
-        assertEquals(
-            s.far.name, t.arrivedAt?.name,
-            "the journey ended somewhere other than where it was sent"
+        assertTrue(
+            samePlace(t.arrivedAt, s.far),
+            "the journey ended at (${t.arrivedAt?.name}) rather than where it was sent " +
+                    "(${s.far.name})"
         )
         assertFalse(s.movement.isHalted, "a vehicle that arrived is not halted")
         assertEquals(
@@ -177,8 +190,8 @@ abstract class VehicleMovementConformance {
             "the wait ended without the vehicle reporting a halt; a caller cannot tell an arrival " +
                     "from a stop, which is the whole difference between them"
         )
-        assertNotEquals(
-            s.far.name, t.haltedAt?.name,
+        assertFalse(
+            samePlace(t.haltedAt, s.far),
             "a vehicle stopped short of its destination is not at its destination"
         )
         assertTrue(
@@ -191,9 +204,10 @@ abstract class VehicleMovementConformance {
     @DisplayName("A halted vehicle resumes from where it stopped, not from where it set off")
     fun itResumesFromWhereItStopped() {
         val (s, t) = scenario(haltBeforeArrival = true)
-        assertEquals(
-            s.far.name, t.arrivedAt?.name,
-            "the vehicle was released and still did not reach its destination"
+        assertTrue(
+            samePlace(t.arrivedAt, s.far),
+            "the vehicle was released and still did not reach its destination; it is at " +
+                    "(${t.arrivedAt?.name})"
         )
         assertFalse(s.movement.isHalted, "it arrived, so it is no longer halted")
         assertTrue(
@@ -206,9 +220,9 @@ abstract class VehicleMovementConformance {
     @DisplayName("A redirection keeps the odometer continuous: ground covered stays covered")
     fun theOdometerSurvivesARedirect() {
         val (s, t) = scenario(redirect = true)
-        assertEquals(
-            s.near.name, t.arrivedAt?.name,
-            "the vehicle did not end up where it was redirected to"
+        assertTrue(
+            samePlace(t.arrivedAt, s.near),
+            "the vehicle did not end up where it was redirected to; it is at (${t.arrivedAt?.name})"
         )
         for (i in 1 until t.odometer.size) {
             assertTrue(
