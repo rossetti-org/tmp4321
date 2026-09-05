@@ -9,7 +9,8 @@ import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.RequestQ
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.MovementWait
-import ksl.modeling.guidedpath.MovePurpose
+import ksl.modeling.spatial.MovePurpose
+import ksl.modeling.spatial.VehicleMovementIfc
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.VelocitySampling
@@ -167,10 +168,7 @@ open class AgvVehicle @JvmOverloads constructor(
      * the passive subsystem's allocation rules use.
      */
     val currentLocationName: String
-        get() {
-            val front = body.frontZone ?: return body.currentLocation.name
-            return system.network.intersectionOf(front).name
-        }
+        get() = movement.positionNow.name
 
     /**
      * How fast this vehicle travels, as most recently sampled.
@@ -646,12 +644,23 @@ open class AgvVehicle @JvmOverloads constructor(
      *   works while attributing the riding time to the space layer's queue instead.
      * @return the movement queue to suspend the waiter in, or null when the body was already there
      */
+    /**
+     * How this vehicle moves, as the fleet's machinery sees it.
+     *
+     * Typed as the seam rather than as the body, and that is the point: the control loop, the tour
+     * and the dispatcher are written against what any movement substrate can do, so the same
+     * machinery can later drive a vehicle that is not on a guide path at all. It is the body today
+     * because a guide path is the only substrate that implements the seam.
+     */
+    internal val movement: VehicleMovementIfc
+        get() = body
+
     internal fun beginTravelTo(
         location: String,
         purpose: MovePurpose,
         waiter: ProcessModel.Entity
-    ): HoldQueue? = system.spaceSystem.beginJourney(
-        body, location, purpose, waiter, MovementWait.DRIVING
+    ): HoldQueue? = movement.beginTravelTo(
+        system.network.requireLocation(location), purpose, waiter
     )
 
     override fun initialize() {

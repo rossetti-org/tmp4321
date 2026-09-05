@@ -18,6 +18,7 @@
 package ksl.modeling.guidedpath
 
 import ksl.modeling.entity.ProcessModel
+import ksl.modeling.spatial.MovePurpose
 import ksl.modeling.guidedpath.rules.ReturnToHomeBaseRule
 import ksl.simulation.KSLEvent
 import ksl.simulation.Model

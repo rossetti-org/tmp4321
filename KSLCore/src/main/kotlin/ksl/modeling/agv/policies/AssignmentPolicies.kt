@@ -140,10 +140,9 @@ class DispatchContext internal constructor(
      * a policy comparing distances naturally never picks a vehicle that cannot get there.
      */
     fun distanceTo(vehicle: AgvVehicle, location: String): Double {
-        val here = network.location(vehicle.currentLocationName) ?: return Double.POSITIVE_INFINITY
         val there = network.location(location) ?: return Double.POSITIVE_INFINITY
-        if (!network.isReachable(here, there)) return Double.POSITIVE_INFINITY
-        return network.distance(here, there)
+        if (!vehicle.movement.isReachable(there)) return Double.POSITIVE_INFINITY
+        return vehicle.movement.pathDistanceTo(there)
     }
 }
 
@@ -644,18 +643,17 @@ class ChargeReservePolicy @JvmOverloads constructor(
         }
         val network = context.network
         val task = proposal.task
-        val here = network.location(vehicle.currentLocationName) ?: return false
         val pickup = network.location(task.pickupLocation) ?: return false
         val setDown = network.location(task.destination) ?: return false
         val charger = vehicle.system.nearestCharger(task.destination)
             ?.let { network.location(it) }
             ?: return false
-        if (!network.isReachable(here, pickup) || !network.isReachable(pickup, setDown) ||
+        if (!vehicle.movement.isReachable(pickup) || !network.isReachable(pickup, setDown) ||
             !network.isReachable(setDown, charger)
         ) {
             return false
         }
-        val distance = network.distance(here, pickup) +
+        val distance = vehicle.movement.pathDistanceTo(pickup) +
                 network.distance(pickup, setDown) +
                 network.distance(setDown, charger)
         val velocity = vehicle.nominalVelocity

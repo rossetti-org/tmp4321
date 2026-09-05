@@ -58,10 +58,9 @@ fun interface BidPolicyIfc {
 class NetworkDistanceBid : BidPolicyIfc {
 
     override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-        val here = network.location(vehicle.currentLocationName) ?: return null
         val there = network.location(cfp.task.pickupLocation) ?: return null
-        if (!network.isReachable(here, there)) return null
-        return Bid(vehicle, network.distance(here, there), "distance to pickup")
+        if (!vehicle.movement.isReachable(there)) return null
+        return Bid(vehicle, vehicle.movement.pathDistanceTo(there), "distance to pickup")
     }
 
     override fun toString(): String = "NetworkDistanceBid"
@@ -80,14 +79,13 @@ class NetworkDistanceBid : BidPolicyIfc {
 class CompletionTimeBid : BidPolicyIfc {
 
     override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-        val here = network.location(vehicle.currentLocationName) ?: return null
         val pickup = network.location(cfp.task.pickupLocation) ?: return null
         val destination = network.location(cfp.task.destination) ?: return null
-        if (!network.isReachable(here, pickup)) return null
+        if (!vehicle.movement.isReachable(pickup)) return null
         if (!network.isReachable(pickup, destination)) return null
         val velocity = vehicle.nominalVelocity
         if (velocity <= 0.0) return null
-        val distance = network.distance(here, pickup) + network.distance(pickup, destination)
+        val distance = vehicle.movement.pathDistanceTo(pickup) + network.distance(pickup, destination)
         return Bid(vehicle, distance / velocity, "empty + loaded legs at $velocity")
     }
 

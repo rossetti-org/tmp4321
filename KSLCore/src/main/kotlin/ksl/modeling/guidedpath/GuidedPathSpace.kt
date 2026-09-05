@@ -28,6 +28,7 @@ import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
 import ksl.modeling.guidedpath.internal.ZoneInvariantChecker
 import ksl.modeling.spatial.LocationIfc
+import ksl.modeling.spatial.MovePurpose
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
 import ksl.modeling.variable.Response

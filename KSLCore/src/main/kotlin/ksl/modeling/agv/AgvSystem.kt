@@ -14,7 +14,7 @@ import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.MovementWait
-import ksl.modeling.guidedpath.MovePurpose
+import ksl.modeling.spatial.MovePurpose
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc

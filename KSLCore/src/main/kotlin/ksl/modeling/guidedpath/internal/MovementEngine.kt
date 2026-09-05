@@ -19,7 +19,7 @@ package ksl.modeling.guidedpath.internal
 
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
-import ksl.modeling.guidedpath.MovePurpose
+import ksl.modeling.spatial.MovePurpose
 import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.IntersectionZone

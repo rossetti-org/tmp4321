@@ -25,6 +25,7 @@ import ksl.modeling.guidedpath.routing.Route
 import ksl.modeling.guidedpath.rules.EndOfZoneControl
 import ksl.modeling.guidedpath.rules.ZoneControlRuleIfc
 import ksl.modeling.spatial.LocationIfc
+import ksl.modeling.spatial.MovePurpose
 import ksl.modeling.spatial.SpatialElement
 import ksl.modeling.variable.Counter
 import ksl.modeling.variable.CounterCIfc
@@ -97,27 +98,6 @@ enum class TransporterState {
 
     /** Unable to claim the next zone, and waiting for whoever holds it. */
     BLOCKED
-}
-
-/**
- * Why a transporter is making a journey.
- *
- * A caller says what a movement is *for*. It does not say what the transporter is carrying, because
- * that is not a caller's opinion: it is a fact about the manifest, and
- * [GuidedTransporter.movingStateFor] derives the loaded or empty state from it. A protocol that
- * could assert `MOVING_LOADED` could assert it wrongly, and nothing downstream -- least of all
- * `FracTimeTransporting`, which is computed from the state -- would notice.
- */
-enum class MovePurpose {
-
-    /** Going somewhere to do work: to collect, to deliver, or to run an errand. */
-    SERVICE,
-
-    /** Going to a home base or staging area, allocated to nobody. */
-    HOME,
-
-    /** Being pushed or towed by something else, rather than driving. */
-    TOW
 }
 
 /**
@@ -226,7 +206,7 @@ class GuidedTransporter @JvmOverloads constructor(
     val zoneControlRule: ZoneControlRuleIfc = EndOfZoneControl(),
     name: String? = null,
     val physicalLength: Double? = null
-) : Resource(system, name, 1) {
+) : Resource(system, name, 1), ksl.modeling.spatial.VehicleMovementIfc {
 
     init {
         if (physicalLength != null) {
@@ -609,7 +589,7 @@ class GuidedTransporter @JvmOverloads constructor(
      * as elapsed time: a fleet with long quiet periods ages differently by the two, and choosing
      * between them is the modeller's decision rather than one this class should make for them.
      */
-    val operatingTime: Double
+    override val operatingTime: Double
         get() = if (operatingSince.isNaN()) myCumulativeOperatingTime
         else myCumulativeOperatingTime + (time - operatingSince)
 
@@ -628,7 +608,7 @@ class GuidedTransporter @JvmOverloads constructor(
      * in-progress term is linear in elapsed time, which is exact -- a traversal runs at one
      * velocity from the moment it is scheduled.
      */
-    val distanceTravelled: Double
+    override val distanceTravelled: Double
         get() {
             if (traversalStartedAt.isNaN() || traversalDuration <= 0.0) return myCumulativeDistance
             val fraction = ((time - traversalStartedAt) / traversalDuration).coerceIn(0.0, 1.0)
@@ -722,6 +702,43 @@ class GuidedTransporter @JvmOverloads constructor(
             if (isCarryingLoad) TransporterState.MOVING_LOADED else TransporterState.MOVING_EMPTY
     }
 
+    // ---- the movement seam -----------------------------------------------------------------------
+
+    /**
+     * Where it is now, taken from the zone it holds rather than from [currentLocation].
+     *
+     * `currentLocation` is written at placement and at arrival, so it names where a moving
+     * transporter *set off from* for the whole of its journey. Every distance-based decision reads
+     * this instead, which is what stops a rule scoring a fleet on where it used to be.
+     */
+    override val positionNow: LocationIfc
+        get() = system.locationOf(this)
+
+    /** Distance along the guide path, which on a one-way network is not separation in space. */
+    override fun pathDistanceTo(destination: LocationIfc): Double =
+        system.network.distance(positionNow, destination)
+
+    override fun isReachable(destination: LocationIfc): Boolean =
+        system.network.isReachable(positionNow, destination)
+
+    /**
+     * Commands a journey with this transporter's own agent or driver as the waiter.
+     *
+     * The wait is always the *driving* one. A load being carried waits in whatever queue its own
+     * protocol suspends it in, and passing it here would attribute its riding time to the space
+     * layer instead -- a model that still works while every transport statistic lands in the wrong
+     * place.
+     */
+    override fun beginTravelTo(
+        destination: LocationIfc,
+        purpose: MovePurpose,
+        waiter: ProcessModel.Entity
+    ): HoldQueue? = system.beginJourney(this, destination.name, purpose, waiter, MovementWait.DRIVING)
+
+    override fun resumeHalted() {
+        system.resumeHaltedTransporter(this)
+    }
+
     // ---- halting at a zone boundary -------------------------------------------------------------
 
     private var myMovementGate: TransporterMovementGateIfc? = null
@@ -747,7 +764,7 @@ class GuidedTransporter @JvmOverloads constructor(
      * a halted transporter is waiting for whatever halted it to release it, and if nothing does, it
      * stands there for the rest of the replication.
      */
-    var isHalted: Boolean = false
+    override var isHalted: Boolean = false
         private set
 
     private var stateBeforeHalt: TransporterState = TransporterState.IDLE
