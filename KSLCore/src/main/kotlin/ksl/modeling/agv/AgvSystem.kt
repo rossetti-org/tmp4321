@@ -503,7 +503,7 @@ open class AgvSystem @JvmOverloads constructor(
     /** The three counts partition the fleet: on task, out of service, and neither. */
     internal fun refreshFleetCounts() {
         val out = myVehicles.count { it.isOutOfService }
-        val onTask = myVehicles.count { it.currentAssignment != null && !it.isOutOfService }
+        val onTask = myVehicles.count { it.hasAssignment && !it.isOutOfService }
         myNumVehiclesOnTask.value = onTask.toDouble()
         myNumVehiclesOutOfService.value = out.toDouble()
         myNumVehiclesIdle.value = (myVehicles.size - onTask - out).toDouble()
@@ -628,7 +628,7 @@ open class AgvSystem @JvmOverloads constructor(
     /** Vehicles that were part-way through a task. Reported so a run that looks like it ran out of
      *  work can be told from one that was cut off in the middle of some. */
     private fun reportAssignmentsStillOpen() {
-        val open = myVehicles.mapNotNull { v -> v.currentAssignment?.let { v to it } }
+        val open = myVehicles.flatMap { v -> v.assignments.map { v to it } }
         myNumAssignmentsStillOpen.value = open.size.toDouble()
         if (open.isEmpty()) return
         logger.warn {
@@ -733,7 +733,37 @@ open class AgvSystem @JvmOverloads constructor(
      */
     internal inner class VehicleAgent(val vehicle: AgvVehicle) : Agent("${vehicle.name}:Agent") {
 
-        internal var assignment: Assignment? = null
+        /**
+         * Everything this vehicle is committed to, in the order it was committed.
+         *
+         * A list rather than a slot because a vehicle with capacity will hold several, and because
+         * the readers that mean *any commitment at all* -- the fleet counts, the horizon
+         * diagnostic, `FracTimeOnTask` -- should say so rather than testing a slot for null. It
+         * never holds more than one today: `AgvVehicle` refuses a load capacity above one, so the
+         * plural storage is in place and unused, which is what makes this step inert.
+         *
+         * Ordered, never a set: `C1` requires that declaration order cannot change an answer, and a
+         * set would make the order of a vehicle's commitments an accident of hashing.
+         */
+        internal val assignments = mutableListOf<Assignment>()
+
+        /**
+         * The one commitment this vehicle holds, or null.
+         *
+         * The control loop is written for a single assignment and stays that way until the tour
+         * becomes a plan over several. Reading and writing through here keeps that loop unchanged
+         * while the storage underneath it is already plural.
+         */
+        internal var assignment: Assignment?
+            get() = assignments.firstOrNull()
+            set(value) {
+                assignments.clear()
+                if (value != null) assignments.add(value)
+            }
+
+        /** True when this vehicle is committed to anything at all. */
+        internal val hasAssignment: Boolean
+            get() = assignments.isNotEmpty()
 
         /** How many calls for proposals this vehicle answered, and how many it declined. Kept on the
          *  agent rather than the vehicle because they are per-replication facts about a negotiation,
@@ -774,7 +804,7 @@ open class AgvSystem @JvmOverloads constructor(
          * for work. Redirecting from here as well would race with that.
          */
         internal fun abandonAssignment() {
-            assignment = null
+            assignments.clear()
             tour = null
         }
 
@@ -1012,6 +1042,12 @@ open class AgvSystem @JvmOverloads constructor(
                             act.task.load.currentLocation = network.requireLocation(act.task.destination)
                             vehicle.body.alight(act.task.load)
                             act.task.transitionTo(TaskState.COMPLETED)
+                            // Discharged by its own last stop rather than by the tour ending. With
+                            // one task those are the same instant; with several, a vehicle that
+                            // waited for the tour would report four deliveries at the moment of the
+                            // fourth, and the three loads set down earlier would each have been
+                            // delivered without the fleet counting it yet.
+                            completeAssignment(a)
                             inTransitHoldQ.removeAndResume(act.task.load)   // the verb returns
                         }
                         StopAction.Reposition -> Unit
@@ -1020,17 +1056,29 @@ open class AgvSystem @JvmOverloads constructor(
                 }
                 release(allocation)
                 if (assignment === a) {
-                    // Finished it. A tour abandoned part-way through is not a completion, and
+                    // Whatever no stop of its own discharged. An errand has no set-down, so this is
+                    // where one ends. A tour abandoned part-way through is not a completion, and
                     // counting it as one would let a fleet report more deliveries than there were
-                    // loads.
-                    dispatcher.completed(a)
-                    assignment = null
-                    vehicle.taskCompleted()
+                    // loads -- which is why the guard is still on holding the assignment.
+                    completeAssignment(a)
                 }
                 tour = null
                 vehicle.taskEnded()
                 refreshFleetCounts()
             }
+        }
+
+        /**
+         * Ends one commitment: tells the dispatcher, drops it, and counts the delivery.
+         *
+         * Called from the stop that discharges it, or from the end of the tour for a commitment no
+         * stop discharges. Idempotent, so the two paths cannot double-count.
+         */
+        private fun completeAssignment(a: Assignment) {
+            if (a.state == AssignmentState.COMPLETED) return
+            dispatcher.completed(a)
+            assignments.removeAll { it === a }
+            vehicle.taskCompleted()
         }
 
         /** The route metadata the setdown stop reads is captured before the route is cleared; this

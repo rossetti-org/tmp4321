@@ -192,6 +192,14 @@ open class AgvVehicle @JvmOverloads constructor(
     val currentAssignment: Assignment?
         get() = agent?.assignment
 
+    /** Everything this vehicle is committed to. One at a time while capacity is one. */
+    val assignments: List<Assignment>
+        get() = agent?.assignments ?: emptyList()
+
+    /** True when the vehicle is committed to anything at all. */
+    val hasAssignment: Boolean
+        get() = agent?.assignments?.isNotEmpty() == true
+
     // ---- statistics ---------------------------------------------------------------------------
     // These delegate to the body wherever the passive subsystem already reports the same quantity,
     // so that a model built both ways can be compared row by row. The element *names* still differ
@@ -469,9 +477,14 @@ open class AgvVehicle @JvmOverloads constructor(
     val timeOutOfService: ResponseCIfc?
         get() = myTimeOutOfService
 
-    /** True when the load this vehicle was given is aboard it. */
+    /**
+     * True when anything is aboard.
+     *
+     * Read from the body's manifest rather than inferred from a task's state. The two agree while a
+     * vehicle carries at most one load, and only the manifest keeps agreeing when it carries more.
+     */
     val isCarryingALoad: Boolean
-        get() = currentAssignment?.task?.state == TaskState.IN_PROGRESS
+        get() = body.isCarryingLoad
 
     /**
      * Books a failure: counts it, starts the out-of-service clock, and draws the repair time.
