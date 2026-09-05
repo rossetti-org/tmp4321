@@ -27,7 +27,7 @@ package ksl.modeling.agv
  */
 class LineStop @JvmOverloads constructor(
     val stop: Stop,
-    val action: StopActionIfc = DoInOrder(AlightHere(stop), BoardWaiting(stop))
+    val action: TourStopActionIfc = DoInOrder(AlightHere(stop), BoardWaiting(stop))
 ) {
     override fun toString(): String = "LineStop(${stop.name}, $action)"
 }
@@ -71,7 +71,7 @@ class Line @JvmOverloads constructor(
     val terminus: String
         get() = if (cyclic) origin else stops.last().stop.location
 
-    /** Every place this line calls at. What a boarding action tests a rider's destination against. */
+    /** Every place this line calls at. What a boarding action tests a destination against. */
     val locations: Set<String>
         get() = stops.map { it.stop.location }.toSet()
 

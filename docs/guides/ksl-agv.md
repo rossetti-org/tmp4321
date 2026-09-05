@@ -923,7 +923,7 @@ not.
 | `Dispatcher.LineTask` | One cycle of a declared service. Posted with `postLine`; cancellable. |
 | `Tour` | The itinerary that discharges what a vehicle is committed to: stops in order, plus a cursor. |
 | `TourStop` | Somewhere to be, and something to do there. Per-tour; names a location. |
-| `StopActionIfc` | What a vehicle does on arriving. Open and **suspending**: a dwell, a boarding, a wait. |
+| `TourStopActionIfc` | What a vehicle does on arriving. Open and **suspending**: a dwell, a boarding, a wait. |
 | `StopContextIfc` | What an action is handed: the vehicle, the stop, the tour, and the verbs `takeAboard`, `setDown`, `holdAt`. |
 | `Stop` | A permanent place where loads wait to board. Owns the second waiting line and reports it. |
 | `Line` / `LineStop` | A declared service: a fixed sequence of stops, run cycle after cycle. Shared, never consumed. |
@@ -1058,11 +1058,11 @@ somebody the long way round. A rider is put down early only when the vehicle's n
 go where the rider is going, or when the vehicle runs out of work altogether — a service withdrawn
 under you is a real outcome, and the rider's process is what decides what to do about it.
 
-**Writing your own action.** `StopActionIfc` is open and its `perform` suspends, so a stop that
+**Writing your own action.** `TourStopActionIfc` is open and its `perform` suspends, so a stop that
 dwells, meters boarding, or asks a question and waits for the answer is an ordinary implementation:
 
 ```kotlin
-class BoardOnePerMinute(val stop: Stop) : StopActionIfc {
+class BoardOnePerMinute(val stop: Stop) : TourStopActionIfc {
     override val servesStop = stop
     override suspend fun KSLProcessBuilder.perform(context: StopContextIfc) {
         with(context) {

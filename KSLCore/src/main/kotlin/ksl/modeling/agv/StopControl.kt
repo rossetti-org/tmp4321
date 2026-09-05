@@ -65,8 +65,8 @@ sealed class StopInstruction {
  * express service does. Asked before the leg it means *do not make this leg at all*.
  *
  * The cost of asking early is that an instruction which depends on the *arrival* time cannot be
- * computed then. That is not a gap: a [StopActionIfc] runs on arrival and may suspend, so a hold
- * that depends on how late the vehicle actually was is expressed there. The division is clean:
+ * computed then. That is not a gap: a [TourStopActionIfc] runs on arrival and may suspend, so a
+ * hold that depends on how late the vehicle actually was is expressed there. The division is clean:
  *
  * > **The control decides *where* — go, skip, or stop here. The action decides *what and how
  * > long*.**

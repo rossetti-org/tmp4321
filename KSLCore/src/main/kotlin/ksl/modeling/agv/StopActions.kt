@@ -40,7 +40,7 @@ import ksl.utilities.GetValueIfc
  * wake the load. An action that moves a load without them will run, and will be missing from every
  * statistic the subsystem reports.
  */
-interface StopActionIfc {
+interface TourStopActionIfc {
 
     /**
      * The task this action acts on behalf of, or null for an action that acts on nobody's.
@@ -82,9 +82,9 @@ interface StopActionIfc {
 /**
  * What a vehicle knows, and what it can do, at the stop it has just reached.
  *
- * Handed to [StopActionIfc.perform] so that an action written outside this library can do the two
- * things that must be done in one particular way -- take a load aboard and put one down -- without
- * being given the subsystem's internals to do it with.
+ * Handed to [TourStopActionIfc.perform] so that an action written outside this library can do the
+ * two things that must be done in one particular way -- take a load aboard and put one down --
+ * without being given the subsystem's internals to do it with.
  */
 interface StopContextIfc {
 
@@ -158,7 +158,7 @@ interface StopContextIfc {
  * tour together and taken out of one together, because a vehicle routed to deliver something it
  * never collected is not a tour at all.
  */
-data class PickUp(override val task: Dispatcher.TransportTask) : StopActionIfc {
+data class PickUp(override val task: Dispatcher.TransportTask) : TourStopActionIfc {
 
     override val loadChange: Int
         get() = 1
@@ -169,7 +169,7 @@ data class PickUp(override val task: Dispatcher.TransportTask) : StopActionIfc {
 }
 
 /** Put a load down, which is what discharges the commitment to carry it. */
-data class SetDown(override val task: Dispatcher.TransportTask) : StopActionIfc {
+data class SetDown(override val task: Dispatcher.TransportTask) : TourStopActionIfc {
 
     override val loadChange: Int
         get() = -1
@@ -185,7 +185,7 @@ data class SetDown(override val task: Dispatcher.TransportTask) : StopActionIfc 
  * What an errand amounts to: the arrival *is* the work. It is not a no-op with a location attached,
  * because getting there was the point.
  */
-data object Reposition : StopActionIfc {
+data object Reposition : TourStopActionIfc {
     override suspend fun KSLProcessBuilder.perform(context: StopContextIfc) = Unit
 }
 
@@ -204,7 +204,7 @@ data object Reposition : StopActionIfc {
  * Sets down nothing when nobody is: an empty stop is served in no time at all, which is what a
  * vehicle running past an unused halt actually does.
  */
-data class AlightHere(val stop: Stop) : StopActionIfc {
+data class AlightHere(val stop: Stop) : TourStopActionIfc {
 
     override val servesStop: Stop
         get() = stop
@@ -235,7 +235,7 @@ data class AlightHere(val stop: Stop) : StopActionIfc {
 data class BoardWaiting @JvmOverloads constructor(
     val stop: Stop,
     val limit: Int = Int.MAX_VALUE
-) : StopActionIfc {
+) : TourStopActionIfc {
 
     init {
         require(limit > 0) { "A boarding limit must be > 0, but was $limit." }
@@ -264,8 +264,8 @@ data class BoardWaiting @JvmOverloads constructor(
     }
 }
 
-/** Stand here for a while. The simplest thing that could only be expressed by a seam that suspends. */
-data class Dwell(val duration: GetValueIfc) : StopActionIfc {
+/** Stand here for a while. The simplest thing only a seam that suspends could have expressed. */
+data class Dwell(val duration: GetValueIfc) : TourStopActionIfc {
 
     override suspend fun KSLProcessBuilder.perform(context: StopContextIfc) {
         delay(duration, suspensionName = "${context.vehicle.name}:dwelling")
@@ -290,7 +290,7 @@ data class HoldUntilFull @JvmOverloads constructor(
     val stop: Stop,
     val maximumWait: GetValueIfc,
     val limit: Int = Int.MAX_VALUE
-) : StopActionIfc {
+) : TourStopActionIfc {
 
     override val servesStop: Stop
         get() = stop
@@ -326,9 +326,9 @@ data class HoldUntilFull @JvmOverloads constructor(
  * rather than two, because an instruction to skip a stop applies to the whole visit and a vehicle
  * that alighted but did not board would be neither serving nor skipping.
  */
-class DoInOrder(val actions: List<StopActionIfc>) : StopActionIfc {
+class DoInOrder(val actions: List<TourStopActionIfc>) : TourStopActionIfc {
 
-    constructor(vararg actions: StopActionIfc) : this(actions.toList())
+    constructor(vararg actions: TourStopActionIfc) : this(actions.toList())
 
     init {
         require(actions.isNotEmpty()) { "DoInOrder needs at least one action." }

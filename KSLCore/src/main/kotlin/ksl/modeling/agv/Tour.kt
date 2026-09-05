@@ -124,6 +124,6 @@ class Tour internal constructor(
 }
 
 /** One leg of a tour: somewhere to be, and something to do there. */
-class TourStop(val location: String, val action: StopActionIfc) {
+class TourStop(val location: String, val action: TourStopActionIfc) {
     override fun toString(): String = "TourStop($location, $action)"
 }
