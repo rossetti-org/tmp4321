@@ -19,6 +19,7 @@ package ksl.modeling.guidedpath.internal
 
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.guidedpath.MovePurpose
 import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.IntersectionZone
@@ -61,7 +62,7 @@ internal class MovementEngine(
     fun startMove(
         transporter: GuidedTransporter,
         destination: GuidedPathNetwork.Intersection,
-        movingState: TransporterState
+        purpose: MovePurpose
     ): Boolean {
         // The outstanding claim is settled before anything is asked about where the transporter
         // stands, because a transporter part way into a zone may legitimately be standing nowhere.
@@ -75,7 +76,7 @@ internal class MovementEngine(
             // therefore always a reservation it will use, which is what stops a superseded
             // movement leaving a zone held by a transporter that never arrives.
             transporter.pendingDestination = destination
-            transporter.pendingMovingState = movingState
+            transporter.pendingPurpose = purpose
             return true
         }
         val front = transporter.frontZone
@@ -93,7 +94,7 @@ internal class MovementEngine(
         transporter.currentRoute =
             myNetwork.routeFrom(front, destination, transporter.travellingForward)
         creditOwnLengthIfReversing(transporter, front)
-        transporter.transporterState = movingState
+        transporter.transporterState = transporter.movingStateFor(purpose)
         mySystem.refreshFleetCounts()
         advance(transporter)
         return true
@@ -491,7 +492,9 @@ internal class MovementEngine(
             transporter.currentVelocity = transporter.sampleVelocity()
             transporter.currentRoute =
                 myNetwork.routeFrom(zone, redirect, transporter.travellingForward)
-            transporter.transporterState = transporter.pendingMovingState
+            // Derived when the redirection is actually applied rather than when it was issued, so
+            // the state describes what the transporter is carrying at the moment it sets off.
+            transporter.transporterState = transporter.movingStateFor(transporter.pendingPurpose)
         }
         mySystem.refreshFleetCounts()
         // The one place a transporter can be stopped without leaving the guide path in a state this

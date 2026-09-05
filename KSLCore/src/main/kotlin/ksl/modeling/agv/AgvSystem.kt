@@ -14,6 +14,7 @@ import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.MovementWait
+import ksl.modeling.guidedpath.MovePurpose
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule
 import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
@@ -490,7 +491,7 @@ open class AgvSystem @JvmOverloads constructor(
         }
         // Under way on a disposition. Turn it round.
         val pickup = assignment.task.pickupLocation
-        val travelling = agent.vehicle.beginTravelTo(pickup, TransporterState.MOVING_EMPTY, agent)
+        val travelling = agent.vehicle.beginTravelTo(pickup, MovePurpose.SERVICE, agent)
         if (travelling == null) {
             // Already standing where it is now needed. Its journey is over, so nothing will arrive
             // to resume it; without this the agent would wait in the driving queue for an arrival
@@ -869,7 +870,7 @@ open class AgvSystem @JvmOverloads constructor(
                             is Disposition.ReturnToHomeBase -> {
                                 val home = vehicle.homeBase
                                 val q = if (home == null) null else vehicle.beginTravelTo(
-                                    home, TransporterState.RETURNING_HOME, this@VehicleAgent)
+                                    home, MovePurpose.HOME, this@VehicleAgent)
                                 if (q != null) {
                                     hold(q,                                 // SUSPENDS
                                         suspensionName = "${vehicle.name}:returningHome")
@@ -877,7 +878,7 @@ open class AgvSystem @JvmOverloads constructor(
                             }
                             is Disposition.MoveTo -> {
                                 val q = vehicle.beginTravelTo(
-                                    d.locationName, TransporterState.RETURNING_HOME, this@VehicleAgent)
+                                    d.locationName, MovePurpose.HOME, this@VehicleAgent)
                                 if (q != null) {
                                     hold(q,                                 // SUSPENDS
                                         suspensionName = "${vehicle.name}:repositioning")
@@ -885,7 +886,7 @@ open class AgvSystem @JvmOverloads constructor(
                             }
                             is Disposition.GoCharge -> {
                                 val q = vehicle.beginTravelTo(
-                                    d.locationName, TransporterState.RETURNING_HOME, this@VehicleAgent)
+                                    d.locationName, MovePurpose.HOME, this@VehicleAgent)
                                 if (q != null) {
                                     hold(q,                                 // SUSPENDS
                                         suspensionName = "${vehicle.name}:goingToCharge")
@@ -941,7 +942,7 @@ open class AgvSystem @JvmOverloads constructor(
                         // way. `this@VehicleAgent` is the waiter: the AGENT sits in the space
                         // layer's movement queue, never the load.
                         val travelQ = vehicle.beginTravelTo(
-                            stop.location, movingStateFor(stop), this@VehicleAgent
+                            stop.location, MovePurpose.SERVICE, this@VehicleAgent
                         ) ?: break                                          // already there
                         hold(travelQ,                                       // SUSPENDS
                             suspensionName = "${vehicle.name}:travellingTo:${stop.location}")
@@ -981,6 +982,9 @@ open class AgvSystem @JvmOverloads constructor(
                                     suspensionName = "${vehicle.name}:loading")
                             }
                             act.task.carriedBy = vehicle
+                            // Aboard. From here the body's moving state is derived rather than
+                            // asserted: the next leg is loaded because something is on it.
+                            vehicle.body.board(act.task.load)
                             // Dequeuing the TASK is what ends its recorded wait, and doing it here
                             // rather than at assignment is what makes the queue's time in queue the
                             // load's wait for transport.
@@ -1006,6 +1010,7 @@ open class AgvSystem @JvmOverloads constructor(
                             act.task.failedWhileLoaded = vehicle.cumulativeFailedTime -
                                     failedAtStart - act.task.failedBeforePickup
                             act.task.load.currentLocation = network.requireLocation(act.task.destination)
+                            vehicle.body.alight(act.task.load)
                             act.task.transitionTo(TaskState.COMPLETED)
                             inTransitHoldQ.removeAndResume(act.task.load)   // the verb returns
                         }
@@ -1042,10 +1047,6 @@ open class AgvSystem @JvmOverloads constructor(
             else -> throw IllegalStateException("Unknown task type ${t::class.simpleName}")
         }
 
-        private fun movingStateFor(stop: TourStop): TransporterState = when (stop.action) {
-            is StopAction.SetDown -> TransporterState.MOVING_LOADED
-            else -> TransporterState.MOVING_EMPTY
-        }
     }
 
     /** The dispatcher's process. Dormant until something happens that could change a decision. */

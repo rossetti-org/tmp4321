@@ -7,6 +7,7 @@ import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.RequestQ
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
 import ksl.modeling.guidedpath.GuidedTransporter
+import ksl.modeling.guidedpath.MovePurpose
 import ksl.modeling.guidedpath.MovementWait
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.TransporterState
@@ -86,10 +87,15 @@ class BodyCommandTest {
                 }
 
                 log.add("departing at $time")
+                // Aboard before departing. A caller no longer asserts that a journey is loaded: it
+                // says the journey is for service, and the body reads its own manifest. A driver
+                // that forgot to board would report an empty move while carrying, which is exactly
+                // the class of mistake the derivation removes.
+                body.board(load)
                 // `this@Driver` is the waiter: the AGENT sits in the space layer's movement queue,
                 // and the load stays in ours.
                 val travelQ = space.beginJourney(
-                    body, SimpleAgvNetwork.EXIT_STATION, TransporterState.MOVING_LOADED, this@Driver,
+                    body, SimpleAgvNetwork.EXIT_STATION, MovePurpose.SERVICE, this@Driver,
                     MovementWait.DRIVING
                 )
                 assertTrue(travelQ != null, "the body was already at the destination; the layout changed")
@@ -97,6 +103,7 @@ class BodyCommandTest {
                 arrivedAt = time
                 log.add("arrived at $time")
 
+                body.alight(load)
                 loadHoldQ.removeAndResume(load)
                 release(allocation)
             }

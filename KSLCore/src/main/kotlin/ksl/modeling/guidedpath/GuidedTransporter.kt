@@ -100,6 +100,27 @@ enum class TransporterState {
 }
 
 /**
+ * Why a transporter is making a journey.
+ *
+ * A caller says what a movement is *for*. It does not say what the transporter is carrying, because
+ * that is not a caller's opinion: it is a fact about the manifest, and
+ * [GuidedTransporter.movingStateFor] derives the loaded or empty state from it. A protocol that
+ * could assert `MOVING_LOADED` could assert it wrongly, and nothing downstream -- least of all
+ * `FracTimeTransporting`, which is computed from the state -- would notice.
+ */
+enum class MovePurpose {
+
+    /** Going somewhere to do work: to collect, to deliver, or to run an errand. */
+    SERVICE,
+
+    /** Going to a home base or staging area, allocated to nobody. */
+    HOME,
+
+    /** Being pushed or towed by something else, rather than driving. */
+    TOW
+}
+
+/**
  * How often a transporter's velocity is drawn when its velocity is random.
  */
 enum class VelocitySampling {
@@ -394,7 +415,7 @@ class GuidedTransporter @JvmOverloads constructor(
     internal var pendingDestination: GuidedPathNetwork.Intersection? = null
 
     /** What the transporter will be doing once a pending redirection takes effect. */
-    internal var pendingMovingState: TransporterState = TransporterState.RETURNING_HOME
+    internal var pendingPurpose: MovePurpose = MovePurpose.HOME
 
     /**
      * Who is suspended until this transporter finishes its current movement, and where, or null.
@@ -643,6 +664,64 @@ class GuidedTransporter @JvmOverloads constructor(
         traversalStartedAt = Double.NaN
     }
 
+    // ---- what is aboard --------------------------------------------------------------------------
+
+    private val myManifest = mutableListOf<ProcessModel.Entity>()
+
+    /**
+     * The loads currently aboard, in the order they were taken on.
+     *
+     * This is what makes carrying a **fact** rather than a claim. The transporter's moving state is
+     * derived from it (see [movingStateFor]), so `MOVING_LOADED` cannot be asserted by a protocol
+     * that is mistaken about what it is carrying -- and `FracTimeTransporting`, which is computed
+     * from that state, cannot be wrong in a way nothing would notice.
+     *
+     * It is on the physical layer rather than in either protocol because a load aboard a vehicle is
+     * physical and because every protocol has one: the passive one carries a single entity, the
+     * active one carries whatever its tour has picked up, and a fixed-route one carries whoever
+     * boarded. One list, one derivation, one set of statistics.
+     */
+    val manifest: List<ProcessModel.Entity>
+        get() = myManifest
+
+    /** How many loads are aboard. */
+    val numLoadsAboard: Int
+        get() = myManifest.size
+
+    /** True when anything at all is aboard. */
+    val isCarryingLoad: Boolean
+        get() = myManifest.isNotEmpty()
+
+    /** Takes a load aboard. Refuses one that is already aboard, which would corrupt the count. */
+    internal fun board(load: ProcessModel.Entity) {
+        require(myManifest.none { it === load }) {
+            "Load (${load.name}) is already aboard transporter (${this.name})."
+        }
+        myManifest.add(load)
+    }
+
+    /** Sets a load down. Refuses one that is not aboard. */
+    internal fun alight(load: ProcessModel.Entity) {
+        val removed = myManifest.removeAll { it === load }
+        require(removed) {
+            "Load (${load.name}) is not aboard transporter (${this.name}) and cannot be set down."
+        }
+    }
+
+    /**
+     * The state a journey for this purpose puts the transporter in.
+     *
+     * Carrying is read from the manifest; the caller supplies only the purpose. A towed transporter
+     * is `TOWED` whatever it holds, because it is moving under somebody else's power and counting
+     * it as transporting would put a broken vehicle into a figure meant to describe working ones.
+     */
+    internal fun movingStateFor(purpose: MovePurpose): TransporterState = when (purpose) {
+        MovePurpose.TOW -> TransporterState.TOWED
+        MovePurpose.HOME -> TransporterState.RETURNING_HOME
+        MovePurpose.SERVICE ->
+            if (isCarryingLoad) TransporterState.MOVING_LOADED else TransporterState.MOVING_EMPTY
+    }
+
     // ---- halting at a zone boundary -------------------------------------------------------------
 
     private var myMovementGate: TransporterMovementGateIfc? = null
@@ -748,6 +827,7 @@ class GuidedTransporter @JvmOverloads constructor(
         currentRoute = null
         claimedZone = null
         pendingDestination = null
+        myManifest.clear()
         awaitedZone = null
         awaitedLink = null
         reservedSpur = null
@@ -838,7 +918,7 @@ class GuidedTransporter @JvmOverloads constructor(
         check(numBusy == 0) {
             "Transporter (${this.name}) is allocated and cannot be sent somewhere on its own."
         }
-        return system.startMove(this, destinationName, TransporterState.RETURNING_HOME)
+        return system.startMove(this, destinationName, MovePurpose.HOME)
     }
 
     override fun toString(): String =

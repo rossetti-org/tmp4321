@@ -701,11 +701,11 @@ open class GuidedPathSpace @JvmOverloads constructor(
     internal fun beginJourney(
         transporter: GuidedTransporter,
         destinationName: String,
-        movingState: TransporterState,
+        purpose: MovePurpose,
         waiter: ProcessModel.Entity,
         wait: MovementWait
     ): HoldQueue? {
-        if (!startMove(transporter, destinationName, movingState)) return null
+        if (!startMove(transporter, destinationName, purpose)) return null
         val queue = holdQueueFor(wait)
         transporter.journeyWait = JourneyWait(waiter, queue)
         return queue
@@ -793,14 +793,14 @@ open class GuidedPathSpace @JvmOverloads constructor(
     internal fun startMove(
         transporter: GuidedTransporter,
         destinationName: String,
-        movingState: TransporterState
+        purpose: MovePurpose
     ): Boolean {
         val destination = network.requireLocation(destinationName)
         // A transporter given somewhere new to go is no longer halted, whatever stopped it before.
         // Clearing it here rather than at each call site is what keeps the flag meaning one thing:
         // stopped at a boundary with nothing scheduled and nowhere it is going.
         transporter.clearHalt()
-        return engine.startMove(transporter, destination, movingState)
+        return engine.startMove(transporter, destination, purpose)
     }
 
     /** Keeps the fleet-level counts current. Called whenever a transporter changes what it is doing. */

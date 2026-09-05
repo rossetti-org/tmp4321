@@ -2304,7 +2304,7 @@ interface KSLProcessBuilder {
         // Fetch the entity. A transporter already standing there has nothing to do.
         val startedEmpty = pool.time
         val fetching = system.beginJourney(
-            chosen, pickupLocation, TransporterState.MOVING_EMPTY, entity, MovementWait.AWAITING_PICKUP
+            chosen, pickupLocation, MovePurpose.SERVICE, entity, MovementWait.AWAITING_PICKUP
         )
         if (fetching != null) {
             hold(fetching, suspensionName = "$suspensionName:emptyMove:${chosen.name}")
@@ -2353,8 +2353,11 @@ interface KSLProcessBuilder {
             delay(loadingDelay, loadingPriority, "$suspensionName:loading")
         }
         val startedLoaded = system.time
+        // Aboard before the journey begins, which is what makes the loaded state a fact about the
+        // manifest rather than an assertion this call makes about itself.
+        transporter.board(entity)
         val riding = system.beginJourney(
-            transporter, destination, TransporterState.MOVING_LOADED, entity, MovementWait.RIDING
+            transporter, destination, MovePurpose.SERVICE, entity, MovementWait.RIDING
         )
         // Read while the journey is under way. The route is cleared on arrival, so asking after the
         // hold returns nothing and the journey appears to have covered no ground at all.
@@ -2371,6 +2374,7 @@ interface KSLProcessBuilder {
         if (unLoadingDelay != ConstantRV.ZERO) {
             delay(unLoadingDelay, unLoadingPriority, "$suspensionName:unloading")
         }
+        transporter.alight(entity)
         val result = GuidedTransportResult(
             totalTime = system.time - request.requestedAt,
             approachTime = request.approachTime,

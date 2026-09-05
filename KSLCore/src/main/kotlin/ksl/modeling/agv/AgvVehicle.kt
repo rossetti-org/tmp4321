@@ -9,6 +9,7 @@ import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.RequestQ
 import ksl.modeling.guidedpath.GuidedTransporter
 import ksl.modeling.guidedpath.MovementWait
+import ksl.modeling.guidedpath.MovePurpose
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.VelocitySampling
@@ -601,7 +602,7 @@ open class AgvVehicle @JvmOverloads constructor(
     ): HoldQueue? {
         body.towVelocity = velocity
         val queue = system.spaceSystem.beginJourney(
-            body, location, TransporterState.TOWED, waiter, MovementWait.DRIVING
+            body, location, MovePurpose.TOW, waiter, MovementWait.DRIVING
         )
         // Already there. Nothing was started, so nothing is under tow.
         if (queue == null) body.towVelocity = null
@@ -634,10 +635,10 @@ open class AgvVehicle @JvmOverloads constructor(
      */
     internal fun beginTravelTo(
         location: String,
-        state: TransporterState,
+        purpose: MovePurpose,
         waiter: ProcessModel.Entity
     ): HoldQueue? = system.spaceSystem.beginJourney(
-        body, location, state, waiter, MovementWait.DRIVING
+        body, location, purpose, waiter, MovementWait.DRIVING
     )
 
     override fun initialize() {
