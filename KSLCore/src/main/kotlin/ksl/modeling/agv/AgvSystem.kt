@@ -531,7 +531,7 @@ open class AgvSystem @JvmOverloads constructor(
             // Already standing where it is now needed. Its journey is over, so nothing will arrive
             // to resume it; without this the agent would wait in the driving queue for an arrival
             // that has already happened.
-            spaceSystem.holdQueueFor(MovementWait.DRIVING).removeAndResume(agent)
+            agent.vehicle.body.movementQueue.removeAndResume(agent)
         }
     }
 
@@ -701,7 +701,7 @@ open class AgvSystem @JvmOverloads constructor(
                 for (v in stranded) {
                     append(System.lineSeparator())
                     append("  (${v.name}) at (${v.currentLocationName}), holding ")
-                    append("${v.body.heldZones.joinToString { it.name }}")
+                    append("${v.transporter.heldZones.joinToString { it.name }}")
                 }
             }
         }
@@ -984,7 +984,7 @@ open class AgvSystem @JvmOverloads constructor(
                 dispatcher.withdraw(vehicle)   // committed now; not assignable until the tour ends
                 vehicle.taskStarted()
                 refreshFleetCounts()
-                val allocation = seize(vehicle.body, 1, queue = vehicle.bodyQ)
+                val allocation = seize(vehicle.body.seizable, 1, queue = vehicle.bodyQ)
                 // Everything committed at this moment, planned as one itinerary. A vehicle given
                 // several tasks in one dispatching pass makes one round rather than several.
                 val committed = assignments.toList()

@@ -74,7 +74,7 @@ class RedirectDuringTraversalTest {
 
         @Suppress("UNUSED_PARAMETER")
         private fun sample(event: KSLEvent<Nothing>) {
-            val z = cart.body.frontZone?.name ?: return
+            val z = cart.transporter.frontZone?.name ?: return
             if (z != lastZone) {
                 lastZone = z
                 path.add(z)
@@ -142,6 +142,6 @@ class RedirectDuringTraversalTest {
         assertEquals(0, shop.agv.dispatcher.taskQ.size, "a task was left on the board")
         assertEquals(0, shop.agv.spaceSystem.drivingHoldQ.size,
             "a vehicle was left in the movement queue -- the symptom of a waiter list not given up")
-        assertEquals(0, shop.cart.body.numBusy, "the body was left allocated")
+        assertEquals(0, shop.cart.transporter.numBusy, "the body was left allocated")
     }
 }

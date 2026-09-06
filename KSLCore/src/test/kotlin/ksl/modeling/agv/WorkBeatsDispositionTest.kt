@@ -92,7 +92,7 @@ class WorkBeatsDispositionTest {
             // The staging point is the far home spur. `isHeld` rather than `isOccupied`: a spur's
             // single zone is the last zone of its link and is therefore reserved but never occupied.
             val spur = network.link("Link6")!!.zones.first()
-            if (spur.holder === cart.body && agv.dispatcher.taskQ.size > 0) {
+            if (spur.holder === cart.transporter && agv.dispatcher.taskQ.size > 0) {
                 atStagingWithWorkWaiting = true
             }
         }

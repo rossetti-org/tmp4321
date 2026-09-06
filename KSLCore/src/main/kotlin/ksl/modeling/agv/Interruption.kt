@@ -65,9 +65,9 @@ sealed class Interruption(
      */
     val obstructed: List<AgvVehicle>
         get() {
-            val bodies = vehicle.system.spaceSystem.transportersHeldUpBy(vehicle.body)
+            val bodies = vehicle.system.spaceSystem.transportersHeldUpBy(vehicle.transporter)
             if (bodies.isEmpty()) return emptyList()
-            return vehicle.system.vehicles.filter { v -> bodies.any { it === v.body } }
+            return vehicle.system.vehicles.filter { v -> bodies.any { it === v.transporter } }
         }
 
     /**

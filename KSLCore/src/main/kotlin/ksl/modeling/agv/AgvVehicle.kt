@@ -65,13 +65,25 @@ open class AgvVehicle @JvmOverloads constructor(
 ) : ModelElement(system, name) {
 
     /**
-     * The physical presence: zone occupancy, movement, and the utilization statistics that go with
-     * them. Composed rather than inherited, for the reason in the class comment. A modeller never
-     * names this.
+     * The physical presence on the guide path: zone occupancy, movement, and the utilization
+     * statistics that go with them. Composed rather than inherited, for the reason in the class
+     * comment. A modeller never names this.
      */
-    internal val body: GuidedTransporter = GuidedTransporter(
+    internal val transporter: GuidedTransporter = GuidedTransporter(
         system.spaceSystem, initialPlacement, velocity, lengthInZones, zoneControlRule,
         "${this.name}:Body", physicalLength, loadCapacity
+    )
+
+    /**
+     * The same thing, as the fleet's machinery sees it.
+     *
+     * Everything above the substrate -- the control loop, the tour, the manifest, the statistics --
+     * goes through this, and nothing above the substrate names a transporter. What is left naming
+     * one is what only a guide path has: zones, a tow along a route, and a movement gate at a
+     * boundary.
+     */
+    internal val body: VehicleBodyIfc = GuidedPathBody(
+        transporter, system.spaceSystem.holdQueueFor(MovementWait.DRIVING)
     )
 
     /**
@@ -110,7 +122,7 @@ open class AgvVehicle @JvmOverloads constructor(
      * feature.
      */
     val physicalLength: Double?
-        get() = body.physicalLength
+        get() = transporter.physicalLength
 
     /**
      * How often the velocity is drawn when it is random: once per movement, or once per zone.
@@ -119,9 +131,9 @@ open class AgvVehicle @JvmOverloads constructor(
      * transporter and `MovableResource`.
      */
     var velocitySampling: VelocitySampling
-        get() = body.velocitySampling
+        get() = transporter.velocitySampling
         set(value) {
-            body.velocitySampling = value
+            transporter.velocitySampling = value
         }
 
     /** Where the vehicle waits when it has nothing to do, or null to wait where it stops. */
@@ -408,7 +420,7 @@ open class AgvVehicle @JvmOverloads constructor(
                         "ChargeReservePolicy is what prevents this arising at all."
             }
             pendingInterruption = Interruption.OutOfCharge(
-                this, time, currentLocationName, body.heldZones, body.transporterState,
+                this, time, currentLocationName, transporter.heldZones, transporter.transporterState,
                 currentAssignment?.task, isCarryingALoad
             )
             return false
@@ -601,7 +613,7 @@ open class AgvVehicle @JvmOverloads constructor(
         myNumFailures?.increment()
         outOfServiceSince = time
         return Interruption.Failed(
-            this, time, currentLocationName, body.heldZones, body.transporterState,
+            this, time, currentLocationName, transporter.heldZones, transporter.transporterState,
             currentAssignment?.task, isCarryingALoad,
             failureNumber = myNumFailures?.value?.toInt() ?: 0,
             repairTime = duration
@@ -716,7 +728,7 @@ open class AgvVehicle @JvmOverloads constructor(
     ): HoldQueue? {
         body.towVelocity = velocity
         val queue = system.spaceSystem.beginJourney(
-            body, location, MovePurpose.TOW, waiter, MovementWait.DRIVING
+            transporter, location, MovePurpose.TOW, waiter, MovementWait.DRIVING
         )
         // Already there. Nothing was started, so nothing is under tow.
         if (queue == null) body.towVelocity = null
@@ -724,12 +736,7 @@ open class AgvVehicle @JvmOverloads constructor(
     }
 
     /** Ends a tow, whether or not the vehicle actually had to go anywhere. */
-    internal fun endTow() {
-        body.towVelocity = null
-        if (body.transporterState == TransporterState.TOWED) {
-            body.transporterState = TransporterState.IDLE
-        }
-    }
+    internal fun endTow() = body.endTow()
 
     /**
      * Commands the body toward a location and reports whether a journey is now under way.
@@ -785,7 +792,7 @@ open class AgvVehicle @JvmOverloads constructor(
         // only when something can actually refuse, so a vehicle that neither runs on a battery nor
         // breaks down is asked nothing at all.
         if (battery != null || failureModel != null) {
-            body.attachMovementGate { _, _ -> mayContinuePastBoundary() }
+            body.attachContinuationGate { mayContinuePastBoundary() }
         }
     }
 

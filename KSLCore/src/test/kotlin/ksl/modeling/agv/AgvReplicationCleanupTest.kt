@@ -66,7 +66,7 @@ class AgvReplicationCleanupTest {
                 "dormantVehicles=${agv.availabilityQ.size} " +
                 "dispatcherIdle=${agv.dispatcherIdleQ.size} " +
                 "movementQ=${agv.spaceSystem.drivingHoldQ.size} " +
-                "cartBusy=${cart.body.numBusy} cartState=${cart.body.transporterState} " +
+                "cartBusy=${cart.transporter.numBusy} cartState=${cart.transporter.transporterState} " +
                 "assigned=${cart.currentAssignment != null}"
 
         override fun initialize() {
