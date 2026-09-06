@@ -1,6 +1,6 @@
 package ksl.modeling.agv.policies
 
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 
 /** What a vehicle does with itself when the dispatcher has no work for it. */
 sealed class Disposition {
@@ -35,7 +35,7 @@ sealed class Disposition {
  * than a rule an implementer could break.
  */
 fun interface DispositionPolicyIfc {
-    fun disposition(vehicle: AgvVehicle): Disposition
+    fun disposition(vehicle: FleetVehicle): Disposition
 }
 
 /**
@@ -47,13 +47,13 @@ fun interface DispositionPolicyIfc {
  * The model simply stops moving.
  */
 class ReturnToHomeBaseDisposition : DispositionPolicyIfc {
-    override fun disposition(vehicle: AgvVehicle): Disposition = Disposition.ReturnToHomeBase
+    override fun disposition(vehicle: FleetVehicle): Disposition = Disposition.ReturnToHomeBase
     override fun toString(): String = "ReturnToHomeBaseDisposition"
 }
 
 /** Leave the vehicle where it stopped. See the warning on [ReturnToHomeBaseDisposition]. */
 class ParkInPlaceDisposition : DispositionPolicyIfc {
-    override fun disposition(vehicle: AgvVehicle): Disposition = Disposition.ParkInPlace
+    override fun disposition(vehicle: FleetVehicle): Disposition = Disposition.ParkInPlace
     override fun toString(): String = "ParkInPlaceDisposition"
 }
 
@@ -71,7 +71,7 @@ class ParkInPlaceDisposition : DispositionPolicyIfc {
  * spur per vehicle, or accept that this is a rule about one parking space.
  */
 class MoveToStagingDisposition(val locationName: String) : DispositionPolicyIfc {
-    override fun disposition(vehicle: AgvVehicle): Disposition = Disposition.MoveTo(locationName)
+    override fun disposition(vehicle: FleetVehicle): Disposition = Disposition.MoveTo(locationName)
     override fun toString(): String = "MoveToStagingDisposition($locationName)"
 }
 
@@ -102,7 +102,7 @@ class ChargeWhenLowDisposition @JvmOverloads constructor(
         }
     }
 
-    override fun disposition(vehicle: AgvVehicle): Disposition {
+    override fun disposition(vehicle: FleetVehicle): Disposition {
         if (vehicle.battery == null) return otherwise.disposition(vehicle)
         if (vehicle.fractionCharged > threshold) return otherwise.disposition(vehicle)
         // No charger it can reach is not an error here. The vehicle is low, not stopped, and it may

@@ -3,6 +3,7 @@ package ksl.modeling.agv.doc
 import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.Battery
 import ksl.modeling.agv.FailureBasis
 import ksl.modeling.agv.FailureModel
@@ -209,7 +210,7 @@ private object AgvGuideSnippets {
     /** A bidding rule cannot suspend: a bid is a quote, and quoting must not consume time. */
     class LeastLoadedBid : BidPolicyIfc {
         override fun bid(
-            vehicle: AgvVehicle,
+            vehicle: FleetVehicle,
             cfp: CallForProposals,
             space: FleetSpaceIfc
         ): Bid? = Bid(vehicle, vehicle.numTasksCompleted.value, note = "tasks done so far")
@@ -259,7 +260,7 @@ private object AgvGuideSnippets {
 
     /** Per vehicle, so a fleet can be heterogeneous, and free to look at the vehicle. */
     class GoHomeWhenTiredDisposition(private val after: Double) : DispositionPolicyIfc {
-        override fun disposition(vehicle: AgvVehicle): Disposition =
+        override fun disposition(vehicle: FleetVehicle): Disposition =
             if (vehicle.numTasksCompleted.value >= after) Disposition.ReturnToHomeBase
             else Disposition.ParkInPlace
     }

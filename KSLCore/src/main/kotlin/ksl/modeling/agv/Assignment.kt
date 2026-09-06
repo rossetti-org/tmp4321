@@ -13,7 +13,7 @@ enum class AssignmentState { ASSIGNED, IN_PROGRESS, COMPLETED, REVOKED }
  * it was won in an auction. Neither of those fits in a pointer.
  */
 class Assignment internal constructor(
-    val vehicle: AgvVehicle,
+    val vehicle: FleetVehicle,
     val task: Dispatcher.Task,
     val madeAt: Double,
     val decidedBy: String,
@@ -50,7 +50,7 @@ class Assignment internal constructor(
  * on it.
  */
 data class AssignmentProposal(
-    val vehicle: AgvVehicle,
+    val vehicle: FleetVehicle,
     val task: Dispatcher.Task,
     val terms: Double? = null
 )

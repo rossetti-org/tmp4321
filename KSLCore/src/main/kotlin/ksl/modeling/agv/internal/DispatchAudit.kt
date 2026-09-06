@@ -17,7 +17,7 @@
  */
 package ksl.modeling.agv.internal
 
-import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.FleetSystem
 import ksl.modeling.agv.AssignmentState
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.TaskState
@@ -42,7 +42,7 @@ import ksl.modeling.agv.exceptions.AgvInvariantViolation
  * not happen is that the parties disagree about it.
  */
 internal class DispatchAudit(
-    private val system: AgvSystem
+    private val system: FleetSystem
 ) {
 
     private val dispatcher: Dispatcher

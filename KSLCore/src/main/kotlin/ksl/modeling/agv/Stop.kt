@@ -59,13 +59,13 @@ import ksl.modeling.variable.CounterCIfc
  * @param name the element name; the location is used when none is given
  */
 class Stop @JvmOverloads constructor(
-    val system: AgvSystem,
+    val system: FleetSystem,
     val location: String,
     name: String? = null
 ) : ModelElement(system, name ?: "Stop:$location") {
 
     init {
-        system.network.requireLocation(location)
+        system.space.requireLocation(location)
         system.register(this)
     }
 
@@ -93,7 +93,7 @@ class Stop @JvmOverloads constructor(
             internal set
 
         /** Which vehicle took it. Null until then. */
-        var carriedBy: AgvVehicle? = null
+        var carriedBy: FleetVehicle? = null
             internal set
 
         /** How many vehicles served this stop while it waited and left it standing. */
@@ -150,7 +150,7 @@ class Stop @JvmOverloads constructor(
 
     /** Puts a rider in the line. Called by the rider's own verb, never by a vehicle. */
     internal fun join(rider: ProcessModel.Entity, destination: String): Ride {
-        system.network.requireLocation(destination)
+        system.space.requireLocation(destination)
         require(destination != location) {
             "Entity (${rider.name}) asked to be carried from (${this.name}) to ($destination), " +
                     "which is where it already is."

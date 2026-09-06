@@ -7,7 +7,7 @@ package ksl.modeling.agv
  * committed, `waitForArrival` from there until the load was aboard, and `timeAboard` from there
  * until it was set down. Their sum is `totalTime`.
  *
- * The third is named for the interval rather than for the journey, matching `AgvSystem.timeAboard`
+ * The third is named for the interval rather than for the journey, matching `FleetSystem.timeAboard`
  * and for the same reason: the passive subsystem's `transportTime` means request to set-down, which
  * is the whole of `totalTime` here rather than this last leg of it.
  *

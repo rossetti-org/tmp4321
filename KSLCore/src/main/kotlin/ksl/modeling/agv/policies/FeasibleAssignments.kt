@@ -1,6 +1,6 @@
 package ksl.modeling.agv.policies
 
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.AssignmentProposal
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.spatial.FleetSpaceIfc
@@ -29,7 +29,7 @@ import ksl.modeling.spatial.FleetSpaceIfc
  */
 class FeasibleAssignments internal constructor(
     private val tasks: List<Dispatcher.Task>,
-    private val vehicles: List<AgvVehicle>,
+    private val vehicles: List<FleetVehicle>,
     private val space: FleetSpaceIfc
 ) {
 
@@ -48,7 +48,7 @@ class FeasibleAssignments internal constructor(
         get() = tasks
 
     /** The vehicles under consideration, in the order they declared availability. */
-    val available: List<AgvVehicle>
+    val available: List<FleetVehicle>
         get() = vehicles
 
     /** Every feasible pairing, tasks in selection-rule order and vehicles in declaration order
@@ -64,7 +64,7 @@ class FeasibleAssignments internal constructor(
             .map { AssignmentProposal(it, task, terms = cost(it, task)) }
 
     /** Every task this vehicle could take. */
-    fun candidatesFor(vehicle: AgvVehicle): Sequence<AssignmentProposal> =
+    fun candidatesFor(vehicle: FleetVehicle): Sequence<AssignmentProposal> =
         tasks.asSequence()
             .filter { isFeasible(vehicle, it) }
             .map { AssignmentProposal(vehicle, it, terms = cost(vehicle, it)) }
@@ -77,7 +77,7 @@ class FeasibleAssignments internal constructor(
      * elsewhere; a full vehicle cannot take the task in exactly the sense that an unreachable
      * pickup cannot be reached. A capacity-one fleet is unaffected: every idle vehicle has room.
      */
-    fun isFeasible(vehicle: AgvVehicle, task: Dispatcher.Task): Boolean =
+    fun isFeasible(vehicle: FleetVehicle, task: Dispatcher.Task): Boolean =
         vehicle.spareCapacity > 0 && cost(vehicle, task).isFinite()
 
     /**
@@ -88,7 +88,7 @@ class FeasibleAssignments internal constructor(
      * unreachable pairing; and [isFeasible] is defined in terms of it, so the two cannot disagree
      * about what is available.
      */
-    fun cost(vehicle: AgvVehicle, task: Dispatcher.Task): Double {
+    fun cost(vehicle: FleetVehicle, task: Dispatcher.Task): Double {
         val here = space.location(vehicle.currentLocationName) ?: return Double.POSITIVE_INFINITY
         val there = space.location(task.pickupLocation) ?: return Double.POSITIVE_INFINITY
         if (!space.isReachable(here, there)) return Double.POSITIVE_INFINITY

@@ -17,7 +17,7 @@
  */
 package ksl.modeling.agv.policies
 
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.Stop
 import ksl.modeling.agv.StopControlIfc
 import ksl.modeling.agv.StopInstruction
@@ -32,7 +32,7 @@ import ksl.modeling.entity.KSLProcessBuilder
 class AlwaysServe : StopControlIfc {
 
     override suspend fun KSLProcessBuilder.instruct(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         stop: TourStop,
         tour: Tour
     ): StopInstruction = StopInstruction.Serve()
@@ -66,7 +66,7 @@ class TimetableControl(
     }
 
     override suspend fun KSLProcessBuilder.instruct(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         stop: TourStop,
         tour: Tour
     ): StopInstruction {
@@ -92,7 +92,7 @@ class TimetableControl(
 open class DispatcherStopControl : StopControlIfc {
 
     override suspend fun KSLProcessBuilder.instruct(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         stop: TourStop,
         tour: Tour
     ): StopInstruction =

@@ -89,7 +89,7 @@ interface TourStopActionIfc {
 interface StopContextIfc {
 
     /** The vehicle that arrived. */
-    val vehicle: AgvVehicle
+    val vehicle: FleetVehicle
 
     /** The stop it arrived at. */
     val stop: TourStop

@@ -86,7 +86,7 @@ interface StopControlIfc {
      * @param tour the whole round, so a decision can see what comes after
      */
     suspend fun KSLProcessBuilder.instruct(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         stop: TourStop,
         tour: Tour
     ): StopInstruction

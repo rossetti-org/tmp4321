@@ -1,5 +1,6 @@
 package ksl.agv.policy
 
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.examples.general.guidedpath.SimpleAgvNetwork
 import ksl.modeling.agv.AgvSystem
@@ -70,7 +71,7 @@ class PolicySubstitutionTest {
         var calls = 0
             private set
 
-        override fun disposition(vehicle: AgvVehicle): Disposition {
+        override fun disposition(vehicle: FleetVehicle): Disposition {
             calls++
             goHome = !goHome
             return if (goHome) Disposition.ReturnToHomeBase else Disposition.ParkInPlace
@@ -82,7 +83,7 @@ class PolicySubstitutionTest {
         var declines = 0
             private set
 
-        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+        override fun bid(vehicle: FleetVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
             val here = space.location(vehicle.currentLocationName) ?: return null
             val there = space.location(cfp.task.pickupLocation) ?: return null
             if (!space.isReachable(here, there)) { declines++; return null }

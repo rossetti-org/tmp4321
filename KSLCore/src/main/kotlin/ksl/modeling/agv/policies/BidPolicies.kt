@@ -1,6 +1,6 @@
 package ksl.modeling.agv.policies
 
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.spatial.FleetSpaceIfc
 
@@ -24,7 +24,7 @@ data class CallForProposals(val task: Dispatcher.Task, val issuedAt: Double)
  * study comparing bidding rules can record *why* a vehicle offered what it did, which is otherwise
  * lost the moment the auction closes.
  */
-data class Bid(val vehicle: AgvVehicle, val value: Double, val note: String? = null)
+data class Bid(val vehicle: FleetVehicle, val value: Double, val note: String? = null)
 
 /**
  * What a vehicle offers when a dispatcher calls for proposals.
@@ -45,7 +45,7 @@ fun interface BidPolicyIfc {
      *   invent a number meaning "no", which is how sentinel values get compared as though they were
      *   costs.
      */
-    fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid?
+    fun bid(vehicle: FleetVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid?
 }
 
 /**
@@ -57,7 +57,7 @@ fun interface BidPolicyIfc {
  */
 class NetworkDistanceBid : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+    override fun bid(vehicle: FleetVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
         val there = space.location(cfp.task.pickupLocation) ?: return null
         if (!vehicle.movement.isReachable(there)) return null
         return Bid(vehicle, vehicle.movement.pathDistanceTo(there), "distance to pickup")
@@ -78,7 +78,7 @@ class NetworkDistanceBid : BidPolicyIfc {
  */
 class CompletionTimeBid : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+    override fun bid(vehicle: FleetVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
         val pickup = space.location(cfp.task.pickupLocation) ?: return null
         val destination = space.location(cfp.task.destination) ?: return null
         if (!vehicle.movement.isReachable(pickup)) return null
@@ -102,7 +102,7 @@ class CompletionTimeBid : BidPolicyIfc {
  */
 class DeclineWhenBusyBid(private val inner: BidPolicyIfc = NetworkDistanceBid()) : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+    override fun bid(vehicle: FleetVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
         if (vehicle.hasAssignment) return null
         return inner.bid(vehicle, cfp, space)
     }

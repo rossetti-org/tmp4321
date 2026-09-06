@@ -33,7 +33,7 @@ class WorkBeatsDispositionTest {
         var consulted = 0
             private set
 
-        override fun disposition(vehicle: AgvVehicle): Disposition {
+        override fun disposition(vehicle: FleetVehicle): Disposition {
             consulted++
             return Disposition.MoveTo(SimpleAgvNetwork.AGV2_HOME)
         }

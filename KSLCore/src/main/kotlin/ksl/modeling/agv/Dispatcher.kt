@@ -35,7 +35,7 @@ import ksl.utilities.GetValueIfc
  * object to do its one job.
  */
 open class Dispatcher @JvmOverloads constructor(
-    val system: AgvSystem,
+    val system: FleetSystem,
     assignmentPolicy: AssignmentPolicyIfc = NearestVehiclePolicy(),
     tourPolicy: TourPolicyIfc = CheapestInsertionTourPolicy(),
     discipline: Queue.Discipline = Queue.Discipline.FIFO,
@@ -71,11 +71,11 @@ open class Dispatcher @JvmOverloads constructor(
      * that made it.
      */
     internal fun planTour(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         remaining: List<TourStop>,
         insert: List<TourStop>
     ): List<TourStop> {
-        val context = TourContext(vehicle, system.network)
+        val context = TourContext(vehicle, system.space)
         val planned = tourPolicy.plan(context, remaining, insert)
         validateTour(
             tourPolicy, remaining + insert, planned,
@@ -111,13 +111,13 @@ open class Dispatcher @JvmOverloads constructor(
     // is resumed once, with no assignment, which is its cue to consider a disposition. It then goes
     // dormant and stays in `available` until a task arrives for it.
 
-    private val myAvailable = mutableListOf<AgvVehicle>()
-    private val myNewlyDeclared = mutableListOf<AgvVehicle>()
+    private val myAvailable = mutableListOf<FleetVehicle>()
+    private val myNewlyDeclared = mutableListOf<FleetVehicle>()
 
-    val availableVehicles: List<AgvVehicle>
+    val availableVehicles: List<FleetVehicle>
         get() = myAvailable.toList()
 
-    internal fun isAvailable(vehicle: AgvVehicle): Boolean = myAvailable.contains(vehicle)
+    internal fun isAvailable(vehicle: FleetVehicle): Boolean = myAvailable.contains(vehicle)
 
     /**
      * The live assignment for a task, or null when nobody is committed to it.
@@ -135,7 +135,7 @@ open class Dispatcher @JvmOverloads constructor(
             v.assignments.firstOrNull { it.task === task }
         }
 
-    internal var agent: AgvSystem.DispatcherAgent? = null
+    internal var agent: FleetSystem.DispatcherAgent? = null
 
     /** Set when the dispatcher is woken while it is not dormant, so the wake is not lost. */
     private var wakePending: Boolean = false
@@ -149,7 +149,7 @@ open class Dispatcher @JvmOverloads constructor(
      * the first, and an instruction the vehicle never got round to asking for is stale by the time
      * it would have been read.
      */
-    private val myInstructions = mutableMapOf<AgvVehicle, StopInstruction>()
+    private val myInstructions = mutableMapOf<FleetVehicle, StopInstruction>()
 
     /**
      * Tells [vehicle] what to do about the next stop it asks about.
@@ -162,12 +162,12 @@ open class Dispatcher @JvmOverloads constructor(
      *
      * Has no effect on a vehicle whose control does not consult the dispatcher.
      */
-    fun instruct(vehicle: AgvVehicle, instruction: StopInstruction) {
+    fun instruct(vehicle: FleetVehicle, instruction: StopInstruction) {
         myInstructions[vehicle] = instruction
     }
 
     /** Takes whatever was left for this vehicle, if anything. */
-    internal fun takeInstruction(vehicle: AgvVehicle): StopInstruction? =
+    internal fun takeInstruction(vehicle: FleetVehicle): StopInstruction? =
         myInstructions.remove(vehicle)
 
 
@@ -285,7 +285,7 @@ open class Dispatcher @JvmOverloads constructor(
          * `waitForArrival` and `timeAboard` on the result are the wider intervals that include
          * those delays, and neither is derivable from the other.
          */
-        internal var carriedBy: AgvVehicle? = null
+        internal var carriedBy: FleetVehicle? = null
 
         // Marks taken when *this* load went aboard, so that its ride is measured from its own
         // pickup. With one load per tour the pickup and the start of the loaded leg are the same
@@ -424,8 +424,8 @@ open class Dispatcher @JvmOverloads constructor(
         unLoadingDelay: GetValueIfc,
         priority: Int
     ): TransportTask {
-        system.network.requireLocation(origin)
-        system.network.requireLocation(destination)
+        system.space.requireLocation(origin)
+        system.space.requireLocation(destination)
         val task = TransportTask(load, origin, destination, loadingDelay, unLoadingDelay)
         task.priority = priority
         myTaskQ.enqueue(task)
@@ -481,7 +481,7 @@ open class Dispatcher @JvmOverloads constructor(
         kind: ServiceKind = ServiceKind.Reposition,
         priority: Int = 1
     ): ServiceTask {
-        system.network.requireLocation(destination)
+        system.space.requireLocation(destination)
         val task = ServiceTask(destination, kind)
         task.priority = priority
         myTaskQ.enqueue(task)
@@ -655,7 +655,7 @@ open class Dispatcher @JvmOverloads constructor(
      * consults a disposition policy is unreachable until the dispatcher has had its pass and
      * declined.
      */
-    internal fun declareAvailable(vehicle: AgvVehicle) {
+    internal fun declareAvailable(vehicle: FleetVehicle) {
         // A vehicle that has stopped and is being dealt with cannot take work, whatever else has
         // just happened to it. The case that makes this necessary rather than defensive is a
         // revocation: taking a task back from a broken vehicle declares it available in the same
@@ -672,7 +672,7 @@ open class Dispatcher @JvmOverloads constructor(
     }
 
     /** A vehicle takes itself out of consideration -- it is about to move for its own reasons. */
-    internal fun withdraw(vehicle: AgvVehicle) {
+    internal fun withdraw(vehicle: FleetVehicle) {
         myAvailable.remove(vehicle)
         myNewlyDeclared.remove(vehicle)
     }
@@ -779,7 +779,7 @@ open class Dispatcher @JvmOverloads constructor(
         // How many this pass has already given each vehicle. A vehicle with room may take several
         // tasks in one pass and make one round of them; what it may not do is take more than it can
         // carry, and `spareCapacity` alone would not notice because nothing is aboard yet.
-        val takenThisPass = mutableMapOf<AgvVehicle, Int>()
+        val takenThisPass = mutableMapOf<FleetVehicle, Int>()
         for (p in proposals) {
             if (!myAvailable.contains(p.vehicle)) {
                 // Two quite different causes, and a modeller should not be told the wrong one. The
@@ -794,7 +794,7 @@ open class Dispatcher @JvmOverloads constructor(
                                 "deciding and is out of service. A policy that takes simulated time " +
                                 "to decide -- an auction deadline, a batching window -- must re-read " +
                                 "the available set before it proposes, because the fleet can change " +
-                                "under it. AgvVehicle.isOutOfService is the test."
+                                "under it. FleetVehicle.isOutOfService is the test."
                     )
                 }
                 throw AgvDispatchException(
@@ -851,7 +851,7 @@ open class Dispatcher @JvmOverloads constructor(
         for (v in leftover) resume(v, null)
     }
 
-    private fun resume(vehicle: AgvVehicle, assignment: Assignment?) {
+    private fun resume(vehicle: FleetVehicle, assignment: Assignment?) {
         val a = vehicle.agent ?: throw AgvProtocolException(
             "Vehicle (${vehicle.name}) has no agent for this replication."
         )

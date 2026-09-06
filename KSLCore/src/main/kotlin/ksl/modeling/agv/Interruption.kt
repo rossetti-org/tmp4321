@@ -47,7 +47,7 @@ import ksl.modeling.guidedpath.Zone
  * @property loadIsAboard whether it is carrying the load it was given
  */
 sealed class Interruption(
-    val vehicle: AgvVehicle,
+    val vehicle: FleetVehicle,
     val at: Double,
     val location: String,
     val heldZones: List<Zone>,
@@ -63,11 +63,16 @@ sealed class Interruption(
      * link it is waiting for, so being in the way is a fact about what this vehicle holds. Read it
      * again after time passes -- it is a live query, not a snapshot taken when the vehicle stopped.
      */
-    val obstructed: List<AgvVehicle>
+    val obstructed: List<FleetVehicle>
         get() {
-            val bodies = vehicle.system.spaceSystem.transportersHeldUpBy(vehicle.transporter)
+            // A substrate with no shared space obstructs nobody, and answering "nobody" is the
+            // honest reading of a free path rather than a gap: a model that asserts vehicles do not
+            // get in each other's way has asserted exactly this.
+            val here = vehicle as? AgvVehicle ?: return emptyList()
+            val bodies = here.agvSystem.spaceSystem.transportersHeldUpBy(here.transporter)
             if (bodies.isEmpty()) return emptyList()
-            return vehicle.system.vehicles.filter { v -> bodies.any { it === v.transporter } }
+            return vehicle.system.vehicles.filterIsInstance<AgvVehicle>()
+                .filter { v -> bodies.any { it === v.transporter } }
         }
 
     /**
@@ -118,7 +123,7 @@ sealed class Interruption(
      *   default would have used, and a policy which ignores it is making a visible choice.
      */
     class Failed internal constructor(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         at: Double,
         location: String,
         heldZones: List<Zone>,
@@ -143,7 +148,7 @@ sealed class Interruption(
      * path is an obstruction for the rest of the run.
      */
     class OutOfCharge internal constructor(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         at: Double,
         location: String,
         heldZones: List<Zone>,

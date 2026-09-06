@@ -36,7 +36,7 @@ import ksl.modeling.entity.ProcessModel.Entity
 import ksl.modeling.queue.Queue
 import ksl.modeling.guidedpath.*
 import ksl.modeling.agv.AgvSystem
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.AgvTransportResult
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.Stop
@@ -2723,7 +2723,7 @@ interface KSLProcessBuilder {
  * @param suspensionName a name for the wait, for tracing
  */
 suspend fun KSLProcessBuilder.tow(
-    vehicle: AgvVehicle,
+    vehicle: FleetVehicle,
     to: String,
     atVelocity: Double,
     suspensionName: String? = null
@@ -2761,7 +2761,7 @@ suspend fun KSLProcessBuilder.tow(
  * @param vehicle the vehicle on the charger
  * @param suspensionName a name for the wait, for tracing
  */
-suspend fun KSLProcessBuilder.charge(vehicle: AgvVehicle, suspensionName: String? = null) {
+suspend fun KSLProcessBuilder.charge(vehicle: FleetVehicle, suspensionName: String? = null) {
     if (vehicle.battery == null) return
     val duration = vehicle.beginCharging()
     if (duration > 0.0) {

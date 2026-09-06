@@ -17,7 +17,7 @@
  */
 package ksl.modeling.agv.policies
 
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.TourStop
 import ksl.modeling.agv.exceptions.AgvTourException
 import ksl.modeling.spatial.FleetSpaceIfc
@@ -30,7 +30,7 @@ import ksl.modeling.spatial.FleetSpaceIfc
  * which are facts about the layout and not about any vehicle.
  */
 class TourContext internal constructor(
-    val vehicle: AgvVehicle,
+    val vehicle: FleetVehicle,
     val space: FleetSpaceIfc
 ) {
 

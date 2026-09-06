@@ -1,6 +1,6 @@
 package ksl.modeling.agv.policies
 
-import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.AssignmentProposal
 import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.TaskBoard
@@ -52,7 +52,7 @@ interface AssignmentPolicyIfc {
  */
 class DispatchContext internal constructor(
     val board: TaskBoard,
-    val available: List<AgvVehicle>,
+    val available: List<FleetVehicle>,
     val space: FleetSpaceIfc,
     val time: Double,
     internal val dispatcher: ksl.modeling.agv.Dispatcher
@@ -139,7 +139,7 @@ class DispatchContext internal constructor(
      * [Double.POSITIVE_INFINITY] when the location is unreachable from where the vehicle stands, so
      * a policy comparing distances naturally never picks a vehicle that cannot get there.
      */
-    fun distanceTo(vehicle: AgvVehicle, location: String): Double {
+    fun distanceTo(vehicle: FleetVehicle, location: String): Double {
         val there = space.location(location) ?: return Double.POSITIVE_INFINITY
         if (!vehicle.movement.isReachable(there)) return Double.POSITIVE_INFINITY
         return vehicle.movement.pathDistanceTo(there)
@@ -328,7 +328,7 @@ private inline fun greedyByDistance(
     val proposals = mutableListOf<AssignmentProposal>()
     for (task in context.board.unassigned) {
         if (free.isEmpty()) break
-        var best: AgvVehicle? = null
+        var best: FleetVehicle? = null
         var bestScore = Double.POSITIVE_INFINITY
         for (v in free) {
             val d = context.distanceTo(v, task.pickupLocation)
@@ -369,7 +369,7 @@ class ConsolidatingPolicy @JvmOverloads constructor(
         val proposals = with(inner) { assign(context) }.toMutableList()
         if (proposals.isEmpty()) return proposals
         val taken = proposals.mapTo(mutableSetOf<Dispatcher.Task>()) { it.task }
-        val roomLeft = mutableMapOf<AgvVehicle, Int>()
+        val roomLeft = mutableMapOf<FleetVehicle, Int>()
         for (p in proposals) {
             roomLeft[p.vehicle] = (roomLeft[p.vehicle] ?: p.vehicle.spareCapacity) - 1
         }
@@ -424,7 +424,7 @@ class ContractNetAssignmentPolicy(
 
     override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
         val proposals = mutableListOf<AssignmentProposal>()
-        val spokenFor = mutableSetOf<AgvVehicle>()
+        val spokenFor = mutableSetOf<FleetVehicle>()
         // The board is a live view, so the list is taken once here: auctioning takes simulated time
         // and tasks posted during it belong to the next pass, not to a list being iterated.
         for (task in context.board.unassigned.toList()) {
@@ -480,7 +480,7 @@ class ScoringAssignmentPolicy(
 ) : AssignmentPolicyIfc {
 
     override suspend fun KSLProcessBuilder.assign(context: DispatchContext): List<AssignmentProposal> {
-        val taken = mutableSetOf<AgvVehicle>()
+        val taken = mutableSetOf<FleetVehicle>()
         val done = mutableSetOf<Dispatcher.Task>()
         val proposals = mutableListOf<AssignmentProposal>()
         while (true) {
@@ -526,7 +526,7 @@ class ScoringAssignmentPolicy(
  * silently: the load waits on a vehicle that is not coming while a healthy one sits idle.
  *
  * So a stopped incumbent is treated as unable to collect at all, and any vehicle that can reach the
- * pickup takes the task. [AgvVehicle.isOutOfService] is the test. The threshold does not apply,
+ * pickup takes the task. [FleetVehicle.isOutOfService] is the test. The threshold does not apply,
  * because the incumbent's cost is no longer a distance to compare against.
  *
  * Being told is a separate matter from acting. Nothing inside the subsystem wakes the dispatcher
@@ -654,7 +654,7 @@ class ReassigningPolicy(
  * The estimate is a free-running one: distance along the guide path, at the vehicle's last sampled
  * velocity, with no allowance for blocking, re-routing, or a queue at the charger. [safetyFactor]
  * is what covers all of that, which is why its default is generous rather than tight. A study that
- * wants it tighter should check [AgvVehicle.numTimesStranded] is still zero.
+ * wants it tighter should check [FleetVehicle.numTimesStranded] is still zero.
  *
  * @param inner the policy that actually decides
  * @param safetyFactor multiplies the estimated draw. Must be >= 1.0.
@@ -683,7 +683,7 @@ class ChargeReservePolicy @JvmOverloads constructor(
         // reserve for is a guard that silently does nothing, which is worse than not having one:
         // the model reads as protected and is not.
         check(vehicle.system.chargers.isNotEmpty()) {
-            "AgvSystem (${vehicle.system.name}) has a ChargeReservePolicy but no chargers. The " +
+            "FleetSystem (${vehicle.system.name}) has a ChargeReservePolicy but no chargers. The " +
                     "reserve is the charge a vehicle must keep in hand to reach one, so with none " +
                     "declared there is nothing to reserve for and the policy would pass every " +
                     "assignment through while appearing to guard them. Declare a charger with " +
