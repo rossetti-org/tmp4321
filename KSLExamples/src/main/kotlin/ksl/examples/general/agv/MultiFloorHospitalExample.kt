@@ -189,7 +189,7 @@ object MultiFloorHospitalExample {
                 val placed = time
                 currentLocation = network.requireLocation(PHARMACY)
                 delay(preparation)
-                transportByAgv(agv, destination = WARD, origin = PHARMACY)
+                transportByFleet(agv, destination = WARD, origin = PHARMACY)
                 cycleTime.value = time - placed
                 delivered.increment()
                 // The shelf is never the constraint: the next order is ready the moment this one

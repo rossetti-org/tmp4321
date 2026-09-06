@@ -3,8 +3,8 @@ package ksl.examples.general.agv
 import ksl.examples.general.guidedpath.GuidedPathThroughputBenchmark
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
-import ksl.modeling.agv.policies.NearestVehiclePolicy
-import ksl.modeling.agv.policies.ParkInPlaceDisposition
+import ksl.modeling.fleet.policies.NearestVehiclePolicy
+import ksl.modeling.fleet.policies.ParkInPlaceDisposition
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.TransporterPlacement
@@ -104,7 +104,7 @@ object AgvThroughputBenchmark {
                 while (true) {
                     val there = somewhere()
                     if (there != currentLocation.name) {
-                        transportByAgv(agv, destination = there, origin = currentLocation.name)
+                        transportByFleet(agv, destination = there, origin = currentLocation.name)
                     } else {
                         // Asking to be carried where it already stands would be refused, and a load
                         // that stopped asking would quietly shrink the population this claims to run.

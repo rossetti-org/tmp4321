@@ -17,6 +17,12 @@
  */
 package ksl.modeling.agv
 
+import ksl.modeling.fleet.Battery
+import ksl.modeling.fleet.FailureModel
+import ksl.modeling.fleet.FleetVehicle
+import ksl.modeling.fleet.Interruption
+import ksl.modeling.fleet.VehicleBodyIfc
+
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedTransporter
@@ -117,6 +123,17 @@ open class AgvVehicle @JvmOverloads constructor(
         agvSystem.spaceSystem.beginJourney(
             transporter, location, MovePurpose.TOW, waiter, MovementWait.DRIVING
         )
+
+    /**
+     * Answered from the guide path: a blocked vehicle records the zone or the link it is waiting
+     * for, so being in the way is a fact about what this vehicle holds rather than a guess.
+     */
+    override fun vehiclesObstructed(): List<FleetVehicle> {
+        val bodies = agvSystem.spaceSystem.transportersHeldUpBy(transporter)
+        if (bodies.isEmpty()) return emptyList()
+        return agvSystem.vehicles.filterIsInstance<AgvVehicle>()
+            .filter { v -> bodies.any { it === v.transporter } }
+    }
 
     override fun failureInterruption(failureNumber: Int, repairTime: Double): Interruption.Failed =
         Interruption.Failed(

@@ -35,12 +35,12 @@ import ksl.modeling.entity.ProcessModel.Companion.YIELD_PRIORITY
 import ksl.modeling.entity.ProcessModel.Entity
 import ksl.modeling.queue.Queue
 import ksl.modeling.guidedpath.*
-import ksl.modeling.agv.FleetSystem
-import ksl.modeling.agv.FleetVehicle
-import ksl.modeling.agv.AgvTransportResult
-import ksl.modeling.agv.Dispatcher
-import ksl.modeling.agv.Stop
-import ksl.modeling.agv.TransitResult
+import ksl.modeling.fleet.FleetSystem
+import ksl.modeling.fleet.FleetVehicle
+import ksl.modeling.fleet.FleetTransportResult
+import ksl.modeling.fleet.Dispatcher
+import ksl.modeling.fleet.Stop
+import ksl.modeling.fleet.TransitResult
 import ksl.modeling.spatial.*
 import ksl.simulation.ModelElement
 import ksl.utilities.GetValueIfc
@@ -2479,7 +2479,7 @@ interface KSLProcessBuilder {
      * The entity waits twice and for two different things -- for a vehicle to be assigned and to
      * arrive, then for the ride itself -- but both are the same suspension from the process's point
      * of view, which is why this is one verb rather than three. Use
-     * [requestAgvTransport]/[awaitAgvTransport] when the process must act in between.
+     * [requestFleetTransport]/[awaitFleetTransport] when the process must act in between.
      *
      * @param system the fleet to ask
      * @param destination the junction or station to be delivered to
@@ -2491,7 +2491,7 @@ interface KSLProcessBuilder {
      * @param suspensionName names this suspension point when a process has several
      * @return what the transport cost
      */
-    suspend fun transportByAgv(
+    suspend fun transportByFleet(
         system: FleetSystem,
         destination: String,
         origin: String = entity.currentLocation.name,
@@ -2499,11 +2499,11 @@ interface KSLProcessBuilder {
         unLoadingDelay: GetValueIfc = ConstantRV.ZERO,
         priority: Int = TRANSPORT_REQUEST_PRIORITY,
         suspensionName: String? = null
-    ): AgvTransportResult {
-        val task = requestAgvTransport(
+    ): FleetTransportResult {
+        val task = requestFleetTransport(
             system, destination, origin, loadingDelay, unLoadingDelay, priority
         )
-        return awaitAgvTransport(task, suspensionName)
+        return awaitFleetTransport(task, suspensionName)
     }
 
     /**
@@ -2511,12 +2511,12 @@ interface KSLProcessBuilder {
      *
      * For a process that must do something between asking and being carried -- finishing an
      * operation, releasing a machine -- so that the vehicle can be on its way while that happens.
-     * The returned task must be passed to [awaitAgvTransport]; abandoning it would leave the
+     * The returned task must be passed to [awaitFleetTransport]; abandoning it would leave the
      * vehicle to collect an entity that never suspends.
      *
      * @return the posted task, which is also where its wait is recorded
      */
-    suspend fun requestAgvTransport(
+    suspend fun requestFleetTransport(
         system: FleetSystem,
         destination: String,
         origin: String = entity.currentLocation.name,
@@ -2533,16 +2533,16 @@ interface KSLProcessBuilder {
     }
 
     /**
-     * Waits until a task posted by [requestAgvTransport] has been delivered.
+     * Waits until a task posted by [requestFleetTransport] has been delivered.
      *
-     * @param task the task returned by [requestAgvTransport]
+     * @param task the task returned by [requestFleetTransport]
      * @param suspensionName names this suspension point when a process has several
      * @return what the transport cost
      */
-    suspend fun awaitAgvTransport(
+    suspend fun awaitFleetTransport(
         task: Dispatcher.TransportTask,
         suspensionName: String? = null
-    ): AgvTransportResult {
+    ): FleetTransportResult {
         require(task.load === entity) {
             "Entity (${entity.name}) tried to wait on a transport task belonging to entity " +
                     "(${task.load.name})."
@@ -2565,7 +2565,7 @@ interface KSLProcessBuilder {
         // The assignment instant is read off the task rather than recomputed, so the decomposition
         // cannot drift from the queue's own figure: the two waits sum to pickedUp - posted, which
         // is exactly the task's time in queue.
-        return AgvTransportResult(
+        return FleetTransportResult(
             totalTime = delivered - posted,
             waitForAssignment = task.assignedAt - posted,
             waitForArrival = pickedUp - task.assignedAt,
@@ -2712,7 +2712,7 @@ interface KSLProcessBuilder {
  * entirely for the duration. How fast a person can move a dead AGV has nothing to do with how fast
  * it drives.
  *
- * Called from an [ksl.modeling.agv.InterruptionPolicyIfc], which runs inside the vehicle's own agent -- which is what
+ * Called from an [ksl.modeling.fleet.InterruptionPolicyIfc], which runs inside the vehicle's own agent -- which is what
  * makes this a plain suspension rather than a message to somebody else. When it returns, the vehicle
  * is at [to] and its tour, if it had one, is untouched: the tour names stops, not routes, so it
  * finishes from wherever the vehicle now stands.
@@ -2753,7 +2753,7 @@ suspend fun KSLProcessBuilder.tow(
  * is, wait that long, and put the charge back.
  *
  * The duration is **net of the hotel load**, which keeps drawing while the vehicle sits on the
- * charger. A [ksl.modeling.agv.Battery] refuses a charging rate that does not outpace its own idle draw, so the
+ * charger. A [ksl.modeling.fleet.Battery] refuses a charging rate that does not outpace its own idle draw, so the
  * answer is always positive and finite.
  *
  * Harmless on a vehicle with no battery: there is nothing to charge and no time passes.

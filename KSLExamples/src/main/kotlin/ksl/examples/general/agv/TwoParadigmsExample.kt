@@ -39,7 +39,7 @@ import ksl.utilities.random.rvariable.ExponentialRV
  *  particular one, and cannot tell which came.
  *
  *  ```
- *  transportByAgv(agv, destination = EXIT, origin = ENTRY)
+ *  transportByFleet(agv, destination = EXIT, origin = ENTRY)
  *  ```
  *
  *  The two lines look similar and mean something quite different. Under the passive paradigm the
@@ -174,7 +174,7 @@ object TwoParadigmsExample {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(ENTRY)
-                transportByAgv(agv, destination = EXIT, origin = ENTRY)
+                transportByFleet(agv, destination = EXIT, origin = ENTRY)
                 timeInSystem.value = time - arrived
                 delivered.increment()
             }

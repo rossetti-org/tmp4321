@@ -492,7 +492,7 @@ class MetamorphicRelationTest {
             val move = process(isDefaultProcess = true) {
                 currentLocation = network.requireLocation(spec.pickup)
                 val started = time
-                val r = transportByAgv(
+                val r = transportByFleet(
                     agv, spec.drop, origin = spec.pickup,
                     loadingDelay = ConstantRV(spec.loading),
                     unLoadingDelay = ConstantRV(spec.unloading)

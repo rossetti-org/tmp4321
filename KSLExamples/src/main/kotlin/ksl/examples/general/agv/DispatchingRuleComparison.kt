@@ -2,12 +2,12 @@ package ksl.examples.general.agv
 
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
-import ksl.modeling.agv.policies.AssignmentPolicyIfc
-import ksl.modeling.agv.policies.BatchedAssignmentPolicy
-import ksl.modeling.agv.policies.ContractNetAssignmentPolicy
-import ksl.modeling.agv.policies.FurthestVehiclePolicy
-import ksl.modeling.agv.policies.LeastUsedVehiclePolicy
-import ksl.modeling.agv.policies.NearestVehiclePolicy
+import ksl.modeling.fleet.policies.AssignmentPolicyIfc
+import ksl.modeling.fleet.policies.BatchedAssignmentPolicy
+import ksl.modeling.fleet.policies.ContractNetAssignmentPolicy
+import ksl.modeling.fleet.policies.FurthestVehiclePolicy
+import ksl.modeling.fleet.policies.LeastUsedVehiclePolicy
+import ksl.modeling.fleet.policies.NearestVehiclePolicy
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.LinkType
@@ -135,7 +135,7 @@ object DispatchingRuleComparison {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(from)
-                val result = transportByAgv(agv, destination = SHIPPING, origin = from)
+                val result = transportByFleet(agv, destination = SHIPPING, origin = from)
                 waitForVehicle.value = result.waitForAssignment + result.waitForArrival
                 timeInSystem.value = time - arrived
                 delivered.increment()

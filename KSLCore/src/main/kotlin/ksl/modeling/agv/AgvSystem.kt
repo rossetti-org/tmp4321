@@ -17,8 +17,11 @@
  */
 package ksl.modeling.agv
 
-import ksl.modeling.agv.policies.AssignmentPolicyIfc
-import ksl.modeling.agv.policies.NearestVehiclePolicy
+import ksl.modeling.fleet.FleetSystem
+import ksl.modeling.fleet.FleetVehicle
+
+import ksl.modeling.fleet.policies.AssignmentPolicyIfc
+import ksl.modeling.fleet.policies.NearestVehiclePolicy
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathSpace
 import ksl.modeling.guidedpath.rules.FIFOZoneContentionRule

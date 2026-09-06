@@ -22,7 +22,7 @@ import ch.qos.logback.classic.Logger
 import ksl.modeling.agent.AgentModel
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
-import ksl.modeling.agv.policies.ParkInPlaceDisposition
+import ksl.modeling.fleet.policies.ParkInPlaceDisposition
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.rules.ParkInPlaceRule
 import ksl.modeling.guidedpath.rules.StartOfZoneControl
@@ -198,7 +198,7 @@ class QueueingLimitsTest {
         private inner class Part : Entity() {
             val move = process(isDefaultProcess = true) {
                 currentLocation = network.requireLocation("P")
-                val r = transportByAgv(agv, destination = "Q", origin = "P")
+                val r = transportByFleet(agv, destination = "Q", origin = "P")
                 waitForVehicle.value = r.waitForAssignment
                 service.value = r.waitForArrival + r.timeAboard
             }

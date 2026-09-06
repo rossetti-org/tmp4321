@@ -1,11 +1,11 @@
 package ksl.examples.general.agv
 
 import ksl.modeling.agv.AgvSystem
-import ksl.modeling.agv.AgvTransportResult
+import ksl.modeling.fleet.FleetTransportResult
 import ksl.modeling.agv.AgvVehicle
-import ksl.modeling.agv.policies.AssignmentPolicyIfc
-import ksl.modeling.agv.policies.NearestVehiclePolicy
-import ksl.modeling.agv.policies.ReassigningPolicy
+import ksl.modeling.fleet.policies.AssignmentPolicyIfc
+import ksl.modeling.fleet.policies.NearestVehiclePolicy
+import ksl.modeling.fleet.policies.ReassigningPolicy
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.LinkType
@@ -100,12 +100,12 @@ object RetaskingInFlightExample {
             agv, TransporterPlacement.At(DEPOT), ConstantRV(10.0), name = "Cart"
         ).apply { homeBase = DEPOT }
 
-        val delivered = linkedMapOf<String, AgvTransportResult>()
+        val delivered = linkedMapOf<String, FleetTransportResult>()
 
         inner class Load(private val label: String, private val from: String) : Entity(label) {
             val production = process(isDefaultProcess = true) {
                 currentLocation = network.requireLocation(from)
-                delivered[label] = transportByAgv(agv, destination = SHIPPING, origin = from)
+                delivered[label] = transportByFleet(agv, destination = SHIPPING, origin = from)
             }
         }
 

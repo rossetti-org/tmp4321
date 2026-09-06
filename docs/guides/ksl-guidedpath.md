@@ -467,7 +467,7 @@ system.statisticalReportingForHoldQueues(true)   // for debugging a model that s
 ```
 
 `drivingHoldQ` is empty here and is not dead weight: it is where the
-[active subsystem's](ksl-agv.md) vehicle agents wait for their own body to
+[active subsystem's](ksl-fleet.md) vehicle agents wait for their own body to
 finish a leg — including a leg with nothing aboard, which is a wait neither
 of the other two describes.
 
@@ -824,7 +824,7 @@ dispatching moves around is the larger.
 
 ## 7. See also
 
-- [`ksl-agv`](ksl-agv.md) — the **active** paradigm over this same
+- [`ksl-fleet`](ksl-fleet.md) — the **active** paradigm over this same
   physical world: vehicles that decide for themselves, a dispatcher with a
   process of its own, and the batching, negotiation and re-tasking that a
   pool's allocation rule cannot express. Everything in this guide is true
