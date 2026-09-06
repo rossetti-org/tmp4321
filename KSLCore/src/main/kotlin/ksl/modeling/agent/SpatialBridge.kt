@@ -127,6 +127,22 @@ class ProjectionSpatialModel(
     }
 
     /**
+     *  A projection can always say where between two points is, and it takes the delta through the
+     *  projection so that a torus interpolates the short way round -- which is the way an agent
+     *  crossing it would actually go.
+     */
+    override fun interpolate(
+        fromLocation: LocationIfc,
+        toLocation: LocationIfc,
+        fraction: Double,
+    ): LocationIfc {
+        val f = (fromLocation as ProjectedLocation).point
+        val t = (toLocation as ProjectedLocation).point
+        val d = projection.delta(f, t)
+        return ProjectedLocation(Point2D(f.x + d.x * fraction, f.y + d.y * fraction))
+    }
+
+    /**
      *  A [LocationIfc] backed by an agent-layer [Point2D]. Created
      *  via [ProjectionSpatialModel.location]; users do not
      *  instantiate directly.

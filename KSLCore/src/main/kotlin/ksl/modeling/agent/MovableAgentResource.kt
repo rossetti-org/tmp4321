@@ -21,10 +21,11 @@ package ksl.modeling.agent
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.RequestQ
+import ksl.modeling.spatial.InterpolatedMovement
 import ksl.modeling.spatial.LocationIfc
+import ksl.modeling.spatial.MovePathIfc
 import ksl.modeling.spatial.MovePurpose
 import ksl.modeling.spatial.VehicleMovementIfc
-import ksl.simulation.KSLEvent
 
 /**
  *  An [AgentResource] whose position is tracked in a
@@ -176,46 +177,59 @@ open class MovableAgentResource @JvmOverloads constructor(
     // that does not suspend, handing back the queue its caller must wait in -- because a fleet's
     // control loop has to be able to command a vehicle from somewhere other than the vehicle's
     // process, and because the two ends of a wait must not disagree about where the wake comes
-    // from. So the integration here is driven by scheduled events owned by the vehicle, with the
-    // same step semantics `awaitTravel` has: plan a direction and a step distance, wait
-    // `step/velocity`, advance, re-plan.
+    // from.
     //
-    // Two consequences worth stating rather than discovering:
-    //
-    //  - A redirection is observed at the next step boundary, exactly as `TravelHandle.redirect`
-    //    is, so the substrate's own granularity is what the latency is. The guide path defers a
-    //    turn to the next zone boundary for the same reason: something between two places cannot
-    //    stop and turn.
-    //  - The step in flight when a redirection arrives is completed along the direction it was
-    //    planned with. `awaitTravel` re-reads the destination after its delay and would teleport a
-    //    vehicle redirected during its *final* step; this does not.
+    // So the clockwork is `InterpolatedMovement`, which lives in `ksl.modeling.spatial` -- below
+    // this package and below `guidedpath`, which is where a thing both of them need belongs. What
+    // is here is the *geometry*: how far apart two points on this projection are, where a fraction
+    // of the way between them is, and how to put the resource there. `travelTo` and `awaitTravel`
+    // are untouched and remain the way an agent moves itself; this is the way a fleet moves it.
 
     /** The plane this vehicle's positions are expressed in. One per projection. */
-    val plane: ksl.modeling.agent.ProjectionSpatialModel
+    val plane: ProjectionSpatialModel
         get() = space.spatialModel
 
-    private val myTravelQ = HoldQueue(this, "${this.name}:TravelQ")
+    /** This projection, as a geometry the shared clockwork can move through. */
+    private inner class ProjectionPath : MovePathIfc {
 
-    init {
-        myTravelQ.waitTimeStatOption = false
-        myTravelQ.defaultReportingOption = false
+        override val positionNow: LocationIfc
+            get() = plane.location(position)
+
+        override fun distanceBetween(from: LocationIfc, to: LocationIfc): Double =
+            space.distance(pointOf(from), pointOf(to))
+
+        override fun isReachable(destination: LocationIfc): Boolean {
+            if (destination !is ProjectionSpatialModel.ProjectedLocation) return false
+            if (destination.spatialModel !== plane) return false
+            val p = destination.point
+            return space.torus || (p.x in space.xRange && p.y in space.yRange)
+        }
+
+        /**
+         *  A plane can always say where between two points is. The delta is taken through the
+         *  projection so that a torus interpolates the short way round, which is the way the
+         *  vehicle would actually go.
+         */
+        override fun positionAlong(from: LocationIfc, to: LocationIfc, fraction: Double): LocationIfc {
+            val f = pointOf(from)
+            val d = space.delta(f, pointOf(to))
+            return plane.location(Point2D(f.x + d.x * fraction, f.y + d.y * fraction))
+        }
+
+        override fun placeAt(location: LocationIfc) {
+            space.moveTo(this@MovableAgentResource, pointOf(location))
+        }
+
+        private fun pointOf(location: LocationIfc): Point2D =
+            (location as? ProjectionSpatialModel.ProjectedLocation)?.point
+                ?: error(
+                    "location (${location.name}) is not a location on projection " +
+                            "(${space.name}); make one with space.spatialModel.location(x, y)"
+                )
     }
 
-    /** Where the journey in progress is going, or null when there is none. */
-    private var target: Point2D? = null
-
-    /** Who is to be resumed when it ends, however it ends. */
-    private var waiter: ProcessModel.Entity? = null
-
-    private var stepEvent: KSLEvent<Nothing>? = null
-    private var plannedStep: Double = 0.0
-    private var plannedDirection: Point2D = Point2D.ORIGIN
-    private var plannedTarget: Point2D? = null
-    private var plannedIsFinal: Boolean = false
-
-    private var myDistanceTravelled: Double = 0.0
-    private var myOperatingTime: Double = 0.0
-    private var myHalted: Boolean = false
+    private val myMovement: InterpolatedMovement =
+        InterpolatedMovement(this, ProjectionPath(), stepSize, { velocity })
 
     /** Where the vehicle is now, interpolated to this instant by the step that last completed. */
     override val positionNow: LocationIfc
@@ -226,90 +240,51 @@ open class MovableAgentResource @JvmOverloads constructor(
      *  would take. Wraps where the projection is a torus, because there the short way round is the
      *  way it would actually go.
      */
-    override fun pathDistanceTo(destination: LocationIfc): Double {
-        val to = pointOf(destination)
-        return space.distance(position, to)
-    }
+    override fun pathDistanceTo(destination: LocationIfc): Double =
+        space.distance(position, pointOf(destination))
 
     /** True for any location on this plane and inside the projection's bounds. */
     override fun isReachable(destination: LocationIfc): Boolean {
         if (destination !is ProjectionSpatialModel.ProjectedLocation) return false
         if (destination.spatialModel !== plane) return false
         val p = destination.point
-        return space.torus ||
-                (p.x in space.xRange && p.y in space.yRange)
+        return space.torus || (p.x in space.xRange && p.y in space.yRange)
     }
 
-    /**
-     *  Sends the vehicle to [destination] and hands back the queue to wait in.
-     *
-     *  A second call while a journey is under way is a **redirection**: the target changes and the
-     *  running step chain re-plans from wherever the vehicle is when its current step completes.
-     *  The odometer keeps growing across it, because a vehicle that turns round has still covered
-     *  the ground it covered.
-     *
-     *  @return the queue to suspend [waiter] in, or null when the vehicle was already there
-     */
     override fun beginTravelTo(
         destination: LocationIfc,
         purpose: MovePurpose,
         waiter: ProcessModel.Entity
     ): HoldQueue? {
-        require(isReachable(destination)) {
-            "MovableAgentResource (${this.name}) cannot reach (${destination.name}): it is not a " +
-                    "location on projection (${space.name})."
-        }
-        val to = pointOf(destination)
-        val underway = target != null && !myHalted
-        if (!underway && space.distance(position, to) <= ARRIVAL_TOLERANCE) return null
-        this.waiter = waiter
-        target = to
-        myHalted = false
-        // Only a journey that is not already stepping needs starting. One that is re-plans at its
-        // next boundary, which is what makes a second call a redirection rather than a restart.
-        if (stepEvent == null) planNextStep()
-        return myTravelQ
+        myMovement.stepSize = stepSize
+        return myMovement.beginTravelTo(destination, waiter)
     }
 
-    /** True while the vehicle is stopped short of where it was going, with nothing scheduled. */
     override val isHalted: Boolean
-        get() = myHalted
+        get() = myMovement.isHalted
 
     /**
      *  Stops the vehicle where it stands and wakes whoever was waiting for it.
      *
      *  The substrate's way of stopping a vehicle part way -- the counterpart of a guide path's
-     *  movement gate refusing at a boundary. Whoever called this owns starting it again, through
-     *  [resumeHalted] or a fresh [beginTravelTo]. Harmless when no journey is under way.
+     *  movement gate refusing at a boundary. Whoever called this owns starting it again.
      */
-    fun halt() {
-        if (target == null || myHalted) return
-        stepEvent?.cancel = true
-        stepEvent = null
-        myHalted = true
-        endTheWait()
-    }
+    fun halt() = myMovement.halt()
 
-    /** Starts a halted vehicle again from where it stopped. Harmless on one that is not halted. */
-    override fun resumeHalted() {
-        if (!myHalted) return
-        myHalted = false
-        if (target != null && stepEvent == null) planNextStep()
-    }
+    override fun resumeHalted() = myMovement.resumeHalted()
 
-    /** How far this vehicle has travelled this replication. Never decreases. */
     override val distanceTravelled: Double
-        get() = myDistanceTravelled
+        get() = myMovement.distanceTravelled
 
     /**
      *  How long it has spent travelling this replication.
      *
      *  Accumulated a step at a time, so it is a step function rather than a continuous one. It does
-     *  not include time seized-but-standing: a fleet asking what a vehicle has *done* means the
-     *  moving, and what it has been held for is the resource's own busy time.
+     *  not include time seized-but-standing: what a vehicle has been *held* for is the resource's
+     *  own busy time and is already reported as that.
      */
     override val operatingTime: Double
-        get() = myOperatingTime
+        get() = myMovement.operatingTime
 
     private fun pointOf(location: LocationIfc): Point2D =
         (location as? ProjectionSpatialModel.ProjectedLocation)?.point
@@ -317,81 +292,4 @@ open class MovableAgentResource @JvmOverloads constructor(
                 "location (${location.name}) is not a location on projection (${space.name}); " +
                         "make one with space.spatialModel.location(x, y)"
             )
-
-    /**
-     *  Plans one step and schedules it: a direction and a distance now, the movement when the time
-     *  for it has passed.
-     *
-     *  Planned before the delay rather than after it so that the vehicle covers the ground the
-     *  elapsed time paid for, which is also what makes a redirection cost the step it interrupts
-     *  rather than being free.
-     */
-    private fun planNextStep() {
-        val to = target ?: return
-        val from = position
-        val remaining = space.distance(from, to)
-        if (remaining <= ARRIVAL_TOLERANCE) {
-            arrive(to)
-            return
-        }
-        val step = minOf(stepSize, remaining)
-        plannedStep = step
-        plannedTarget = to
-        plannedIsFinal = step >= remaining - ARRIVAL_TOLERANCE
-        plannedDirection = space.delta(from, to).normalized()
-        stepEvent = schedule(this::advance, step / velocity)
-    }
-
-    @Suppress("UNUSED_PARAMETER")
-    private fun advance(event: KSLEvent<Nothing>) {
-        stepEvent = null
-        val planned = plannedTarget ?: return
-        val from = position
-        val next = if (plannedIsFinal) {
-            planned
-        } else {
-            Point2D(
-                from.x + plannedDirection.x * plannedStep,
-                from.y + plannedDirection.y * plannedStep
-            )
-        }
-        space.moveTo(this, next)
-        myDistanceTravelled += plannedStep
-        myOperatingTime += plannedStep / velocity
-        // Re-planning from here is what observes a redirection: `target` may no longer be the
-        // target this step was planned against.
-        val to = target
-        if (to != null && space.distance(next, to) <= ARRIVAL_TOLERANCE) {
-            arrive(to)
-        } else {
-            planNextStep()
-        }
-    }
-
-    private fun arrive(at: Point2D) {
-        space.moveTo(this, at)
-        target = null
-        plannedTarget = null
-        endTheWait()
-    }
-
-    private fun endTheWait() {
-        val w = waiter ?: return
-        waiter = null
-        if (myTravelQ.contains(w)) myTravelQ.removeAndResume(w)
-    }
-
-    override fun initialize() {
-        super.initialize()
-        target = null
-        waiter = null
-        stepEvent = null
-        plannedTarget = null
-        myDistanceTravelled = 0.0
-        myOperatingTime = 0.0
-        myHalted = false
-    }
 }
-
-/** Below this a vehicle is treated as being there. Coordinate units, not a fraction. */
-private const val ARRIVAL_TOLERANCE = 1e-9

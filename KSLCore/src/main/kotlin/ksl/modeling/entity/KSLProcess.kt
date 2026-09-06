@@ -2578,6 +2578,40 @@ interface KSLProcessBuilder {
         )
     }
 
+    // ---- driving a vehicle through the movement seam --------------------------------------------
+
+    /**
+     *  Sends [vehicle] to [destination] and waits for the journey to end, however it ends.
+     *
+     *  The one verb written against [ksl.modeling.spatial.VehicleMovementIfc] rather than against a
+     *  substrate, so a process that drives a vehicle does not have to know whether it runs on a
+     *  guide path, a continuous projection or a free path. What it buys over `move` is that the
+     *  journey **can be stopped part way**: a breakdown, a flat battery or a controller's recall
+     *  ends the wait short of the destination, and this reports that rather than pretending it
+     *  arrived.
+     *
+     *  `move`, `moveWith` and `transportWith` are unchanged and are still the way to move a
+     *  resource directly; they are a single delay to the destination and cannot be interrupted.
+     *
+     *  @param vehicle whatever is being moved
+     *  @param destination where it is to go
+     *  @param purpose what the journey is for. Never what the vehicle is carrying, which the
+     *    substrate reads for itself
+     *  @param suspensionName names this suspension point when a process has several
+     *  @return true when it arrived, false when something stopped it short. A caller that ignores
+     *    the answer gets the behaviour `move` has always had
+     */
+    suspend fun driveTo(
+        vehicle: ksl.modeling.spatial.VehicleMovementIfc,
+        destination: ksl.modeling.spatial.LocationIfc,
+        purpose: ksl.modeling.spatial.MovePurpose = ksl.modeling.spatial.MovePurpose.SERVICE,
+        suspensionName: String? = null
+    ): Boolean {
+        val q = vehicle.beginTravelTo(destination, purpose, entity) ?: return true
+        hold(q, suspensionName = suspensionName ?: "drivingTo:${destination.name}")
+        return !vehicle.isHalted
+    }
+
     // ---- riding a declared service -------------------------------------------------------------
     //
     // The third protocol, and the one that is neither of the other two. Under the passive verbs the

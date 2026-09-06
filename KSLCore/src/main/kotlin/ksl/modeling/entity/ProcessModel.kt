@@ -2484,6 +2484,12 @@ open class ProcessModel(parent: ModelElement, name: String? = null) : ModelEleme
                 inMoveDelay = false
                 spatialElement.currentLocation = toLoc
                 spatialElement.isMoving = false
+                // A movable resource's odometers are about the resource, not about which verb
+                // happened to move it. This path is a single delay and does not go through the
+                // movement seam's clockwork, so the journey is booked here instead; without it a
+                // model that uses `move` would report a vehicle that never travelled.
+                (spatialElement.modelElement as? ksl.modeling.spatial.MovableResource)
+                    ?.recordMove(d, t)
                 logger.trace { "r = ${model.currentReplicationNumber} : $time > spatial element ${spatialElement.spatialName} completed move to ${toLoc.name}" }
                 emitAnimation { AnimationEvent.SpatialElementMoveCompleted(time, spatialElement.spatialName, toLoc.x, toLoc.y, toLoc.z) }
             }

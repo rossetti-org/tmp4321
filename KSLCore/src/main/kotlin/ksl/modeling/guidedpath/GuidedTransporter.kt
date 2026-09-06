@@ -20,6 +20,7 @@ package ksl.modeling.guidedpath
 import ksl.modeling.entity.HoldQueue
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.Resource
+import ksl.modeling.entity.ShiftControl
 import ksl.modeling.guidedpath.exceptions.GuidedPathNetworkException
 import ksl.modeling.guidedpath.routing.Route
 import ksl.modeling.guidedpath.rules.EndOfZoneControl
@@ -1021,6 +1022,34 @@ class GuidedTransporter @JvmOverloads constructor(
             "Transporter (${this.name}) is allocated and cannot be sent somewhere on its own."
         }
         return system.startMove(this, destinationName, MovePurpose.HOME)
+    }
+
+    // ---- shifts ---------------------------------------------------------------------------------
+
+    private val myShift: ShiftControl = ShiftControl(this)
+
+    /** True while this transporter has been taken off shift. */
+    val isOffShift: Boolean
+        get() = myShift.isOffShift
+
+    /**
+     *  Takes this transporter off shift: it cannot be allocated again until [goOnShift], and
+     *  requests for it wait in whatever pool queue they were made against.
+     *
+     *  **It stays where it is and keeps the space it occupies.** A transporter off shift is not
+     *  gone from the guide path; it is a vehicle standing in an aisle, which is what a real one
+     *  parked at the end of a shift is, and the blocking that follows is a fact about the layout
+     *  rather than an artefact. Park it somewhere out of the way first, with [sendTo], if that is
+     *  what the site does.
+     */
+    fun goOffShift() = myShift.goOffShift()
+
+    /** Puts this transporter back on shift. */
+    fun goOnShift() = myShift.goOnShift()
+
+    override fun initialize() {
+        super.initialize()
+        myShift.initialize()
     }
 
     override fun toString(): String =
