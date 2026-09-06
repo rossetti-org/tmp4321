@@ -159,6 +159,7 @@ open class MovableResource @JvmOverloads constructor(
         homeBase = initialHomeBase
         initializeSpatialElement()
         myLivePosition = mySpatialElement.currentLocation
+        towVelocity = null
         myShift.initialize()
     }
 
@@ -303,8 +304,30 @@ open class MovableResource @JvmOverloads constructor(
         }
     }
 
-    private val myMovement: InterpolatedMovement =
-        InterpolatedMovement(this, FreePath(), stepSize, { myVelocity.value }, { endOfSeamJourney() })
+    /**
+     *  How fast somebody else is pushing it, or null when it is moving under its own power.
+     *
+     *  A tow is a journey like any other through the same geometry; the only thing that differs is
+     *  who chose the speed. Kept here rather than passed per journey because the seam commands a
+     *  destination and a purpose, never a velocity -- a fleet knows what a journey is *for* and not
+     *  how fast this particular vehicle should make it.
+     */
+    internal var towVelocity: Double? = null
+
+    private val myMovement: InterpolatedMovement = InterpolatedMovement(
+        this, FreePath(), stepSize, { towVelocity ?: myVelocity.value }, { endOfSeamJourney() }
+    )
+
+    /** Where a waiter suspends while this resource is under way, for whoever needs to find it. */
+    internal val travelQueue: ksl.modeling.entity.HoldQueue
+        get() = myMovement.travelQ
+
+    /** The veto asked at every step of a journey. See [InterpolatedMovement.continuationGate]. */
+    internal var continuationGate: (() -> Boolean)?
+        get() = myMovement.continuationGate
+        set(value) {
+            myMovement.continuationGate = value
+        }
 
     /**
      *  How far apart the seam's decision points are, in the spatial model's own distance units.

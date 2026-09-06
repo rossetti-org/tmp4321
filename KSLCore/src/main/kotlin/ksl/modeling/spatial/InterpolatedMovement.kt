@@ -137,6 +137,17 @@ class InterpolatedMovement @JvmOverloads constructor(
     val isTravelling: Boolean
         get() = destination != null
 
+    /**
+     * A veto asked at every step boundary: may the vehicle go on past this one?
+     *
+     * What a guide path's movement gate is, on a substrate whose decision points are interpolation
+     * steps rather than zone boundaries. Answering false stops the vehicle where it stands, exactly
+     * as [halt] does -- so a flat battery or a breakdown is discovered part way through a journey
+     * rather than at the end of it, which is the whole reason a substrate has decision points at
+     * all. Null asks nothing, which is the default and costs nothing.
+     */
+    var continuationGate: (() -> Boolean)? = null
+
     /** How far the vehicle has travelled this replication. Never decreases. */
     val distanceTravelled: Double
         get() = myDistanceTravelled
@@ -178,8 +189,7 @@ class InterpolatedMovement @JvmOverloads constructor(
      */
     fun halt() {
         if (!isTravelling || myHalted) return
-        stepEvent?.cancel = true
-        stepEvent = null
+        cancelPendingStep()
         // The vehicle was moving right up to this instant, so it is credited with the part of the
         // step it had actually made. A *redirection* completes the step it interrupts instead,
         // because a redirection does not stop the vehicle and something between two places cannot
@@ -200,8 +210,7 @@ class InterpolatedMovement @JvmOverloads constructor(
     /** Forgets any journey and zeroes the odometers, at the start of every replication. */
     override fun initialize() {
         super.initialize()
-        stepEvent?.cancel = true
-        stepEvent = null
+        cancelPendingStep()
         destination = null
         plannedTarget = null
         legFrom = null
@@ -224,6 +233,20 @@ class InterpolatedMovement @JvmOverloads constructor(
         require(duration >= 0.0) { "A recorded duration cannot be negative, but was $duration." }
         myDistanceTravelled += distance
         myOperatingTime += duration
+    }
+
+    /**
+     * Takes the step in flight off the calendar, if there is one that is still on it.
+     *
+     * The guard matters at the start of a replication: a vehicle that was mid-journey when the
+     * previous horizon fell still holds a reference to a step that the executive has already
+     * discarded, and cancelling an event that is not scheduled raises. Found by the first study to
+     * run more than one replication with a vehicle still moving at the end of it.
+     */
+    private fun cancelPendingStep() {
+        val e = stepEvent
+        stepEvent = null
+        if (e != null && e.isScheduled) e.cancel = true
     }
 
     /** Starts a leg from wherever the vehicle is now to wherever it is now going. */
@@ -291,6 +314,12 @@ class InterpolatedMovement @JvmOverloads constructor(
         val fraction = (travelledOnLeg / legLength).coerceIn(0.0, 1.0)
         val next = if (fraction >= 1.0 - 1e-12) planned else path.positionAlong(from, planned, fraction)
         if (next != null) path.placeAt(next)
+        // Asked here, at the step boundary, and before the next step is planned: a vehicle told it
+        // may not go on stops where this step left it.
+        if (continuationGate?.invoke() == false) {
+            halt()
+            return
+        }
         // Re-planning from here is what observes a redirection: `destination` may no longer be the
         // target this step was planned against.
         val to = destination

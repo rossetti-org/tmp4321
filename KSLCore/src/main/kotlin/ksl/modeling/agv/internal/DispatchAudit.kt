@@ -270,8 +270,11 @@ internal class DispatchAudit(
         val completed = dispatcher.numTasksCompleted.value
         val cancelled = dispatcher.numTasksCancelled.value
         val queued = dispatcher.board.tasks.size
-        val underway = system.vehicles.count {
-            it.assignments.any { a -> a.state == AssignmentState.IN_PROGRESS }
+        // Counted per ASSIGNMENT, not per vehicle. A vehicle carrying three loads is three tasks
+        // under way, and counting it once makes two of them look lost -- the same defect family as
+        // every other place a scalar became a collection, and the last place it was still hiding.
+        val underway = system.vehicles.sumOf { v ->
+            v.assignments.count { it.state == AssignmentState.IN_PROGRESS }
         }
         val accountedFor = completed + cancelled + queued + underway
         if (posted != accountedFor) {

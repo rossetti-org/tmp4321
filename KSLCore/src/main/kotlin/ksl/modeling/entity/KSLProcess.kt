@@ -35,7 +35,7 @@ import ksl.modeling.entity.ProcessModel.Companion.YIELD_PRIORITY
 import ksl.modeling.entity.ProcessModel.Entity
 import ksl.modeling.queue.Queue
 import ksl.modeling.guidedpath.*
-import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.FleetSystem
 import ksl.modeling.agv.FleetVehicle
 import ksl.modeling.agv.AgvTransportResult
 import ksl.modeling.agv.Dispatcher
@@ -2492,7 +2492,7 @@ interface KSLProcessBuilder {
      * @return what the transport cost
      */
     suspend fun transportByAgv(
-        system: AgvSystem,
+        system: FleetSystem,
         destination: String,
         origin: String = entity.currentLocation.name,
         loadingDelay: GetValueIfc = ConstantRV.ZERO,
@@ -2517,7 +2517,7 @@ interface KSLProcessBuilder {
      * @return the posted task, which is also where its wait is recorded
      */
     suspend fun requestAgvTransport(
-        system: AgvSystem,
+        system: FleetSystem,
         destination: String,
         origin: String = entity.currentLocation.name,
         loadingDelay: GetValueIfc = ConstantRV.ZERO,

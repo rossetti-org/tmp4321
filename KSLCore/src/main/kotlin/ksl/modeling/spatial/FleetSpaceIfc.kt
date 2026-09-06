@@ -68,14 +68,17 @@ interface FleetSpaceIfc {
  * places a vehicle cannot get to. A layout with genuine unreachability -- a guide path -- says so
  * for itself rather than through this.
  *
- * @param model the spatial model whose [SpatialModel.namedLocations] are the places
+ * @param model the spatial model the places belong to and whose metric measures between them
+ * @param places the named places a vehicle can be sent to. Defaults to the model's own
+ *   [SpatialModel.namedLocations], which a `DistancesModel` maintains and a plane does not: a plane
+ *   has no bounded set of places, so a fleet over one says which points it calls at
  */
-class SpatialModelFleetSpace(
-    val model: SpatialModel
+class SpatialModelFleetSpace @JvmOverloads constructor(
+    val model: SpatialModel,
+    places: List<LocationIfc> = model.namedLocations
 ) : FleetSpaceIfc {
 
-    private val byName: Map<String, LocationIfc> =
-        model.namedLocations.associateBy { it.name }
+    private val byName: Map<String, LocationIfc> = places.associateBy { it.name }
 
     init {
         require(byName.isNotEmpty()) {

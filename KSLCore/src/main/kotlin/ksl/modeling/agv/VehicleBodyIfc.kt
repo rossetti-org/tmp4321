@@ -39,6 +39,12 @@ import ksl.modeling.variable.TWResponseCIfc
  * **`internal`, deliberately.** [board] and [alight] are how a load gets on and off, and a manifest
  * a modeller can edit directly is a manifest that will disagree with the statistics derived from
  * it. The library supplies the bodies; a modeller supplies vehicles.
+ *
+ * **A body must forget what is aboard it between replications**, and nothing in this interface can
+ * make it: an interface has no hook the framework calls. Being a `ModelElement` is how -- a guide
+ * path's transporter is one already, and `FreePathBody` is one for no other reason. A manifest that
+ * survives a replication starts the next one with a vehicle that has no room and no explanation for
+ * it, which is a defect that only appears on the second replication.
  */
 internal interface VehicleBodyIfc : VehicleMovementIfc {
 
