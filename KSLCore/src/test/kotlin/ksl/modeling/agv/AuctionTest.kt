@@ -1,5 +1,6 @@
 package ksl.modeling.agv
 
+import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.examples.general.guidedpath.SimpleAgvNetwork
 import ksl.modeling.agv.policies.Bid
 import ksl.modeling.agv.policies.BidPolicyIfc
@@ -36,7 +37,7 @@ class AuctionTest {
     /** Bids the vehicle's own name length: nothing to do with geography, everything to do with the
      *  fact that the vehicle decides. Rigged so `Cart1` -- the network-*further* one -- wins. */
     private class PreferByNameBid(private val favoured: String) : BidPolicyIfc {
-        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid =
+        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid =
             Bid(vehicle, if (vehicle.name == favoured) 0.0 else 1000.0, "favours $favoured")
     }
 

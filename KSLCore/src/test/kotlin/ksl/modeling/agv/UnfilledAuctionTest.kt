@@ -1,5 +1,6 @@
 package ksl.modeling.agv
 
+import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.examples.general.guidedpath.SimpleAgvNetwork
 import ksl.modeling.agv.policies.Bid
 import ksl.modeling.agv.policies.BidPolicyIfc
@@ -51,9 +52,9 @@ class UnfilledAuctionTest {
     /** Declines until the model says the fleet is accepting work. Silence is how a vehicle
      *  declines -- there is deliberately no "I decline" message for a dispatcher to interpret. */
     private class AcceptingWorkBid(private val acceptingWork: () -> Boolean) : BidPolicyIfc {
-        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
+        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
             if (!acceptingWork()) return null
-            return NetworkDistanceBid().bid(vehicle, cfp, network)
+            return NetworkDistanceBid().bid(vehicle, cfp, space)
         }
     }
 

@@ -6,7 +6,7 @@ import ksl.modeling.agv.Dispatcher
 import ksl.modeling.agv.TaskBoard
 import ksl.modeling.agent.contractNet
 import ksl.modeling.entity.KSLProcessBuilder
-import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.utilities.random.rng.RNStreamIfc
 
 /**
@@ -53,7 +53,7 @@ interface AssignmentPolicyIfc {
 class DispatchContext internal constructor(
     val board: TaskBoard,
     val available: List<AgvVehicle>,
-    val network: GuidedPathNetwork,
+    val space: FleetSpaceIfc,
     val time: Double,
     internal val dispatcher: ksl.modeling.agv.Dispatcher
 ) {
@@ -65,7 +65,7 @@ class DispatchContext internal constructor(
      * it eagerly would make every dispatching pass pay for reachability queries that nothing reads.
      */
     val feasible: FeasibleAssignments
-        get() = FeasibleAssignments(board.unassigned, available, network)
+        get() = FeasibleAssignments(board.unassigned, available, space)
 
     // There is deliberately no `waitFor` here. A policy receives the process builder as its
     // receiver, so it consumes simulated time with `delay` directly -- the same verb it would use
@@ -140,7 +140,7 @@ class DispatchContext internal constructor(
      * a policy comparing distances naturally never picks a vehicle that cannot get there.
      */
     fun distanceTo(vehicle: AgvVehicle, location: String): Double {
-        val there = network.location(location) ?: return Double.POSITIVE_INFINITY
+        val there = space.location(location) ?: return Double.POSITIVE_INFINITY
         if (!vehicle.movement.isReachable(there)) return Double.POSITIVE_INFINITY
         return vehicle.movement.pathDistanceTo(there)
     }
@@ -303,7 +303,7 @@ class BatchedAssignmentPolicy(
         // vehicle list has not, and a vehicle that has since been given work must not be proposed
         // again. Rebuilding from the dispatcher's current state is what keeps this honest.
         val fresh = DispatchContext(
-            context.board, context.dispatcher.availableVehicles, context.network,
+            context.board, context.dispatcher.availableVehicles, context.space,
             context.dispatcher.time, context.dispatcher
         )
         return with(inner) { assign(fresh) }
@@ -313,7 +313,7 @@ class BatchedAssignmentPolicy(
 }
 
 /**
- * Greedy pairing of tasks to vehicles by a score derived from the network distance to the pickup.
+ * Greedy pairing of tasks to vehicles by a score derived from the distance to the pickup.
  *
  * Shared by the nearest and furthest rules because they differ only in the sign of that score, and
  * because the part worth getting right once is the part neither is about: skipping unreachable
@@ -431,7 +431,7 @@ class ContractNetAssignmentPolicy(
             val stillFree = context.available.filter { it !in spokenFor }
             if (stillFree.isEmpty()) break
             val round = DispatchContext(
-                context.board, stillFree, context.network, context.dispatcher.time, context.dispatcher
+                context.board, stillFree, context.space, context.dispatcher.time, context.dispatcher
             )
             val cfp = CallForProposals(task, context.dispatcher.time)
             // SUSPENDS for the deadline. Written at the call site so the cost of negotiating is
@@ -487,7 +487,7 @@ class ScoringAssignmentPolicy(
             val set = FeasibleAssignments(
                 context.board.unassigned.filter { it !in done },
                 context.available.filter { it !in taken },
-                context.network
+                context.space
             )
             val best = set.best { score(it, set) } ?: break
             taken.add(best.vehicle)
@@ -512,7 +512,7 @@ class ScoringAssignmentPolicy(
  * all justifies a swap, and a fleet under load will churn: revoke, redirect, revoke again as the
  * board shifts under it, with vehicles spending their time changing their minds. Requiring the
  * saving to exceed a stated distance means a swap has to be worth making. Set it in the same units
- * as the network's link lengths.
+ * as the layout's own distances.
  *
  * Only assignments whose load is not yet aboard are considered; once a vehicle has the load it
  * finishes the delivery, which the assignment's own guard enforces rather than this policy
@@ -689,21 +689,21 @@ class ChargeReservePolicy @JvmOverloads constructor(
                     "assignment through while appearing to guard them. Declare a charger with " +
                     "addCharger, or drop the policy."
         }
-        val network = context.network
+        val space = context.space
         val task = proposal.task
-        val pickup = network.location(task.pickupLocation) ?: return false
-        val setDown = network.location(task.destination) ?: return false
+        val pickup = space.location(task.pickupLocation) ?: return false
+        val setDown = space.location(task.destination) ?: return false
         val charger = vehicle.system.nearestCharger(task.destination)
-            ?.let { network.location(it) }
+            ?.let { space.location(it) }
             ?: return false
-        if (!vehicle.movement.isReachable(pickup) || !network.isReachable(pickup, setDown) ||
-            !network.isReachable(setDown, charger)
+        if (!vehicle.movement.isReachable(pickup) || !space.isReachable(pickup, setDown) ||
+            !space.isReachable(setDown, charger)
         ) {
             return false
         }
         val distance = vehicle.movement.pathDistanceTo(pickup) +
-                network.distance(pickup, setDown) +
-                network.distance(setDown, charger)
+                space.distance(pickup, setDown) +
+                space.distance(setDown, charger)
         val velocity = vehicle.nominalVelocity
         if (velocity <= 0.0) return false
         val needed = battery.drawFor(distance, distance / velocity) * safetyFactor

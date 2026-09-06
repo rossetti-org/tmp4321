@@ -3,7 +3,7 @@ package ksl.modeling.agv.policies
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.AssignmentProposal
 import ksl.modeling.agv.Dispatcher
-import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.spatial.FleetSpaceIfc
 
 /**
  * The vehicle-to-task matchings available at this instant, as something a policy can **enumerate and
@@ -20,7 +20,7 @@ import ksl.modeling.guidedpath.GuidedPathNetwork
  * to the task's pickup along the guide path. Everything else a modeller might mean by "feasible" —
  * enough charge, the right attachment, a shift that has begun — belongs to a bidding rule or a
  * scoring function, because those are judgements about *desirability* that vary by model, while
- * reachability is a fact about the network that does not.
+ * reachability is a fact about the space that does not.
  *
  * Cheap to construct and lazily evaluated: [candidates] is a sequence, so a policy that wants the
  * first acceptable pairing does not pay for the rest. Distances are computed on demand rather than
@@ -30,7 +30,7 @@ import ksl.modeling.guidedpath.GuidedPathNetwork
 class FeasibleAssignments internal constructor(
     private val tasks: List<Dispatcher.Task>,
     private val vehicles: List<AgvVehicle>,
-    private val network: GuidedPathNetwork
+    private val space: FleetSpaceIfc
 ) {
 
     /** How many vehicle-to-task pairings are available. Counts feasibility, so it is not simply
@@ -89,10 +89,10 @@ class FeasibleAssignments internal constructor(
      * about what is available.
      */
     fun cost(vehicle: AgvVehicle, task: Dispatcher.Task): Double {
-        val here = network.location(vehicle.currentLocationName) ?: return Double.POSITIVE_INFINITY
-        val there = network.location(task.pickupLocation) ?: return Double.POSITIVE_INFINITY
-        if (!network.isReachable(here, there)) return Double.POSITIVE_INFINITY
-        return network.distance(here, there)
+        val here = space.location(vehicle.currentLocationName) ?: return Double.POSITIVE_INFINITY
+        val there = space.location(task.pickupLocation) ?: return Double.POSITIVE_INFINITY
+        if (!space.isReachable(here, there)) return Double.POSITIVE_INFINITY
+        return space.distance(here, there)
     }
 
     /**

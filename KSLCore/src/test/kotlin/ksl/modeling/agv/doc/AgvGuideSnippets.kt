@@ -1,5 +1,6 @@
 package ksl.modeling.agv.doc
 
+import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.Battery
@@ -210,7 +211,7 @@ private object AgvGuideSnippets {
         override fun bid(
             vehicle: AgvVehicle,
             cfp: CallForProposals,
-            network: GuidedPathNetwork
+            space: FleetSpaceIfc
         ): Bid? = Bid(vehicle, vehicle.numTasksCompleted.value, note = "tasks done so far")
     }
 

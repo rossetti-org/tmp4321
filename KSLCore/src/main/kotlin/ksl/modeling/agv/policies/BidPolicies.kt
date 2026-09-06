@@ -2,7 +2,7 @@ package ksl.modeling.agv.policies
 
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.Dispatcher
-import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.spatial.FleetSpaceIfc
 
 /**
  * A dispatcher's invitation to bid on a task.
@@ -45,7 +45,7 @@ fun interface BidPolicyIfc {
      *   invent a number meaning "no", which is how sentinel values get compared as though they were
      *   costs.
      */
-    fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid?
+    fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid?
 }
 
 /**
@@ -57,8 +57,8 @@ fun interface BidPolicyIfc {
  */
 class NetworkDistanceBid : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-        val there = network.location(cfp.task.pickupLocation) ?: return null
+    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+        val there = space.location(cfp.task.pickupLocation) ?: return null
         if (!vehicle.movement.isReachable(there)) return null
         return Bid(vehicle, vehicle.movement.pathDistanceTo(there), "distance to pickup")
     }
@@ -78,14 +78,14 @@ class NetworkDistanceBid : BidPolicyIfc {
  */
 class CompletionTimeBid : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-        val pickup = network.location(cfp.task.pickupLocation) ?: return null
-        val destination = network.location(cfp.task.destination) ?: return null
+    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+        val pickup = space.location(cfp.task.pickupLocation) ?: return null
+        val destination = space.location(cfp.task.destination) ?: return null
         if (!vehicle.movement.isReachable(pickup)) return null
-        if (!network.isReachable(pickup, destination)) return null
+        if (!space.isReachable(pickup, destination)) return null
         val velocity = vehicle.nominalVelocity
         if (velocity <= 0.0) return null
-        val distance = vehicle.movement.pathDistanceTo(pickup) + network.distance(pickup, destination)
+        val distance = vehicle.movement.pathDistanceTo(pickup) + space.distance(pickup, destination)
         return Bid(vehicle, distance / velocity, "empty + loaded legs at $velocity")
     }
 
@@ -102,9 +102,9 @@ class CompletionTimeBid : BidPolicyIfc {
  */
 class DeclineWhenBusyBid(private val inner: BidPolicyIfc = NetworkDistanceBid()) : BidPolicyIfc {
 
-    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
+    override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
         if (vehicle.hasAssignment) return null
-        return inner.bid(vehicle, cfp, network)
+        return inner.bid(vehicle, cfp, space)
     }
 
     override fun toString(): String = "DeclineWhenBusyBid($inner)"

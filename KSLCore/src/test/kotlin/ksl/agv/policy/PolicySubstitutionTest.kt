@@ -1,5 +1,6 @@
 package ksl.agv.policy
 
+import ksl.modeling.spatial.FleetSpaceIfc
 import ksl.examples.general.guidedpath.SimpleAgvNetwork
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
@@ -81,11 +82,11 @@ class PolicySubstitutionTest {
         var declines = 0
             private set
 
-        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, network: GuidedPathNetwork): Bid? {
-            val here = network.location(vehicle.currentLocationName) ?: return null
-            val there = network.location(cfp.task.pickupLocation) ?: return null
-            if (!network.isReachable(here, there)) { declines++; return null }
-            val d = network.distance(here, there)
+        override fun bid(vehicle: AgvVehicle, cfp: CallForProposals, space: FleetSpaceIfc): Bid? {
+            val here = space.location(vehicle.currentLocationName) ?: return null
+            val there = space.location(cfp.task.pickupLocation) ?: return null
+            if (!space.isReachable(here, there)) { declines++; return null }
+            val d = space.distance(here, there)
             if (d > maxRange) { declines++; return null }
             return Bid(vehicle, d, "within $maxRange")
         }

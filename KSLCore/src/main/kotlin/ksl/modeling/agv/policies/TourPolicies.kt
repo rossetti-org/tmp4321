@@ -20,27 +20,27 @@ package ksl.modeling.agv.policies
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.agv.TourStop
 import ksl.modeling.agv.exceptions.AgvTourException
-import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.spatial.FleetSpaceIfc
 
 /**
  * What a tour policy is given to decide with.
  *
  * The vehicle, so a policy can ask where it is and how far away things are through the movement
- * seam rather than through any one substrate; and the network, for distances between two *places*,
+ * seam rather than through any one substrate; and the layout, for distances between two *places*,
  * which are facts about the layout and not about any vehicle.
  */
 class TourContext internal constructor(
     val vehicle: AgvVehicle,
-    val network: GuidedPathNetwork
+    val space: FleetSpaceIfc
 ) {
 
     /** How far the vehicle is from [location] now, along the path it would take. */
     fun distanceFromVehicle(location: String): Double =
-        vehicle.movement.pathDistanceTo(network.requireLocation(location))
+        vehicle.movement.pathDistanceTo(space.requireLocation(location))
 
     /** How far apart two places are, along the path between them. */
     fun distanceBetween(from: String, to: String): Double =
-        network.distance(network.requireLocation(from), network.requireLocation(to))
+        space.distance(space.requireLocation(from), space.requireLocation(to))
 
     /** The travel a stop sequence costs, starting from where the vehicle is now. */
     fun travelCost(stops: List<TourStop>): Double {

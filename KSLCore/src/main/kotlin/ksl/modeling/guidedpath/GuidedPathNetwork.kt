@@ -64,7 +64,7 @@ import ksl.modeling.spatial.SpatialModel
  */
 class GuidedPathNetwork private constructor(
     networkName: String
-) : SpatialModel() {
+) : SpatialModel(), ksl.modeling.spatial.FleetSpaceIfc {
 
     init {
         require(networkName.isNotBlank()) { "The network name must not be blank." }
@@ -173,14 +173,15 @@ class GuidedPathNetwork private constructor(
      * The intersection this name addresses, whether it is an intersection name or a station alias,
      * or null when the name addresses neither.
      */
-    fun location(name: String): Intersection? = myIntersectionsByName[name] ?: myStationAliases[name]
+    override fun location(name: String): Intersection? =
+        myIntersectionsByName[name] ?: myStationAliases[name]
 
     /**
      * The intersection this name addresses.
      *
      * @throws IllegalArgumentException when the name is neither an intersection nor a station alias
      */
-    fun requireLocation(name: String): Intersection = location(name)
+    override fun requireLocation(name: String): Intersection = location(name)
         ?: throw IllegalArgumentException(
             "($name) is neither an intersection nor a station alias of network ${this.name}. " +
                     "Known intersections: ${myIntersectionsByName.keys.joinToString()}."
@@ -213,7 +214,7 @@ class GuidedPathNetwork private constructor(
     }
 
     /** True when some path runs from one intersection to the other. */
-    fun isReachable(fromLocation: LocationIfc, toLocation: LocationIfc): Boolean =
+    override fun isReachable(fromLocation: LocationIfc, toLocation: LocationIfc): Boolean =
         myPlanner.isReachable(asIntersection(fromLocation), asIntersection(toLocation))
 
     // ---- routing ------------------------------------------------------------------------------
