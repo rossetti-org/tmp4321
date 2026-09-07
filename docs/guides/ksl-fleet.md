@@ -17,6 +17,10 @@ directly and never wait for one another.
 Everything in this guide is the fleet layer unless it says otherwise, and
 works the same on either.
 
+New to KSL's vehicles? [`ksl-transport`](ksl-transport.md) maps the four
+transport subsystems onto two questions — does space push back, and who
+decides — and says which to use.
+
 Code snippets here are compile-verified against the source on every build
 (`KSLCore/src/test/kotlin/ksl/modeling/fleet/doc/AgvGuideSnippets.kt`).
 
@@ -931,6 +935,89 @@ not.
 
 ---
 
+### …run a fleet without a guide path?
+
+Name a spatial model instead of a network. Nothing above the substrate changes.
+
+```kotlin
+class Yard(parent: ModelElement) : ProcessModel(parent, "Yard") {
+
+    val plane = Euclidean2DPlane()
+
+    // A fleet is written in named places; the spatial model supplies the geometry between them.
+    val places = listOf(
+        plane.Point(0.0, 0.0, "Depot"),
+        plane.Point(300.0, 0.0, "Press"),
+        plane.Point(0.0, 200.0, "Ship")
+    )
+
+    init {
+        spatialModel = plane
+    }
+
+    val fleet = FreePathFleet(this, plane, places, name = "Yard")
+
+    val cart = FreePathVehicle(
+        fleet, "Depot", ConstantRV(30.0), name = "Cart", loadCapacity = 4, stepSize = 10.0
+    ).apply { homeBase = "Depot" }
+
+    inner class Pallet : Entity() {
+        val movement = process(isDefaultProcess = true) {
+            currentLocation = fleet.space.requireLocation("Press")
+            transportByFleet(fleet, destination = "Ship", origin = "Press")
+        }
+    }
+}
+```
+
+Those two declarations are the whole of the substrate. The dispatcher, the batching window, the
+tour policy, the load capacity, stops, lines, stop control, batteries, breakdowns, the audit and
+every statistic are the fleet layer, and each is written exactly as it is over a guide path.
+Exchanging `FreePathFleet`/`FreePathVehicle` for `AgvSystem`/`AgvVehicle` and a network is all it
+takes to run the same study on aisles that push back.
+
+**Places are the spatial model's named locations.** A `DistancesModel` maintains them, so `places`
+can be left out and defaults to `spatialModel.namedLocations`; a plane does not, so name its points
+as above and pass them. Asking for a place the space does not have raises at once rather than
+routing a vehicle nowhere.
+
+**`stepSize` decides how quickly anything can interrupt a journey.** A free-path move is
+interpolated, and a breakdown, a flat battery or a redirection is noticed at the next step. Smaller
+is sooner and more events. On a spatial model that cannot say what lies between two places — a
+`DistancesModel` is a table of pairwise distances and has no *between* — it is ignored, a journey is
+one step, and a vehicle arrives before anything can stop it. That is a property of the space, not of
+the vehicle, and it is worth knowing before you model a breakdown mid-trip.
+
+**Nothing blocks, and the subsystem says so rather than staying quiet.** `FracTimeBlocked` is
+registered on a free-path vehicle and reads exactly zero for the whole run. It is flat on purpose:
+a free path's central assumption is that a vehicle never waits for another, and this is that
+assumption appearing in the same row a guide-path run fills in. `isObstructingNow` answers no for
+the same reason, so an interruption policy that tows only obstructing vehicles correctly never tows
+here.
+
+That assumption is also what makes free-path fleet sizing optimistic — see
+[`ksl-guidedpath` §1](ksl-guidedpath.md#1-what-this-package-is-for) for the same haul measured both
+ways, agreeing at one and two carts and parting company after that.
+
+**A worked study.** `ksl.examples.general.fleet.FreePathFleetExample` runs two carts over a plane at
+two capacities and two batching windows, and reports what each bought:
+
+| | delivered | in system | assigned | blocked | loads/move |
+|---|---|---|---|---|---|
+| capacity 1, window 25 | 350.4 | 43.84 | 20.51 | 0.0000 | — |
+| capacity 4, window 25 | 350.3 | 35.80 | 12.82 | 0.0000 | 1.332 |
+| capacity 1, window 40 | 342.9 | 224.82 | 201.63 | 0.0000 | — |
+| capacity 4, window 40 | 350.8 | 43.42 | 19.99 | 0.0000 | 1.581 |
+
+**Read the throughput column first.** At window 25 the two capacities deliver the same load, so
+the times beside them are comparable and carrying up to four cuts time in system by 18%. At window
+40 the capacity-one fleet delivers 342.9 against 350.8 — it has fallen behind, so its 224.82 is a
+number about the loads it managed rather than about the fleet, and comparing it with anything
+compares two different questions. A batching window is a cost paid by every load and redeemed only
+by capacity.
+
+---
+
 ### …carry more than one load at a time?
 
 Give the vehicle a `loadCapacity`, and give the dispatcher a way to hand it more than one task at
@@ -1344,6 +1431,8 @@ layer.
 
 ## 7. See also
 
+- [`ksl-transport`](ksl-transport.md) — the overview: which of the four
+  transport subsystems to use, and the measurement that separates them.
 - [`ksl-guidedpath`](ksl-guidedpath.md) — **read this first if your
   vehicles contend for space.** The physical layer `AgvSystem` runs on:
   networks, zones, links, blocking, routing, zone control, and deadlock.
@@ -1363,3 +1452,7 @@ layer.
     made unambiguous.
   - `MultiFloorHospitalExample` — two floors joined by lifts, with no lift
     class anywhere in it.
+- `KSLExamples`, under `ksl.examples.general.fleet`:
+  - `FreePathFleetExample` — the same dispatcher over a plane, at two
+    capacities and two batching windows. **Read this one for the free-path
+    binding.**

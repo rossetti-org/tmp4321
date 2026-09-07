@@ -804,6 +804,8 @@ machinery to a spatial model. See [`ksl-fleet`](ksl-fleet.md).
 - `ksl-agent.md` — the parallel spatial system in agent-based models.
 - `ksl-fleet.md` — dispatcher-driven vehicles over this substrate
   (`FreePathFleet`), and over a guide path.
+- `ksl-transport.md` — the overview: which of the four transport
+  subsystems to use, and the measurement that separates them.
 - `ksl-modeling.md` — the underlying modeling primitives.
 - `ksl-utilities-random.md` — velocity distributions, stream control.
 

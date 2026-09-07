@@ -38,6 +38,9 @@ import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.ResourceWithQ
 import ksl.modeling.entity.tow
+import ksl.modeling.fleet.FreePathFleet
+import ksl.modeling.fleet.FreePathVehicle
+import ksl.modeling.spatial.Euclidean2DPlane
 import ksl.modeling.fleet.Line
 import ksl.modeling.fleet.LineStop
 import ksl.modeling.fleet.Stop
@@ -533,6 +536,37 @@ private object AgvGuideSnippets {
                 val onward: TransitResult = rideFrom(hubStop, DEPOT)
                 connectionTime.value = onward.waitForVehicle
                 numTransfers.value = 1.0
+            }
+        }
+    }
+
+    // -- §4 Running a fleet without a guide path --------------------------
+
+    class Yard(parent: ModelElement) : ProcessModel(parent, "Yard") {
+
+        val plane = Euclidean2DPlane()
+
+        // A fleet is written in named places; the spatial model supplies the geometry between them.
+        val places = listOf(
+            plane.Point(0.0, 0.0, "Depot"),
+            plane.Point(300.0, 0.0, "Press"),
+            plane.Point(0.0, 200.0, "Ship")
+        )
+
+        init {
+            spatialModel = plane
+        }
+
+        val fleet = FreePathFleet(this, plane, places, name = "Yard")
+
+        val cart = FreePathVehicle(
+            fleet, "Depot", ConstantRV(30.0), name = "Cart", loadCapacity = 4, stepSize = 10.0
+        ).apply { homeBase = "Depot" }
+
+        inner class Pallet : Entity() {
+            val movement = process(isDefaultProcess = true) {
+                currentLocation = fleet.space.requireLocation("Press")
+                transportByFleet(fleet, destination = "Ship", origin = "Press")
             }
         }
     }

@@ -824,6 +824,8 @@ dispatching moves around is the larger.
 
 ## 7. See also
 
+- [`ksl-transport`](ksl-transport.md) — the overview: which of the four
+  transport subsystems to use, and the measurement that separates them.
 - [`ksl-fleet`](ksl-fleet.md) — the **active** paradigm over this same
   physical world: vehicles that decide for themselves, a dispatcher with a
   process of its own, and the batching, negotiation and re-tasking that a

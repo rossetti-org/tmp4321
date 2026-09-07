@@ -302,3 +302,10 @@ tasks.register<JavaExec>("simpleAgvExample") {
     mainClass.set("ksl.examples.general.guidedpath.SimpleAGVExample")
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+tasks.register<JavaExec>("freePathFleetExample") {
+    group = "examples"
+    description = "Runs the free-path fleet example"
+    mainClass.set("ksl.examples.general.fleet.FreePathFleetExampleKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
