@@ -49,7 +49,7 @@ no other object is running. Under the active paradigm a **dispatcher**
 decides: it can see the whole fleet and the whole board, and it may
 consume simulated time doing so.
 
-That last clause is the package. Three things become expressible that a
+That last clause is the package. Five things become expressible that a
 pool's allocation rule cannot express at all — not because they are hard,
 but because there is nowhere to put them:
 
@@ -64,6 +64,14 @@ but because there is nowhere to put them:
   of the way to a far pickup when a nearer one appears. The movement
   machinery turns a vehicle round; the dispatcher is the object whose
   business it is to decide when that should happen.
+- **Consolidation.** Fill a vehicle. A pool hands one cart to one entity,
+  so a vehicle with room for four carries one; deciding which loads ride
+  together, and in what order the vehicle collects and drops them, is a
+  decision about the fleet rather than about any one load
+  ([§4](#how-do-i-carry-more-than-one-load-at-a-time)).
+- **Fixed routes.** Run a service that calls at stops on a cycle and
+  carries whoever is waiting, rather than one that is summoned
+  ([§4](#how-do-i-run-a-fixed-route--a-bus-line-a-milk-run-a-line-haul)).
 
 **When not to use it.** If your rule is "send the nearest free cart" and
 you are content for it to be evaluated the moment an entity asks, the
@@ -72,13 +80,8 @@ answer. With one vehicle the two agree *exactly*, to the digit — which is
 the result that makes them two models of one world rather than two worlds
 (`ksl.examples.general.agv.TwoParadigmsExample`).
 
-**Not modelled in this version.** Multi-load vehicles.
-A vehicle carries one load at a time, and
-`AgvVehicle.loadCapacity` above one is refused at construction rather
-than accepted and ignored — model the consolidation upstream, or use a
-larger fleet.
-Everything the physical layer does not model
-([`ksl-guidedpath` §1](ksl-guidedpath.md#1-what-this-package-is-for):
+**Not modelled in this version.** Everything the physical layer does not
+model ([`ksl-guidedpath` §1](ksl-guidedpath.md#1-what-this-package-is-for):
 acceleration, turn penalties) is equally absent here.
 
 ---
@@ -235,7 +238,7 @@ collect an entity that never suspends.
 
 ### …find out what a transport cost?
 
-Both verbs return an `FleetTransportResult`:
+Both verbs return a `FleetTransportResult`:
 
 ```kotlin
 val waited = result.waitForAssignment
@@ -1017,7 +1020,7 @@ time.
 
 > **Per-load rows are per-load. Do not add them up to get vehicle time.**
 
-The same holds for `routeLength` and `timeAboard` in an `FleetTransportResult`. Questions about the
+The same holds for `routeLength` and `timeAboard` in a `FleetTransportResult`. Questions about the
 *vehicle* are answered by the vehicle's own time-weighted rows, which cannot double-count because
 there is only ever one vehicle-second in a vehicle-second.
 
