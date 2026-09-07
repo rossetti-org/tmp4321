@@ -380,6 +380,16 @@ deadlock comes from ([§6](#prefer-one-way-links)). Two opposed one-way links ar
 vehicles pass one another without either yielding. Use `BIDIRECTIONAL` for an aisle only one vehicle
 wide.
 
+> **But paired lanes are not deadlock-proof, and it is worth being exact about what they buy.** They
+> remove the head-on meeting *on a link* — two vehicles on one span can never face each other. They
+> do nothing about a cycle that closes through the **junctions at each end of a span**: both lanes
+> full nose to tail, and each junction held by a vehicle wanting the lane the others are standing
+> in. That is blocking the box, and it is ordinary traffic gridlock rather than anything peculiar to
+> this subsystem. Measured on one warehouse in
+> `ksl.examples.general.agv.TwoLaneWarehouseExample`: single two-way aisles deadlock at **2** carts,
+> paired one-way lanes at **12**. A second lane raises the fleet a layout can carry; it does not
+> remove the ceiling.
+
 **A vehicle changes direction at a junction, by taking the return lane.** Nothing implements this:
 leaving a junction by a link that begins there is what routing already does, and the return lane is
 such a link. So a cart sent out and then recalled turns round at the next junction rather than in

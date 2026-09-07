@@ -309,3 +309,10 @@ tasks.register<JavaExec>("freePathFleetExample") {
     mainClass.set("ksl.examples.general.fleet.FreePathFleetExampleKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+tasks.register<JavaExec>("twoLaneWarehouseExample") {
+    group = "examples"
+    description = "Run the two-lane warehouse grid study: fleet sizing, and what the second lane bought."
+    mainClass.set("ksl.examples.general.agv.TwoLaneWarehouseExampleKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
