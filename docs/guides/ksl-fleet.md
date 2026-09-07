@@ -900,6 +900,33 @@ For a model that wants transport requests given up rather than left
 hanging. It is not needed for teardown: `ProcessModel.afterReplication`
 terminates every suspended entity without help from this subsystem.
 
+### …ask what a vehicle is doing right now?
+
+Everything the vehicle's body knows that is worth reading is on the vehicle:
+
+```kotlin
+val aboard = cart.manifest                  // a read-only view, in boarding order
+val full = cart.isAtCapacity
+val carrying = cart.isCarryingALoad
+val speed = cart.currentVelocity            // now, not the mean of its distribution
+val stuckFor = cart.cumulativeBlockedTime   // the running total behind FracTimeBlocked
+val zones = cart.zonesEntered               // zero on a substrate with no zones
+val beingPushed = cart.isUnderTow
+val outOfService = cart.isOutOfService
+```
+
+**Move loads through the verbs, never through the manifest.** The list is a read-only view. Loads
+get on and off through a stop action's `takeAboard` and `setDown` and through the transport
+protocol, which is where every per-load interval this subsystem reports is recorded — a model that
+moved a load any other way would run, and would be missing from every statistic.
+
+Two things a body has that a vehicle deliberately does **not** forward: its `seizable` resource and
+its `movementQueue`. Handing those out would let a model seize the vehicle as though it were a
+tool, or suspend something in its movement queue, and replacing both of those is what this
+subsystem exists to do.
+
+---
+
 ### …find out where the congestion is?
 
 Fleet-level rows say how much blocking there was. To find out *which aisles* produced it, switch on

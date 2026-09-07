@@ -587,4 +587,17 @@ private object AgvGuideSnippets {
         agv.collectLinkStatistics = true    // a response per link
         agv.collectZoneStatistics = true    // a response per zone: the finest, and the most expensive
     }
+
+    // -- §4 Asking what a vehicle is doing right now ----------------------
+
+    fun readTheVehiclesState(cart: AgvVehicle) {
+        val aboard = cart.manifest                  // a read-only view, in boarding order
+        val full = cart.isAtCapacity
+        val carrying = cart.isCarryingALoad
+        val speed = cart.currentVelocity            // now, not the mean of its distribution
+        val stuckFor = cart.cumulativeBlockedTime   // the running total behind FracTimeBlocked
+        val zones = cart.zonesEntered               // zero on a substrate with no zones
+        val beingPushed = cart.isUnderTow
+        val outOfService = cart.isOutOfService
+    }
 }

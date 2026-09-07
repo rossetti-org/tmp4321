@@ -263,6 +263,63 @@ abstract class FleetVehicle @JvmOverloads constructor(
      */
     val loadsPerLoadedMove: ResponseCIfc?
         get() = body.loadsPerLoadedMove
+
+    // ---- what the vehicle is doing right now ----------------------------------------------------
+    //
+    // The body's remaining readable quantities, exposed for the same reason the rows above are: the
+    // body is `internal`, so without these a modeller could not ask. All are read-only. What is
+    // deliberately *not* forwarded is the body's `seizable` and `movementQueue` -- a `Resource` and
+    // a `HoldQueue` -- because handing those out would let a model seize this vehicle as though it
+    // were a tool, or suspend something in its movement queue, and replacing both of those is what
+    // the subsystem exists to do.
+
+    /** True when there is no room for another load. The complement of [spareCapacity] being zero. */
+    val isAtCapacity: Boolean
+        get() = body.isAtCapacity
+
+    /**
+     * What is aboard, in the order it came aboard.
+     *
+     * A read-only view. Loads get on and off through a stop action's `takeAboard` and `setDown`
+     * and through the transport protocol -- those are where every per-load interval this subsystem
+     * reports is recorded, so a model that moved a load any other way would run and be missing from
+     * every statistic.
+     */
+    val manifest: List<ProcessModel.Entity>
+        get() = body.manifest
+
+    /**
+     * How long this vehicle has been blocked so far this replication.
+     *
+     * The running total behind [fracTimeBlocked], for a model that wants the quantity rather than
+     * the fraction -- a maintenance rule, say, or a stopping condition. Reads zero for the whole run
+     * on a substrate where nothing blocks.
+     */
+    val cumulativeBlockedTime: Double
+        get() = body.cumulativeBlockedTime
+
+    /** How fast it is going now, which is not the mean of its velocity distribution. */
+    val currentVelocity: Double
+        get() = body.currentVelocity
+
+    /**
+     * How many units of discretised space it has entered this replication.
+     *
+     * A guide path counts zones. A substrate that does not discretise space counts nothing and this
+     * reads zero, which is what "this model has no zones" should look like rather than something to
+     * be explained.
+     */
+    val zonesEntered: Int
+        get() = body.zonesEntered
+
+    /**
+     * True while somebody is moving it rather than it moving itself.
+     *
+     * A vehicle under tow is exempt from its own faults, so a listener or a policy that wants to
+     * know whether a stopped vehicle is being dealt with asks this rather than inferring it.
+     */
+    val isUnderTow: Boolean
+        get() = body.isUnderTow
     val numTasksCompleted: CounterCIfc
         get() = myNumTasksCompleted
 
