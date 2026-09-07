@@ -31,6 +31,27 @@ The examples are ordered so that each one needs only what came before it.
 horizon diagnostics, and in two cases deadlock reports logged at ERROR. Those
 are the audit doing its job, not a fault. Read the tables last.
 
+**Reading the figures.** Every case that models a network has a figure of it,
+drawn from the code that builds it. The figures are **topological**: an arrow is
+a link, and a number on it is that link's *declared length*, which is what
+routing reads. Nothing is to scale, and no figure carries coordinates — except
+case 8, which is not a guide path at all and where the coordinates *are* the
+model.
+
+| In the figures | Means |
+|---|---|
+| `A ──▶ B` | a one-way link — vehicles travel A to B and never B to A |
+| a **dotted** arrow | a **spur**: two-way, one vehicle at a time, and a dead end |
+| a **thick** arrow | a lift shaft, which is an ordinary link of exactly one zone |
+| a rounded node | an intersection carrying a named **station** |
+| a plain node | a bare intersection |
+| a line with **no** arrowhead | not a link at all — case 8 is a plane, and its lines only say what is reachable |
+
+Two figures are drawn as **plans** rather than graphs: the warehouse in case 7
+and the benchmark grid in case 9. An automatic graph layout draws a rectangular
+grid as a diagonal cascade, and in those two cases the shape of the building is
+part of the point. Both carry their own key in their captions.
+
 ---
 
 ## 1. A simple AGV shop
@@ -44,6 +65,21 @@ This is the smallest layout that is worth building, and the point of it is that
 **the layout is the model**.
 
 ### The model
+
+```mermaid
+flowchart LR
+    I1(["I1 · EntryStation"]) -->|"Link1 · 48"| I2["I2"]
+    I2 -->|"Link2 · 72"| I3["I3"]
+    I3 -->|"Link3 · 48"| I4["I4"]
+    I4 -->|"Link4 · 72"| I1
+    I4 -.->|"Spur · 36"| I5(["I5 · ExitStation"])
+    I2 -.->|"Link5 · 6"| I6["I6 · Cart1 home"]
+    I3 -.->|"Link6 · 6"| I7["I7 · Cart2 home"]
+```
+
+*Figure 1 — the shop. Because the loop turns one way only, entry to exit is 204
+feet the long way round while exit back to entry is 108. Loop zones are 12 feet;
+the two home spurs get 6.*
 
 A one-way loop with a spur down to the exit station and a parking spur for each
 cart. Four properties of that description are load-bearing:
@@ -104,6 +140,20 @@ decides. Are these two models of one world, or two different worlds?
 
 ### The model
 
+```mermaid
+flowchart LR
+    I1(["I1 · EntryStation"]) -->|"Link1 · 48"| I2["I2"]
+    I2 -->|"Link2 · 72"| I3["I3"]
+    I3 -->|"Link3 · 48"| I4["I4"]
+    I4 -->|"Link4 · 72"| I1
+    I4 -.->|"ExitSpur · 36"| I5(["I5 · ExitStation"])
+    I2 -.->|"DepotSpur · 6"| I6(["I6 · CartDepot"])
+```
+
+*Figure 2 — case 1's loop with one cart and one depot. This figure is the whole
+physical model, and it is **the same figure for both runs**: the passive shop and
+the active shop are built from this one network.*
+
 One shop, built twice. The physical world is identical in both runs — same guide
 path, same zones, same routing, same blocking rules — and every line that differs
 is a line about *who decides*:
@@ -159,6 +209,21 @@ When does it matter that vehicles must follow aisles?
 
 ### The model
 
+```mermaid
+flowchart LR
+    D(["DiagnosticStation"]) -->|"Aisle1 · 40"| T1(["TestStation1"])
+    T1 -->|"Aisle2 · 10"| T2(["TestStation2"])
+    T2 -->|"Aisle3 · 65"| T3(["TestStation3"])
+    T3 -->|"Aisle4 · 25"| R(["RepairStation"])
+    R -->|"Aisle5 · 110"| D
+    D -.->|"ParkSpur1 … ParkSpur3 · 5"| P["Park1 … Park3 · worker parking"]
+```
+
+*Figure 3 — the aisle the workers walk, zoned at 5, with a parking spur per
+worker. The free-path twin of this model holds a **direct** distance for every
+pair of stations: TestStation3 to TestStation1 is 80 there and 175 here, because
+on this aisle a worker must go round through repair and diagnostics.*
+
 Chapter 8's test-and-repair shop, with its three transport workers moved off a
 distance model onto a guide path. **Everything about the work is identical** —
 the same four test plans with the same probabilities, the same processing-time
@@ -210,6 +275,21 @@ expect thirty-one minutes, and get five hundred and thirty-eight.
 Does the dispatching rule matter, and how would you know?
 
 ### The model
+
+```mermaid
+flowchart LR
+    N(["N · NorthPickup"]) -->|"NE · 120"| E["E"]
+    E -->|"ES · 120"| S(["S · SouthPickup"])
+    S -->|"SW · 120"| W(["W · Shipping"])
+    W -->|"WN · 120"| N
+    N -.->|"SpurA · 24"| PA(["PA · DepotA"])
+    E -.->|"SpurB · 24"| PB(["PB · DepotB"])
+    S -.->|"SpurC · 24"| PC(["PC · DepotC"])
+```
+
+*Figure 4 — a one-way ring of four legs of 120, zoned at 12, with a depot spur
+for each of the three carts. Note the **two** pickup stations, at opposite
+corners.*
 
 One shop, three carts, six rules, common random numbers throughout. Because
 deciding is a substitutable object, the study changes the rule and nothing else.
@@ -272,6 +352,20 @@ A cart is on its way to a far pickup when a nearer job appears. Should it turn
 round — and what stops a fleet that can from doing it constantly?
 
 ### The model
+
+```mermaid
+flowchart LR
+    N["N"] -->|"NE · 100"| E(["E · NearStation"])
+    E -->|"ES · 100"| S(["S · Shipping"])
+    S -->|"SW · 100"| W(["W · FarStation"])
+    W -->|"WN · 100"| N
+    N -.->|"ParkSpur · 20"| P(["Park · Depot"])
+```
+
+*Figure 5 — a one-way ring of four legs of 100, zoned at 10, with the cart
+parked on a spur of 20 off N. The arithmetic below is in the picture: because
+the ring runs one way, from N the near pickup at E is one leg ahead and the far
+pickup at W is three.*
 
 A one-way ring of four legs of 100 with the cart parked on a spur. The
 arithmetic is made unambiguous: at **t = 2** the cart has travelled 20 and
@@ -339,6 +433,28 @@ one-way link of a single zone. The zone rule already says one zone admits one
 vehicle, so the shaft excludes everybody else for the duration of a ride without
 a line being written to make it do so.
 
+```mermaid
+flowchart LR
+    subgraph ground["Ground floor"]
+        G1(["G1 · Lobby"]) -->|"GroundA · 60"| G2(["G2 · WardA"])
+        G2 -->|"GroundB · corridor"| G3["G3"]
+    end
+    subgraph first["First floor"]
+        F1["F1"] -->|"FirstA · corridor"| F2(["F2 · Pharmacy"])
+        F2 -->|"FirstB · 60"| F3["F3"]
+    end
+    G3 ==>|"ShaftUp · ONE zone"| F1
+    F3 ==>|"ShaftDown · ONE zone"| G1
+    G1 -.->|"Spur1 … SpurN · 20"| P["P1 … PN · porter parking"]
+```
+
+*Figure 6 — one one-way circuit of 400 that happens to climb. F1 sits directly
+above G3 and F3 above G1; the heights are carried for the drawing and the engine
+never reads them. The two corridor legs absorb whatever the shafts do not use,
+which holds the circuit at 400 across every configuration studied. The thick
+links are the lifts: ordinary links whose zone length equals their length, so
+each contains exactly one zone.*
+
 A one-way circuit climbs one shaft and descends the other, so **every delivery
 cycle rides each shaft exactly once**. Three studies run on it.
 
@@ -395,6 +511,25 @@ traffic both ways. Is that one network or two? What is the second lane worth?
 
 ### The model
 
+```text
+   T0 ══════ 40 ══════ T1 ══════ 40 ══════ T2
+   ║                   ║                   ║
+  120                 120                 120
+   ║                   ║                   ║
+   B0 ══════ 40 ══════ B1 ══════ 40 ══════ B2 ══ 40 ══ K0 ══ 40 ══ K1 … K(n-1)
+   ┆ 10                                                ┆ 10        ┆ 10
+   D                                                   P0          P1 … P(n-1)
+   Dock                                                park        park
+```
+
+*Figure 7 — the building, in plan. Three pick aisles of 120 between a bottom and
+a top cross-aisle of 40, a dock spur off B0, and a parking row running east from
+B2 with one spur per cart. **Every `═══` is drawn as two lines because it is two
+links** — one lane each way, sharing the junction at each end — and the same is
+true of the `║` pick aisles. `┆` is a spur. The single-lane study replaces each
+of those pairs with a single two-way link and changes nothing else about the
+building.*
+
 **A lane is a link.** Two lanes on one span are two links, opposed — and it is
 **one network**. Nothing keys on the pair of endpoints, so a second link between
 the same junctions is not a duplicate of anything. Two networks would be worse
@@ -405,9 +540,8 @@ road layout is that the directions share the junctions.
 A vehicle changes direction by taking the return lane, which is ordinary routing
 rather than a manoeuvre.
 
-Three pick aisles, two cross-aisles, one dock, a parking spur per cart. **Demand
-is set above what the building can serve on purpose**, so the layout rather than
-the arrival stream is what limits the answer.
+**Demand is set above what the building can serve on purpose**, so that the
+layout rather than the arrival stream is what limits the answer.
 
 ### What it shows
 
@@ -472,6 +606,23 @@ for *work*, never for *aisles*.
 
 ### The model
 
+```mermaid
+flowchart LR
+    Depot(["Depot · (0, 0)"]) --- Press(["Press · (300, 0)"])
+    Press --- Paint(["Paint · (300, 200)"])
+    Paint --- Ship(["Ship · (0, 200)"])
+    Ship --- Depot
+    Depot --- Paint
+    Press --- Ship
+```
+
+*Figure 8 — **not a network.** Four named points on a Euclidean plane. The lines
+carry no direction and no arrowheads because there are no aisles: a vehicle goes
+from any point to any other in straight-line distance ÷ velocity — 200 or 300 on
+the sides, 360.6 across a diagonal — and two vehicles may stand on the same
+ground. Compare it with any figure above: what is missing is the whole of what a
+guide path adds.*
+
 Two lines name the substrate:
 
 ```kotlin
@@ -529,11 +680,33 @@ How finely can you afford to discretise a guide path?
 
 ### The model
 
+```text
+            c = 0       c = 1       c = 2       c = 3       c = 4
+   r = 0     N0_0  ──▶   N0_1  ──▶   N0_2  ──▶   N0_3  ──▶   N0_4  ──▶  (N0_0)
+               │           │           │           │           │
+               ▼           ▼           ▼           ▼           ▼
+   r = 1     N1_0  ──▶   N1_1  ──▶   N1_2  ──▶   N1_3  ──▶   N1_4  ──▶  (N1_0)
+               │           │           │           │           │
+               ▼           ▼           ▼           ▼           ▼
+   r = 2     N2_0  ──▶   N2_1  ──▶   N2_2  ──▶   N2_3  ──▶   N2_4  ──▶  (N2_0)
+               │           │           │           │           │
+               ▼           ▼           ▼           ▼           ▼
+   r = 3     N3_0  ──▶   N3_1  ──▶   N3_2  ──▶   N3_3  ──▶   N3_4  ──▶  (N3_0)
+               │           │           │           │           │
+               ▼           ▼           ▼           ▼           ▼
+            (N0_0)      (N0_1)      (N0_2)      (N0_3)      (N0_4)
+```
+
+*Figure 9 — four rows by five columns. Every intersection has exactly **two**
+out-links, east and south, each 100 long and cut into ten zones of ten. A name
+in parentheses is where a wrap-around link lands: the last column runs back into
+the first, the last row back into the top. Nothing ever runs against the
+traffic, so no two vehicles can meet head on, and every intersection stays
+reachable from every other.*
+
 Twenty intersections, forty links, four hundred zones, twenty vehicles under
 saturated demand — every vehicle given a fresh destination the instant it
-arrives, so none is idle and the engine does nothing but move things. A
-four-by-five torus of one-way aisles keeps every intersection reachable while
-never letting two vehicles meet head on.
+arrives, so none is idle and the engine does nothing but move things.
 
 **This is deliberately not a test.** It measures wall-clock time, so its answer
 belongs to the machine it ran on and has no business failing a build on somebody
@@ -571,9 +744,9 @@ it cost?
 
 ### The model
 
-The same layout, zone count, fleet size, velocity and saturation as case 9 —
-this file **imports** that benchmark's layout rather than restating it, so the
-two cannot drift apart.
+**Figure 9 again, unaltered.** The same layout, zone count, fleet size,
+velocity and saturation as case 9 — this file **imports** that benchmark's
+layout rather than restating it, so the two cannot drift apart.
 
 ### What it shows
 

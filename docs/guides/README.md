@@ -44,7 +44,7 @@ model matches your problem.
 |---|---|
 | [`ksl-entity`](ksl-entity.md) | **Process view** — each entity's life is written as a suspending coroutine (`delay`, `seize`, `release`, `move`) |
 | [`ksl-transport`](ksl-transport.md) | **Start here for vehicles** — which of the four transport subsystems to use, and why; free path vs guide path, passive vs dispatcher-driven |
-| [`ksl-transport-tutorial`](ksl-transport-tutorial.md) | **Vehicles by worked example** — the ten runnable examples as cases: problem, model, measured result, and what each is evidence for |
+| [`ksl-transport-tutorial`](ksl-transport-tutorial.md) | **Vehicles by worked example** — the ten runnable examples as cases: problem, model (with a figure of the network), measured result, and what each is evidence for |
 | [`ksl-spatial`](ksl-spatial.md) | **Spatial substrate** — locations, distances, movable resources; the substrate that `move` operates on |
 | [`ksl-station`](ksl-station.md) *(experimental)* | **Queueing-network view** — passive stations route jobs |
 | [`ksl-agent`](ksl-agent.md) *(experimental)* | **Agent-based view** — statechart-reactive autonomous actors |
