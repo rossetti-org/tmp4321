@@ -354,6 +354,50 @@ coordinate" and "at the origin" are genuinely different things a renderer must t
 active subsystem, but the network idiom above is the whole of what makes the floors work and applies
 here unchanged.
 
+### …model a rectangular grid of two-way aisles?
+
+A warehouse of rows and cross-aisles, each wide enough for traffic both ways, is the ordinary
+case rather than a special one. **A lane is a link.** Two lanes on one span are two links,
+opposed:
+
+```kotlin
+// Every span twice, once each way. A one-way link per lane; the pair is the two-way aisle.
+for ((a, b) in listOf("NW" to "NE", "NE" to "SE", "SE" to "SW", "SW" to "NW")) {
+    builder.link("$a-$b", a, b, length = 100.0, zoneLength = 25.0)
+    builder.link("$b-$a", b, a, length = 100.0, zoneLength = 25.0)
+}
+```
+
+**One network, not two.** Nothing keys on the pair of endpoints, so a second link between the same
+two junctions is not a duplicate and needs no second network. Two networks would be worse than
+redundant: routing, blocking and deadlock detection are per network, so a vehicle on one could not
+see a vehicle on the other — and the whole point of a road layout is that the two directions share
+the junctions.
+
+**Prefer this to `BIDIRECTIONAL` wherever the aisle is genuinely wide enough.** A two-way link is
+one lane used by one direction at a time, enforced by a direction lock, and it is where head-on
+deadlock comes from ([§6](#prefer-one-way-links)). Two opposed one-way links are two lanes, and
+vehicles pass one another without either yielding. Use `BIDIRECTIONAL` for an aisle only one vehicle
+wide.
+
+**A vehicle changes direction at a junction, by taking the return lane.** Nothing implements this:
+leaving a junction by a link that begins there is what routing already does, and the return lane is
+such a link. So a cart sent out and then recalled turns round at the next junction rather than in
+place — which is the physical truth about a vehicle in an aisle, and is why the ground it covers
+going back equals the ground it covered coming out rather than being a detour three sides of a
+block. `TwoLaneGridTest` measures exactly that.
+
+> **A junction is a zone, so it admits one vehicle at a time.** This is the property that surprises
+> people, and it is the reason to model the grid here rather than on a free path. Two vehicles whose
+> routes cross contend for the junction **even when they share no lane at all**, and they contend
+> for it even when the junction is dimensionless and crossing it costs no time. A second lane
+> decongests the aisle; it never decongests the crossroads. In a busy grid that is where the
+> queueing appears, and `fracTimeBlocked` across the fleet is where you will see it.
+
+If crossing conflicts are a large part of your answer, give the junctions a `length` so that
+occupying one costs time, and read `zoneUtilization` on them: a grid whose junctions saturate wants
+a different layout, not more vehicles.
+
 ### …change how closely carts may follow one another?
 
 The zone control rule decides when a transporter gives up the zone

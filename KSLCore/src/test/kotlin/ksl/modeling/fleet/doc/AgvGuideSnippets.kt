@@ -570,4 +570,14 @@ private object AgvGuideSnippets {
             }
         }
     }
+
+    // -- §4 Reading the capacity statistics off the vehicle ---------------
+
+    fun readTheCapacityRows(cart: AgvVehicle) {
+        val used = cart.capacityUtilization?.acrossReplicationStatistic?.average
+        val full = cart.fracTimeAtCapacity?.acrossReplicationStatistic?.average
+        val perMove = cart.loadsPerLoadedMove?.acrossReplicationStatistic?.average
+        val aboard = cart.numLoadsAboardResponse?.acrossReplicationStatistic?.average
+        val perTour = cart.loadsPerTour?.acrossReplicationStatistic?.average
+    }
 }

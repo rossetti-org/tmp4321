@@ -133,14 +133,38 @@ subsystems.
 
 ---
 
-## A note on what does not exist yet
+## The agent layer's projection: geometry yes, agency no
 
-There is **no fleet binding for the agent layer's continuous
-projection.** The seam is proved against `MovableAgentResource` — it
-passes the same conformance suite the other two do — but nothing ships
-that runs a dispatcher over it. If you want vehicles inside an
-agent-based projection today, drive them with the agent layer's own verbs;
-see [`ksl-agent`](ksl-agent.md).
+A dispatcher over an agent-based **continuous projection** is half
+available, and the halves are worth separating because a modeller needs
+only one of them at a time.
+
+**The geometry works today, with no new class.**
+`ProjectionSpatialModel` wraps a `ContinuousProjection` as an ordinary
+`SpatialModel`, and `FreePathFleet` asks a spatial model for named places
+and distances and nothing else. So the dispatcher, tours, consolidation,
+stops, lines and every statistic run over projection coordinates:
+
+```kotlin
+val space = ProjectionSpatialModel(floor.projection)
+val places = listOf(space.location(0.0, 0.0, "Store"), space.location(100.0, 0.0, "WardA"))
+val fleet = FreePathFleet(this, space, places, name = "Porters")
+```
+
+`FleetOverProjectionTest` runs exactly that.
+
+**What is missing is a vehicle that is itself an agent in the
+projection.** The vehicle above is a `FreePathVehicle`, whose body is a
+`MovableResource`. It is *at* projection coordinates but not *in* the
+projection: it has no `Agent` identity, so neighbour queries, force
+dynamics and statecharts cannot see it, and pedestrians walk through it.
+Closing that would take a binding built on `MovableAgentResource` —
+which does implement the movement seam and does pass the conformance
+suite — and nothing ships one.
+
+So: a dispatcher over projection *coordinates* works now. Vehicles that
+the crowd can see is unbuilt. If you need the second, drive them with the
+agent layer's own verbs for the moment; see [`ksl-agent`](ksl-agent.md).
 
 ---
 

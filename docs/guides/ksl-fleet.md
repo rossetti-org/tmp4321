@@ -1059,6 +1059,17 @@ row that answers the question people read it as answering is **`CapacityUtilizat
 These are registered **only when `loadCapacity > 1`**. A row measuring something your model does not
 have is a question its reader has to answer every time they meet it.
 
+Read them in code off the vehicle, where they are null below a capacity of two — the same statement
+the rows make by not being registered:
+
+```kotlin
+val used = cart.capacityUtilization?.acrossReplicationStatistic?.average
+val full = cart.fracTimeAtCapacity?.acrossReplicationStatistic?.average
+val perMove = cart.loadsPerLoadedMove?.acrossReplicationStatistic?.average
+val aboard = cart.numLoadsAboardResponse?.acrossReplicationStatistic?.average
+val perTour = cart.loadsPerTour?.acrossReplicationStatistic?.average
+```
+
 **The attribution rule, which you have to know before you sum anything.** When several loads ride
 together and the vehicle is blocked for five units, **each load records five**. Per load that is
 right — each of them waited five. Summed across loads it is fifteen against five units of vehicle

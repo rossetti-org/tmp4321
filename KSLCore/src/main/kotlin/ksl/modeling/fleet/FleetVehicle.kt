@@ -223,6 +223,46 @@ abstract class FleetVehicle @JvmOverloads constructor(
         val r = myLoadsPerTour ?: return
         r.value = loadsCarried.toDouble()
     }
+
+    // ---- how much of the room was used ---------------------------------------------------------
+    //
+    // The body registers these and the vehicle exposes them, for the same reason it exposes the
+    // body's time fractions: the body is `internal`, so without these a modeller could read the
+    // rows only off the report by name. All four are **null below a capacity of two**, which is the
+    // same statement the rows themselves make by not being registered -- a row measuring something
+    // a model does not have is a question its reader has to answer every time they meet it.
+
+    /** The mean number aboard, or null for a single-load vehicle. */
+    val numLoadsAboardResponse: TWResponseCIfc?
+        get() = body.numLoadsAboardResponse
+
+    /**
+     * How much of the room was used, time-weighted, or null for a single-load vehicle.
+     *
+     * The row `FracTimeTransporting` is often read as answering this and does not: that is a
+     * fraction of *time*, and reads 1.0 whether the vehicle is carrying one load or four.
+     */
+    val capacityUtilization: TWResponseCIfc?
+        get() = body.capacityUtilization
+
+    /**
+     * How much of the time it was full, or null for a single-load vehicle.
+     *
+     * Mean utilization cannot answer whether the capacity binds: a fleet at 50% could be
+     * alternately empty and full, which wants more vehicles, or steadily half full, which wants
+     * smaller ones.
+     */
+    val fracTimeAtCapacity: TWResponseCIfc?
+        get() = body.fracTimeAtCapacity
+
+    /**
+     * How many loads a loaded move carried, or null for a single-load vehicle.
+     *
+     * Whether consolidation is actually happening. A capacity-four fleet averaging 1.02 has the
+     * room and is not using it. [loadsPerTour] asks the same question one scale up.
+     */
+    val loadsPerLoadedMove: ResponseCIfc?
+        get() = body.loadsPerLoadedMove
     val numTasksCompleted: CounterCIfc
         get() = myNumTasksCompleted
 
