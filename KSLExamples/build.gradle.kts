@@ -316,3 +316,31 @@ tasks.register<JavaExec>("twoLaneWarehouseExample") {
     mainClass.set("ksl.examples.general.agv.TwoLaneWarehouseExampleKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+tasks.register<JavaExec>("twoParadigmsExample") {
+    group = "examples"
+    description = "Run the same shop both ways: a passive pool and an active dispatcher."
+    mainClass.set("ksl.examples.general.agv.TwoParadigmsExample")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+tasks.register<JavaExec>("dispatchingRuleComparison") {
+    group = "examples"
+    description = "Run six dispatching rules on common random numbers."
+    mainClass.set("ksl.examples.general.agv.DispatchingRuleComparison")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+tasks.register<JavaExec>("retaskingExample") {
+    group = "examples"
+    description = "Run the re-tasking in flight example."
+    mainClass.set("ksl.examples.general.agv.RetaskingInFlightExample")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+tasks.register<JavaExec>("multiFloorHospitalExample") {
+    group = "examples"
+    description = "Run the two-floor hospital study: lifts as one-zone links."
+    mainClass.set("ksl.examples.general.agv.MultiFloorHospitalExample")
+    classpath = sourceSets["main"].runtimeClasspath
+}

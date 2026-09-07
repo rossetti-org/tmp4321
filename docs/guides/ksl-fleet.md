@@ -1465,6 +1465,9 @@ layer.
 
 ## 7. See also
 
+- [`ksl-transport-tutorial`](ksl-transport-tutorial.md) — every example in
+  this guide worked through: problem, model, result, and what it shows.
+
 - [`ksl-transport`](ksl-transport.md) — the overview: which of the four
   transport subsystems to use, and the measurement that separates them.
 - [`ksl-guidedpath`](ksl-guidedpath.md) — **read this first if your
