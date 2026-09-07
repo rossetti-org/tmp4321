@@ -387,16 +387,49 @@ place — which is the physical truth about a vehicle in an aisle, and is why th
 going back equals the ground it covered coming out rather than being a detour three sides of a
 block. `TwoLaneGridTest` measures exactly that.
 
-> **A junction is a zone, so it admits one vehicle at a time.** This is the property that surprises
-> people, and it is the reason to model the grid here rather than on a free path. Two vehicles whose
-> routes cross contend for the junction **even when they share no lane at all**, and they contend
-> for it even when the junction is dimensionless and crossing it costs no time. A second lane
-> decongests the aisle; it never decongests the crossroads. In a busy grid that is where the
-> queueing appears, and `fracTimeBlocked` across the fleet is where you will see it.
+**A junction is a zone, so it admits one vehicle at a time.** There is no special rule for
+junctions — it is the subsystem's only rule, applied to junctions like everything else. Two
+consequences follow, and both are predictable rather than surprising once you have the arithmetic.
 
-If crossing conflicts are a large part of your answer, give the junctions a `length` so that
-occupying one costs time, and read `zoneUtilization` on them: a grid whose junctions saturate wants
-a different layout, not more vehicles.
+**A junction of zero length is not held for zero time.** Under the default `EndOfZoneControl` a
+vehicle gives up the zone behind it *on arriving in the next one*, so a vehicle crossing junction J
+holds J until it has travelled the whole first zone of the outgoing link:
+
+> **junction hold = `zoneLength / velocity` of the link the vehicle leaves by**
+
+With zones of 50 and a velocity of 10 that is 5.0 time units, which `JunctionOccupancyTest` measures
+off the junction's own occupancy row and matches to 1e-9. Releasing J any sooner would let a second
+vehicle claim it while the first is still physically in the intersection, which is what zone
+exclusivity exists to prevent. If your control system really does release earlier, say so with
+`StartOfZoneControl` — that is a statement about the installation, not a tuning knob.
+
+**Two directions of one aisle share a junction node, and often should not.** In a two-lane aisle the
+lanes are separate links, but if they meet at the same *node* they share that node's zone — so a
+northbound and a southbound vehicle serialise at a point where, in a real wide aisle, they would
+pass one another.
+
+The lever is the layout, not a flag: **give each direction its own junction node.**
+
+```kotlin
+// Shared node: the two lanes meet at C, and vehicles going opposite ways contend there.
+.link("S-C", "S", "C", ...) ; .link("C-N", "C", "N", ...)
+.link("N-C", "N", "C", ...) ; .link("C-S", "C", "S", ...)
+
+// A node per direction: the lanes have no zone in common anywhere, and they do not contend.
+.link("S-Cup", "S", "Cup", ...) ; .link("Cup-N", "Cup", "N", ...)
+.link("N-Cdn", "N", "Cdn", ...) ; .link("Cdn-S", "Cdn", "S", ...)
+```
+
+Measured on that pair, one vehicle each way: the shared node blocks, the split nodes block **exactly
+zero times**. Deciding which movements share a node is deciding which movements conflict — the same
+decision a traffic engineer makes when drawing conflict points, and it belongs to you rather than to
+a default.
+
+So: split the node where two flows genuinely pass one another, and keep them together where they
+genuinely cross. A crossroads where a straight-through and a turning movement really do cross should
+share a node, because they really do conflict. Where crossing conflicts matter to your answer, give
+the junctions a `length` so occupying one costs time, and read their occupancy: a grid whose
+junctions saturate wants a different layout, not more vehicles.
 
 ### …change how closely carts may follow one another?
 
