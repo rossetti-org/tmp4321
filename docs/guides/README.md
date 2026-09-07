@@ -43,8 +43,8 @@ model matches your problem.
 | Guide | When to use |
 |---|---|
 | [`ksl-entity`](ksl-entity.md) | **Process view** — each entity's life is written as a suspending coroutine (`delay`, `seize`, `release`, `move`) |
-| [`ksl-transport-tutorial`](ksl-transport-tutorial.md) | **Vehicles by worked example** — ten cases, each with its problem, model, measured result, and what it is evidence for |
 | [`ksl-transport`](ksl-transport.md) | **Start here for vehicles** — which of the four transport subsystems to use, and why; free path vs guide path, passive vs dispatcher-driven |
+| [`ksl-transport-tutorial`](ksl-transport-tutorial.md) | **Vehicles by worked example** — the ten runnable examples as cases: problem, model, measured result, and what each is evidence for |
 | [`ksl-spatial`](ksl-spatial.md) | **Spatial substrate** — locations, distances, movable resources; the substrate that `move` operates on |
 | [`ksl-station`](ksl-station.md) *(experimental)* | **Queueing-network view** — passive stations route jobs |
 | [`ksl-agent`](ksl-agent.md) *(experimental)* | **Agent-based view** — statechart-reactive autonomous actors |
@@ -55,6 +55,30 @@ model matches your problem.
 These guides cross-reference each other in their §7 "See also"
 sections — if the right view isn't obvious from the table, start with
 `ksl-entity` and follow the pointers.
+
+### Runnable examples
+
+Every transport example under `KSLExamples` has a Gradle task, and
+[`ksl-transport-tutorial`](ksl-transport-tutorial.md) walks through all ten in
+this order — each stating its problem, its model, what it measured, and what
+that is evidence for.
+
+| # | Example | Run it with |
+|---|---|---|
+| 1 | `general.guidedpath.SimpleAGVExample` | `:KSLExamples:simpleAgvExample` |
+| 2 | `general.agv.TwoParadigmsExample` | `:KSLExamples:twoParadigmsExample` |
+| 3 | `book.chapter8.TestAndRepairShopWithGuidedTransporters` | *(a model class, not a study)* |
+| 4 | `general.agv.DispatchingRuleComparison` | `:KSLExamples:dispatchingRuleComparison` |
+| 5 | `general.agv.RetaskingInFlightExample` | `:KSLExamples:retaskingExample` |
+| 6 | `general.agv.MultiFloorHospitalExample` | `:KSLExamples:multiFloorHospitalExample` |
+| 7 | `general.agv.TwoLaneWarehouseExample` | `:KSLExamples:twoLaneWarehouseExample` |
+| 8 | `general.fleet.FreePathFleetExample` | `:KSLExamples:freePathFleetExample` |
+| 9 | `general.guidedpath.GuidedPathThroughputBenchmark` | `:KSLExamples:guidedPathBenchmark` |
+| 10 | `general.agv.AgvThroughputBenchmark` | `:KSLExamples:agvBenchmark` |
+
+Cases 9 and 10 are **benchmarks rather than tests**: they measure wall-clock
+time, so their answers belong to the machine that ran them. Record the figure
+alongside the hardware and compare like with like.
 
 ## Simulation optimization
 
