@@ -85,10 +85,7 @@ class JunctionOccupancyTest {
 
         init {
             // One response per zone, so the junction's own occupancy can be read off directly.
-            // Reached through the internal space layer: `AgvSystem` does not expose the per-link
-            // and per-zone statistics tiers that `GuidedPathTransportSystem` takes as constructor
-            // arguments, which is a gap in the binding rather than a property of the design.
-            agv.spaceSystem.collectZoneStatistics = true
+            agv.collectZoneStatistics = true
         }
 
         val cart = AgvVehicle(agv, TransporterPlacement.At("A"), ConstantRV(10.0), name = "Cart")

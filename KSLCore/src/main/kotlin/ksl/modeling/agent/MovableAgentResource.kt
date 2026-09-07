@@ -141,9 +141,39 @@ open class MovableAgentResource @JvmOverloads constructor(
         var velocity: Double by positive(1.0)
     }
 
+    /**
+     *  Where it starts each replication.
+     *
+     *  Held rather than consumed, because a replication has to be able to put it back. See
+     *  [initialize].
+     */
+    val initialPosition: Point2D = initPosition
+
     init {
         space.context.add(this)
-        space.placeAt(this, initPosition)
+        space.placeAt(this, initialPosition)
+    }
+
+    /**
+     *  Puts the resource back where it was declared, at the start of every replication.
+     *
+     *  **Without this a replication began wherever the previous one stopped.** The context restores
+     *  *membership* between replications -- an agent added during model construction stays a member
+     *  -- but nothing restored a *position*, because the position was set once in an `init` block
+     *  that runs at construction and never again. So replication 1 started at the declared point and
+     *  every replication after it started whereever replication 1 happened to end, silently: the run
+     *  completes, the statistics look plausible, and only a model whose answer depends on where
+     *  vehicles begin would show it.
+     *
+     *  This is the same defect a manifest surviving a replication is, and it has the same shape: an
+     *  interface cannot enforce it, so the class that owns the state has to be a `ModelElement` and
+     *  override this. Membership is re-established defensively as well, so that a model which
+     *  removed the resource from its context mid-replication still starts the next one whole.
+     */
+    override fun initialize() {
+        super.initialize()
+        if (this !in space.context) space.context.add(this)
+        space.placeAt(this, initialPosition)
     }
 
     /**

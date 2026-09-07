@@ -99,6 +99,38 @@ open class AgvSystem @JvmOverloads constructor(
             spaceSystem.auditAtReplicationEnd = value
         }
 
+    /**
+     * Whether the space layer registers a response per **link**.
+     *
+     * Off by default, because a large network would otherwise put a row on every report and in every
+     * output database for every aisle in it. The passive subsystem takes this as a constructor
+     * argument; here it is a property, settable up to the moment the model runs, and switching it
+     * off again takes the responses back out.
+     *
+     * A model that wants to know *where* its congestion is has no other way to ask. Fleet-level
+     * rows say how much blocking there was; these say which aisles produced it.
+     */
+    var collectLinkStatistics: Boolean
+        get() = spaceSystem.collectLinkStatistics
+        set(value) {
+            spaceSystem.collectLinkStatistics = value
+        }
+
+    /**
+     * Whether the space layer registers a response per **zone**: the finest tier, and the most
+     * expensive.
+     *
+     * The tier that answers questions about junctions, since a junction is a zone and its occupancy
+     * is the only direct measurement of what crossing traffic costs. A thousand-zone network
+     * registers a thousand responses, so this is off by default and worth switching on for a
+     * diagnostic run rather than for a study.
+     */
+    var collectZoneStatistics: Boolean
+        get() = spaceSystem.collectZoneStatistics
+        set(value) {
+            spaceSystem.collectZoneStatistics = value
+        }
+
     init {
         // The space layer's three movement hold queues, which the passive subsystem reports by
         // default and an active model must not: under the passive paradigm that queue holds loads

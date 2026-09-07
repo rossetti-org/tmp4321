@@ -580,4 +580,11 @@ private object AgvGuideSnippets {
         val aboard = cart.numLoadsAboardResponse?.acrossReplicationStatistic?.average
         val perTour = cart.loadsPerTour?.acrossReplicationStatistic?.average
     }
+
+    // -- §4 Finding where the congestion is -------------------------------
+
+    fun switchOnTheFinerTiers(agv: AgvSystem) {
+        agv.collectLinkStatistics = true    // a response per link
+        agv.collectZoneStatistics = true    // a response per zone: the finest, and the most expensive
+    }
 }

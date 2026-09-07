@@ -900,6 +900,29 @@ For a model that wants transport requests given up rather than left
 hanging. It is not needed for teardown: `ProcessModel.afterReplication`
 terminates every suspended entity without help from this subsystem.
 
+### …find out where the congestion is?
+
+Fleet-level rows say how much blocking there was. To find out *which aisles* produced it, switch on
+one of the space layer's two finer tiers:
+
+```kotlin
+agv.collectLinkStatistics = true    // a response per link
+agv.collectZoneStatistics = true    // a response per zone: the finest, and the most expensive
+```
+
+Both are off by default, because a thousand-zone network would otherwise put a thousand rows on
+every report and in every output database. Both are settable up to the moment the model runs, in
+either direction: switching one off takes its responses back out.
+
+**Per-zone is the tier that answers questions about junctions.** A junction is a zone, so its
+occupancy is the only direct measurement of what crossing traffic costs — and a junction of zero
+length is still held for one traversal of the first zone beyond it, which is why an apparently
+free crossing can be a bottleneck. See
+[`ksl-guidedpath` §4](ksl-guidedpath.md#model-a-rectangular-grid-of-two-way-aisles) for the
+arithmetic and for the layout lever that removes it.
+
+---
+
 ### …check the subsystem's own bookkeeping?
 
 ```kotlin

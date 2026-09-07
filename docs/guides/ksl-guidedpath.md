@@ -467,6 +467,13 @@ Both flags can also be set later, up to the moment the model runs, and
 either direction takes effect at once — switching one on registers its
 responses, switching it off removes them.
 
+The active subsystem has the same two tiers, as properties on `AgvSystem`
+rather than constructor arguments
+([`ksl-fleet` §4](ksl-fleet.md#find-out-where-the-congestion-is)). Per-zone
+is the tier that answers questions about junctions, since a junction is a
+zone and its occupancy is the only direct measurement of what crossing
+traffic costs.
+
 Always registered, whatever the network size: `numTransportersMoving`,
 `numTransportersBlocked`, `numTransportersIdle`, `zoneUtilization`,
 `numDeadlocksDetected`, `numObstructionsDetected`, the six per-transport
