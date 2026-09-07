@@ -434,7 +434,7 @@ Answering `false` lets it finish entering the zone and halt on it.
 
 A halted transporter is `isHalted`, reads as `IDLE` because that is what it
 is doing, and **does not resume by itself**: nothing is scheduled for it
-and nobody is waiting on it. `space.resumeHaltedTransporter(cart)` is what
+and nobody is waiting on it. `system.resumeHaltedTransporter(cart)` is what
 starts it again, and whatever halted it is responsible for calling that. A
 transporter halted and never released holds its zones for the rest of the
 replication, which is the honest model of a vehicle stopped mid-aisle and

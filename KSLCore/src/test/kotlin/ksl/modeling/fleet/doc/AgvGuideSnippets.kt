@@ -38,6 +38,19 @@ import ksl.modeling.entity.KSLProcessBuilder
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.entity.ResourceWithQ
 import ksl.modeling.entity.tow
+import ksl.modeling.fleet.Line
+import ksl.modeling.fleet.LineStop
+import ksl.modeling.fleet.Stop
+import ksl.modeling.fleet.StopContextIfc
+import ksl.modeling.fleet.StopInstruction
+import ksl.modeling.fleet.TourStopActionIfc
+import ksl.modeling.fleet.TransitResult
+import ksl.modeling.fleet.policies.AppendTourPolicy
+import ksl.modeling.fleet.policies.CheapestInsertionTourPolicy
+import ksl.modeling.fleet.policies.ConsolidatingPolicy
+import ksl.modeling.fleet.policies.DispatcherStopControl
+import ksl.modeling.fleet.policies.PickUpAllThenDeliverAllPolicy
+import ksl.modeling.fleet.policies.TimetableControl
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.LinkType
 import ksl.modeling.guidedpath.TransporterPlacement
@@ -52,7 +65,7 @@ import ksl.utilities.random.rvariable.LognormalRV
 import ksl.utilities.random.rvariable.RVariableIfc
 
 /**
- * Compile-only host for every code snippet in `docs/guides/ksl-agv.md`.
+ * Compile-only host for every code snippet in `docs/guides/ksl-fleet.md`.
  * Each `fun` body is a verbatim snippet (or its body); compiling this file
  * proves every example in the guide references real public APIs.
  *
@@ -403,5 +416,124 @@ private object AgvGuideSnippets {
         val stranded = agv.numTasksNeverAssigned.acrossReplicationStatistic.average
         val hanging = agv.numEntitiesNeverResumed.acrossReplicationStatistic.average
         val open = agv.numAssignmentsStillOpen.acrossReplicationStatistic.average
+    }
+
+    // -- §4 Carrying more than one load at a time -------------------------
+
+    fun aFleetThatConsolidates(parent: ModelElement, network: GuidedPathNetwork) {
+        // A vehicle only carries several if it is *given* several. A batching window collects the
+        // tasks; ConsolidatingPolicy is what fills a vehicle that still has room.
+        val agv = AgvSystem(
+            parent, network,
+            assignmentPolicy = BatchedAssignmentPolicy(window = 5.0, inner = ConsolidatingPolicy())
+        )
+
+        val cart = AgvVehicle(
+            agv, TransporterPlacement.At("Depot"), ConstantRV(60.0),
+            name = "Cart", loadCapacity = 4
+        )
+    }
+
+    fun chooseTheTourPolicy(agv: AgvSystem) {
+        agv.dispatcher.tourPolicy = CheapestInsertionTourPolicy()   // the default
+        // or PickUpAllThenDeliverAllPolicy() -- a literal milk run
+        // or AppendTourPolicy()             -- the naive baseline, useful as a comparison
+        agv.dispatcher.tourPolicy = PickUpAllThenDeliverAllPolicy()
+        agv.dispatcher.tourPolicy = AppendTourPolicy()
+    }
+
+    // -- §4 Running a fixed route -----------------------------------------
+
+    class MilkRunShop(parent: ModelElement) : ProcessModel(parent, "MilkRunShop") {
+
+        val network = buildNetwork()
+
+        init {
+            spatialModel = network
+        }
+
+        val fleet = AgvSystem(this, network, name = "Fleet")
+
+        val depot = Stop(fleet, ENTRY)
+        val cell1 = Stop(fleet, EXIT)
+        val cell2 = Stop(fleet, DEPOT)
+
+        // A LineStop's default action is what serving a stop ordinarily means: put down everyone
+        // bound for here, then take whoever is waiting for somewhere further along.
+        val milkRun = Line("MilkRun", listOf(LineStop(depot), LineStop(cell1), LineStop(cell2)))
+
+        fun postOneCycle() {
+            // One post is one cycle. A service that runs all day is a model that posts again --
+            // on a headway, on a timetable, or when the previous cycle ends.
+            fleet.dispatcher.postLine(milkRun)
+        }
+
+        val timeToCross = Response(this, "TimeToCross")
+
+        inner class Rider : Entity() {
+            val part = process {
+                currentLocation = network.requireLocation(EXIT)
+                val r = rideFrom(cell1, DEPOT)      // waits at the stop, boards, is set down
+                timeToCross.value = r.totalTime
+            }
+        }
+    }
+
+    // -- §4 Writing your own stop action ----------------------------------
+
+    class BoardOnePerMinute(val stop: Stop) : TourStopActionIfc {
+        override val servesStop = stop
+        override suspend fun KSLProcessBuilder.perform(context: StopContextIfc) {
+            // Name the place before entering the context: inside `with(context)`, `stop` is the
+            // context's own `TourStop` -- somewhere on this tour -- not the permanent `Stop`.
+            val here = this@BoardOnePerMinute.stop
+            with(context) {
+                for (ride in here.waitingFor(onwardLocations)) {
+                    if (vehicle.spareCapacity <= 0) break
+                    delay(1.0)
+                    takeAboard(ride)
+                }
+            }
+        }
+    }
+
+    // -- §4 Holding, running express, turning short -----------------------
+
+    fun controlTheService(fleet: AgvSystem, bus: AgvVehicle, stopA: Stop, stopB: Stop, stopC: Stop) {
+        // Hold at each stop until its scheduled departure, measured from the start of the cycle.
+        bus.stopControl = TimetableControl(mapOf(stopA to 0.0, stopB to 8.0, stopC to 17.0))
+
+        // Or let a controller decide, cycle by cycle.
+        bus.stopControl = DispatcherStopControl()
+        fleet.dispatcher.instruct(bus, StopInstruction.Skip)             // run it past the next stop
+        fleet.dispatcher.instruct(bus, StopInstruction.ServeAndEndTour)  // short-turn it
+    }
+
+    // -- §4 A transfer needs no machinery ---------------------------------
+
+    class TransferShop(parent: ModelElement) : ProcessModel(parent, "TransferShop") {
+
+        val network = buildNetwork()
+
+        init {
+            spatialModel = network
+        }
+
+        val fleet = AgvSystem(this, network, name = "Fleet")
+        val originStop = Stop(fleet, ENTRY)
+        val hubStop = Stop(fleet, EXIT)
+
+        val connectionTime = Response(this, "ConnectionTime")
+        val numTransfers = Response(this, "NumTransfers")
+
+        inner class Shipment : Entity() {
+            val shipment = process {
+                currentLocation = network.requireLocation(ENTRY)
+                val toHub: TransitResult = rideFrom(originStop, EXIT)
+                val onward: TransitResult = rideFrom(hubStop, DEPOT)
+                connectionTime.value = onward.waitForVehicle
+                numTransfers.value = 1.0
+            }
+        }
     }
 }

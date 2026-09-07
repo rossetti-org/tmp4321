@@ -68,10 +68,10 @@ but because there is nowhere to put them:
   so a vehicle with room for four carries one; deciding which loads ride
   together, and in what order the vehicle collects and drops them, is a
   decision about the fleet rather than about any one load
-  ([§4](#how-do-i-carry-more-than-one-load-at-a-time)).
+  ([§4](#carry-more-than-one-load-at-a-time)).
 - **Fixed routes.** Run a service that calls at stops on a cycle and
   carries whoever is waiting, rather than one that is summoned
-  ([§4](#how-do-i-run-a-fixed-route--a-bus-line-a-milk-run-a-line-haul)).
+  ([§4](#run-a-fixed-route--a-bus-line-a-milk-run-a-line-haul)).
 
 **When not to use it.** If your rule is "send the nearest free cart" and
 you are content for it to be evaluated the moment an entity asks, the
@@ -90,23 +90,27 @@ acceleration, turn penalties) is equally absent here.
 
 **Three objects, and the modeller names two of them.**
 
-- **`AgvSystem`** — the fleet and its dispatcher. It is an `AgentModel`
+- **`FleetSystem`** — the fleet and its dispatcher. It is an `AgentModel`
   (and so a `ProcessModel`), because the vehicles and the dispatcher are
   agents with processes and mailboxes. Your own `ProcessModel` holds one
-  as a child element, and your entities suspend in its queues.
-- **`AgvVehicle`** — the permanent identity you declare, name, and read
+  as a child element, and your entities suspend in its queues. It is
+  abstract, so what you actually name is one of its bindings:
+  `AgvSystem` for a guide path, `FreePathFleet` for a spatial model.
+- **`FleetVehicle`** — the permanent identity you declare, name, and read
   statistics from. It is *not* the thing that decides and *not* the thing
-  that occupies space. It **composes** a `GuidedTransporter` for its
-  physical presence, and holds a per-replication agent for its behaviour.
+  that occupies space. It **composes** a body for its physical presence,
+  and holds a per-replication agent for its behaviour. Again you name a
+  binding: `AgvVehicle`, or `FreePathVehicle`.
 - **`Dispatcher`** — decides who goes where, and owns the line of work
-  waiting to be done.
+  waiting to be done. One class, whatever the vehicles run on.
 
-A vehicle composes its transporter rather than inheriting one, and the
-reason is a modelling stance rather than a taste in inheritance: a
-`GuidedTransporter` is a `Resource`, and a resource is passive by
-construction. Inheriting one would expose a way to `seize` this vehicle as
-though it were a tool, which is exactly what this subsystem exists to
-replace.
+A vehicle composes its body rather than inheriting it, and the reason is a
+modelling stance rather than a taste in inheritance: on a guide path that
+body is a `GuidedTransporter`, and a `GuidedTransporter` is a `Resource` —
+passive by construction. Inheriting one would expose a way to `seize` this
+vehicle as though it were a tool, which is exactly what this subsystem
+exists to replace. Composition is also what makes the substrate
+replaceable: the body is the only part that a second one has to change.
 
 **A task is what queues, not a load.** When an entity asks for transport,
 a `Task` is created and posted to the dispatcher's `TaskQ`. The task is a
@@ -277,9 +281,10 @@ same numbers for the same shop, which `PerCarryStatisticsTest` holds
 them to.
 
 These two are **protocol intervals, not vehicle states**, and the
-distinction will matter as soon as a vehicle can carry more than one
-load. An approach includes time the vehicle spent blocked, and time
-disengaging from a repositioning move, neither of which is moving empty.
+distinction matters as soon as a vehicle carries more than one load
+([below](#carry-more-than-one-load-at-a-time)). An approach includes time
+the vehicle spent blocked, and time disengaging from a repositioning
+move, neither of which is moving empty.
 For the state question, ask the vehicle:
 `Cart:Body:FracTimeMovingEmpty` is the fraction of its time moving with
 no load, and `FracTimeTransporting` the fraction moving with one. Those
@@ -298,8 +303,8 @@ differences in how rows are named will meet you.
 
 | Passive row | Active row | Why |
 |---|---|---|
-| `Sys:NumZoneTraversals` | `Agv:Space:NumZoneTraversals` | One segment, applied to all thirteen shared rows |
-| `Cart1:FracTimeBlocked` | `Cart1:Body:FracTimeBlocked` | One segment, applied to all nine physical rows |
+| `Sys:NumZoneTraversals` | `Agv:Space:NumZoneTraversals` | One segment, applied to every shared row |
+| `Cart1:FracTimeBlocked` | `Cart1:Body:FracTimeBlocked` | One segment, applied to every physical row |
 | `Sys:TransportTime` | *(no counterpart)* | Different intervals — see below |
 
 **The `:Space:` segment** appears because a passive transport system
@@ -421,9 +426,9 @@ itself; a bidding rule that consumed simulated time could not be written.
 ```kotlin
 class LeastLoadedBid : BidPolicyIfc {
     override fun bid(
-        vehicle: AgvVehicle,
+        vehicle: FleetVehicle,
         cfp: CallForProposals,
-        network: GuidedPathNetwork
+        space: FleetSpaceIfc
     ): Bid? = Bid(vehicle, vehicle.numTasksCompleted.value, note = "tasks done so far")
 }
 ```
@@ -524,7 +529,7 @@ fleet[1].dispositionPolicy = MoveToStagingDisposition("StagingSpur2")
 
 ```kotlin
 class GoHomeWhenTiredDisposition(private val after: Double) : DispositionPolicyIfc {
-    override fun disposition(vehicle: AgvVehicle): Disposition =
+    override fun disposition(vehicle: FleetVehicle): Disposition =
         if (vehicle.numTasksCompleted.value >= after) Disposition.ReturnToHomeBase
         else Disposition.ParkInPlace
 }
@@ -722,10 +727,10 @@ is ordinary process code.
 | `charge(vehicle)` | Holds a vehicle on a charger until its battery is full |
 | `Interruption` | Where it stopped, what it holds, what it was doing, the task in hand, and **who is stuck behind it** |
 
-**A towed vehicle is still on the guide path.** It claims and gives up zones
-exactly as a driving one does, because a vehicle being pushed down an aisle
-blocks that aisle every bit as much as one driving down it. What changes is
-where it ends up. It is exempt from its own faults while under tow —
+**A towed vehicle is still on the guide path.** On `AgvSystem` it claims
+and gives up zones exactly as a driving one does, because a vehicle being
+pushed down an aisle blocks that aisle every bit as much as one driving
+down it. What changes is where it ends up. It is exempt from its own faults while under tow —
 neither a flat battery nor the failure it is being pushed away from stops it
 part way.
 
@@ -832,7 +837,7 @@ distance comparison never takes the work back however long it stands there.
 collect — any vehicle that can reach the pickup takes the task, and the
 improvement threshold does not apply, because the incumbent's cost is no
 longer a distance to compare against. A policy of your own should make the
-same allowance; `AgvVehicle.isOutOfService` is the test.
+same allowance; `FleetVehicle.isOutOfService` is the test.
 
 **And a vehicle being dealt with is not spare capacity.**
 `Agv:NumVehiclesOutOfService` is the third of the three fleet counts, and
@@ -926,65 +931,19 @@ not.
 
 ---
 
-## 5. The key types at a glance
-
-| Type | What it is |
-|---|---|
-| `FleetSystem` | The fleet and its dispatcher. An `AgentModel`. Substrate-independent; a subclass binds it to one. |
-| `FleetVehicle` | The vehicle a modeller names. Composes a body; holds a per-replication agent. |
-| `AgvSystem` / `AgvVehicle` | The **guide-path binding** (`ksl.modeling.agv`): builds the space layer, adds the zone and blocking rows. |
-| `FreePathFleet` / `FreePathVehicle` | The **free-path binding**: the same fleet over a spatial model, where nothing blocks. |
-| `VehicleBodyIfc` | What the fleet needs from a vehicle's physical presence: a manifest, its time, something seizable, something that can be stopped. |
-| `Dispatcher` | Decides who goes where; owns the `TaskQ`, which is the only queue this subsystem reports. |
-| `Dispatcher.Task` | Something a vehicle may be asked to do. A `QObject`, so the *task* carries the wait. |
-| `Dispatcher.TransportTask` | A load to collect and deliver. What `requestFleetTransport` returns. |
-| `Dispatcher.ServiceTask` | A self-directed errand, by `ServiceKind` — currently `Reposition`. Posted with `postService`; cancellable. |
-| `Dispatcher.LineTask` | One cycle of a declared service. Posted with `postLine`; cancellable. |
-| `Tour` | The itinerary that discharges what a vehicle is committed to: stops in order, plus a cursor. |
-| `TourStop` | Somewhere to be, and something to do there. Per-tour; names a location. |
-| `TourStopActionIfc` | What a vehicle does on arriving. Open and **suspending**: a dwell, a boarding, a wait. |
-| `StopContextIfc` | What an action is handed: the vehicle, the stop, the tour, and the verbs `takeAboard`, `setDown`, `holdAt`. |
-| `Stop` | A permanent place where loads wait to board. Owns the second waiting line and reports it. |
-| `Line` / `LineStop` | A declared service: a fixed sequence of stops, run cycle after cycle. Shared, never consumed. |
-| `StopControlIfc` | Decides, stop by stop, whether a vehicle serves the next place. Asked **before the leg**; suspending. One per vehicle. |
-| `StopInstruction` | `Serve(departNotBefore)`, `Skip`, `ServeAndEndTour` — hold, run express, turn short. |
-| `TransitResult` | What a ride cost the load that took it. No `waitForAssignment` term: nobody decided. |
-| `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
-| `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
-| `Interruption` | A vehicle has stopped: `Failed` or `OutOfCharge`, with where, what it holds, and who is stuck behind it. |
-| `InterruptionPolicyIfc` | What happens next. A process, so it may wait for a technician, assess, and tow. One per vehicle. |
-| `VehicleInterruptionListenerIfc` | Told when a vehicle stops and when it comes back. Any number per fleet. |
-| `TaskBoard` | The read-only view of the queue handed to policies: `unassigned`, `assigned`, `oldest`. |
-| `Assignment` | A vehicle's commitment to a task. `isRevocable` until the load is aboard. |
-| `AssignmentProposal` | What a policy returns. Inert: proposing is not doing. |
-| `FeasibleAssignments` | The pairings available now, enumerable and searchable. Feasible means reachable. |
-| `FleetTransportResult` | What a transport cost, with the wait split into assignment and arrival. |
-| `FleetDispatchException` | A policy named a vehicle that had not declared itself available. |
-| `FleetAssignmentException` | An assignment was revoked after pickup, or used after completion. |
-| `FleetProtocolException` | A task completed twice, or a suspended entity resumed twice. |
-| `FleetInvariantViolation` | The closing audit found the subsystem's own account of itself does not add up. |
-
-The four replaceable policies: `AssignmentPolicyIfc` (on the dispatcher),
-`TaskSelectionRuleIfc` (on its queue), `BidPolicyIfc` and
-`DispositionPolicyIfc` (per vehicle). The physical layer's five —
-routing, zone contention, zone control — are the passive subsystem's and
-are documented there.
-
----
-
-### How do I carry more than one load at a time?
+### …carry more than one load at a time?
 
 Give the vehicle a `loadCapacity`, and give the dispatcher a way to hand it more than one task at
 once:
 
 ```kotlin
-val cart = AgvVehicle(agv, TransporterPlacement.At("Depot"), ConstantRV(60.0),
-                      name = "Cart", loadCapacity = 4)
-
 // A vehicle only carries several if it is *given* several. A batching window collects the tasks;
 // ConsolidatingPolicy is what fills a vehicle that still has room.
 val agv = AgvSystem(this, network,
     assignmentPolicy = BatchedAssignmentPolicy(window = 5.0, inner = ConsolidatingPolicy()))
+
+val cart = AgvVehicle(agv, TransporterPlacement.At("Depot"), ConstantRV(60.0),
+                      name = "Cart", loadCapacity = 4)
 ```
 
 The **order** the vehicle visits its stops in is a separate decision, and it belongs to the
@@ -1033,7 +992,7 @@ where the fleet is the constraint.
 
 ---
 
-### How do I run a fixed route — a bus line, a milk run, a line-haul?
+### …run a fixed route — a bus line, a milk run, a line-haul?
 
 Declare the places loads wait, string them into a line, and post a cycle of it. Nothing is posted on
 a rider's behalf and no vehicle is assigned to one: a rider stands at a stop, and whatever comes past
@@ -1084,8 +1043,11 @@ dwells, meters boarding, or asks a question and waits for the answer is an ordin
 class BoardOnePerMinute(val stop: Stop) : TourStopActionIfc {
     override val servesStop = stop
     override suspend fun KSLProcessBuilder.perform(context: StopContextIfc) {
+        // Name the place before entering the context: inside `with(context)`, `stop` is the
+        // context's own `TourStop` -- somewhere on this tour -- not the permanent `Stop`.
+        val here = this@BoardOnePerMinute.stop
         with(context) {
-            for (ride in stop.waitingFor(onwardLocations)) {
+            for (ride in here.waitingFor(onwardLocations)) {
                 if (vehicle.spareCapacity <= 0) break
                 delay(1.0)
                 takeAboard(ride)
@@ -1110,7 +1072,7 @@ class BoardOnePerMinute(val stop: Stop) : TourStopActionIfc {
 
 and per rider, `TransitResult.numVehiclesPassed` is how many it watched go without room.
 
-### How do I hold, run express, or turn a service short?
+### …hold, run express, or turn a service short?
 
 Give the vehicle a `stopControl`. It is asked **before each leg**, which is what makes `Skip` mean
 *do not make this journey* rather than *drive all the way there and then refuse*:
@@ -1162,11 +1124,62 @@ val shipment = process {
 }
 ```
 
+---
+
+## 5. The key types at a glance
+
+| Type | What it is |
+|---|---|
+| `FleetSystem` | The fleet and its dispatcher. An `AgentModel`. Substrate-independent; a subclass binds it to one. |
+| `FleetVehicle` | The vehicle a modeller names. Composes a body; holds a per-replication agent. |
+| `AgvSystem` / `AgvVehicle` | The **guide-path binding** (`ksl.modeling.agv`): builds the space layer, adds the zone and blocking rows. |
+| `FreePathFleet` / `FreePathVehicle` | The **free-path binding**: the same fleet over a spatial model, where nothing blocks. |
+| `VehicleBodyIfc` | What the fleet needs from a vehicle's physical presence: a manifest, its time, something seizable, something that can be stopped. |
+| `Dispatcher` | Decides who goes where; owns the `TaskQ`, which is the only queue this subsystem reports. |
+| `Dispatcher.Task` | Something a vehicle may be asked to do. A `QObject`, so the *task* carries the wait. |
+| `Dispatcher.TransportTask` | A load to collect and deliver. What `requestFleetTransport` returns. |
+| `Dispatcher.ServiceTask` | A self-directed errand, by `ServiceKind` — currently `Reposition`. Posted with `postService`; cancellable. |
+| `Dispatcher.LineTask` | One cycle of a declared service. Posted with `postLine`; cancellable. |
+| `Tour` | The itinerary that discharges what a vehicle is committed to: stops in order, plus a cursor. |
+| `TourStop` | Somewhere to be, and something to do there. Per-tour; names a location. |
+| `TourStopActionIfc` | What a vehicle does on arriving. Open and **suspending**: a dwell, a boarding, a wait. |
+| `StopContextIfc` | What an action is handed: the vehicle, the stop, the tour, and the verbs `takeAboard`, `setDown`, `holdAt`. |
+| `Stop` | A permanent place where loads wait to board. Owns the second waiting line and reports it. |
+| `Line` / `LineStop` | A declared service: a fixed sequence of stops, run cycle after cycle. Shared, never consumed. |
+| `StopControlIfc` | Decides, stop by stop, whether a vehicle serves the next place. Asked **before the leg**; suspending. One per vehicle. |
+| `StopInstruction` | `Serve(departNotBefore)`, `Skip`, `ServeAndEndTour` — hold, run express, turn short. |
+| `TransitResult` | What a ride cost the load that took it. No `waitForAssignment` term: nobody decided. |
+| `Battery` | A vehicle's energy store: capacity, two drain rates, and a charging rate. Immutable. |
+| `FailureModel` | When a vehicle fails and how long a repair takes, against one of four bases. |
+| `Interruption` | A vehicle has stopped: `Failed` or `OutOfCharge`, with where, what it holds, and who is stuck behind it. |
+| `InterruptionPolicyIfc` | What happens next. A process, so it may wait for a technician, assess, and tow. One per vehicle. |
+| `VehicleInterruptionListenerIfc` | Told when a vehicle stops and when it comes back. Any number per fleet. |
+| `TaskBoard` | The read-only view of the queue handed to policies: `unassigned`, `assigned`, `oldest`. |
+| `Assignment` | A vehicle's commitment to a task. `isRevocable` until the load is aboard. |
+| `AssignmentProposal` | What a policy returns. Inert: proposing is not doing. |
+| `FeasibleAssignments` | The pairings available now, enumerable and searchable. Feasible means reachable. |
+| `FleetTransportResult` | What a transport cost, with the wait split into assignment and arrival. |
+| `FleetDispatchException` | A policy named a vehicle that had not declared itself available. |
+| `FleetAssignmentException` | An assignment was revoked after pickup, or used after completion. |
+| `FleetProtocolException` | A task completed twice, or a suspended entity resumed twice. |
+| `FleetInvariantViolation` | The closing audit found the subsystem's own account of itself does not add up. |
+
+The seven replaceable policies: `AssignmentPolicyIfc` and `TourPolicyIfc`
+(on the dispatcher), `TaskSelectionRuleIfc` (on its queue), and
+`BidPolicyIfc`, `DispositionPolicyIfc`, `InterruptionPolicyIfc` and
+`StopControlIfc` (per vehicle). A `LineStop` carries an eighth seam in its
+`TourStopActionIfc`, and any number of `VehicleInterruptionListenerIfc`
+may observe. The guide path's own five — transporter allocation, zone
+contention, idle disposition, route selection, zone control — are the
+passive subsystem's and are documented there.
+
+---
+
 ## 6. Gotchas & best practices
 
-### Everything in the passive guide's §6 still applies
+### On a guide path, everything in the passive guide's §6 still applies
 
-The space is the same space. A destination is still a resource, an idle
+Under `AgvSystem` the space is the same space. A destination is still a resource, an idle
 vehicle left on the guide path still blocks everything behind it, two-way
 links are still where deadlock comes from, and zone size is still chosen
 from control granularity rather than from how smooth the animation looks.
@@ -1294,12 +1307,15 @@ uses only one of the two paradigms sees only one of the two rows.
 
 ### The dispatcher's queue is the waiting line; the hold queues are not
 
-Five hold queues carry suspensions — awaiting pickup, awaiting boarding,
-in transit, availability, dispatcher idle — and all five report nothing by
-default.
+Six hold queues carry suspensions — awaiting pickup, awaiting boarding,
+in transit, availability, dispatcher idle, out of service — and all six
+report nothing by default.
 `statisticalReportingForHoldQueues(true)` switches them on for debugging,
 and reaches down to the [space layer's three](ksl-guidedpath.md#find-out-who-is-suspended-in-the-middle-of-a-journey)
-as well, so a model being debugged shows all eight. Turn them off again:
+as well, so a model being debugged shows all nine. Each `Stop` owns a
+seventh kind, where a vehicle holding for a load waits; it is not switched
+by that call and never reports, because a vehicle waiting at a stop is
+already counted by the stop's own queue from the other side. Turn them off again:
 they put rows on the report that look like waiting lines, and two of them
 — riding, and the space layer's driving queue — are not. The queues to
 read are `dispatcher.taskQ` and each `Stop`'s own.
@@ -1328,15 +1344,17 @@ layer.
 
 ## 7. See also
 
-- [`ksl-guidedpath`](ksl-guidedpath.md) — **read this first.** The
-  physical layer this package runs on: networks, zones, links, blocking,
-  routing, zone control, and deadlock. Everything there is true here.
+- [`ksl-guidedpath`](ksl-guidedpath.md) — **read this first if your
+  vehicles contend for space.** The physical layer `AgvSystem` runs on:
+  networks, zones, links, blocking, routing, zone control, and deadlock.
+  Everything there is true of the guide-path binding.
 - [`ksl-agent`](ksl-agent.md) — the agent framework the vehicles and the
   dispatcher are built on: mailboxes, `contractNet`, runtime agents.
 - [`ksl-entity`](ksl-entity.md) — the process view, and where
   `transportByFleet` sits among `KSLProcessBuilder`'s other verbs.
-- [`ksl-spatial`](ksl-spatial.md) — `MovableResource` and
-  `DistancesModel`, for vehicles that do not contend for space at all.
+- [`ksl-spatial`](ksl-spatial.md) — `MovableResource`, `DistancesModel`
+  and the movement seam, for vehicles that do not contend for space at
+  all. This is the substrate `FreePathFleet` binds to.
 - `KSLExamples`, under `ksl.examples.general.agv`:
   - `TwoParadigmsExample` — the same shop modelled both ways, agreeing
     exactly on one vehicle. **Read this one first.**

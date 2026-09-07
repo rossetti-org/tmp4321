@@ -715,6 +715,14 @@ A compact tour. Member-level detail is on the Dokka pages.
   from outside it.
 - `ShiftControl` (in `ksl.modeling.entity`) — takes a resource off
   shift and back by driving its capacity.
+- `FleetSpaceIfc` — the other half of the seam: what and where
+  "somewhere" is. A fleet asks a space to name a location and to say how
+  far apart two are, and knows nothing else about it.
+
+A `MovableResource` seized by an entity is the passive use of all this. To
+put the decision the other way round — a dispatcher that tasks the fleet,
+batches, negotiates and takes work back — `FreePathFleet` binds that
+machinery to a spatial model. See [`ksl-fleet`](ksl-fleet.md).
 
 **Movable resources**
 
@@ -794,6 +802,8 @@ A compact tour. Member-level detail is on the Dokka pages.
   serves.
 - `ksl-station.md` — uses these resources for movable-server stations.
 - `ksl-agent.md` — the parallel spatial system in agent-based models.
+- `ksl-fleet.md` — dispatcher-driven vehicles over this substrate
+  (`FreePathFleet`), and over a guide path.
 - `ksl-modeling.md` — the underlying modeling primitives.
 - `ksl-utilities-random.md` — velocity distributions, stream control.
 

@@ -47,7 +47,7 @@ model matches your problem.
 | [`ksl-station`](ksl-station.md) *(experimental)* | **Queueing-network view** — passive stations route jobs |
 | [`ksl-agent`](ksl-agent.md) *(experimental)* | **Agent-based view** — statechart-reactive autonomous actors |
 | [`ksl-guidedpath`](ksl-guidedpath.md) *(experimental)* | **Guided path transporters** — vehicles on a fixed network that must claim the space ahead of them, and block each other when they cannot |
-| [`ksl-fleet`](ksl-fleet.md) *(experimental)* | **Active guided vehicles** — the same guide path, with the decision moved out of the entity and into a dispatcher that can batch, negotiate, and take work back |
+| [`ksl-fleet`](ksl-fleet.md) *(experimental)* | **Active vehicle fleets** — the decision moved out of the entity and into a dispatcher that can batch, negotiate, and take work back; substrate-independent, bound to a guide path (`ksl.modeling.agv`) or to a spatial model |
 | [`ksl-supplychain`](ksl-supplychain.md) *(experimental)* | **Multi-echelon supply-chain** domain layer |
 
 These guides cross-reference each other in their §7 "See also"
