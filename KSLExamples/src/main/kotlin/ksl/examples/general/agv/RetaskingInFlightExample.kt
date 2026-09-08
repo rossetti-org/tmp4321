@@ -1,3 +1,21 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package ksl.examples.general.agv
 
 import ksl.modeling.agv.AgvSystem
@@ -56,6 +74,16 @@ import ksl.utilities.random.rvariable.ConstantRV
  *  the load that has waited longest look as though it had just arrived, corrupting both the
  *  statistic and any age-based rule reading it. What the run reports instead is a reassignment
  *  count, so the swap is visible rather than silent.
+ *
+ *  ## Why this example reports no confidence intervals
+ *
+ *  Every other comparison in this family of examples runs many replications and reports half-widths,
+ *  because the quantity being compared is a random variable. Here it is not. The cart's velocity is
+ *  constant, the legs are 100 apiece, the two loads arrive at times the study chooses, and there is
+ *  no arrival process at all. One replication produces the whole answer, and the claim being made is
+ *  arithmetic: at t = 2 the swap saves exactly 200 and the rule takes it; at t = 15 it costs exactly
+ *  200 and the rule refuses. An interval around a deterministic quantity would obscure that rather
+ *  than support it.
  */
 object RetaskingInFlightExample {
 
@@ -142,8 +170,7 @@ object RetaskingInFlightExample {
         println()
     }
 
-    @JvmStatic
-    fun main(args: Array<String>) {
+    fun report() {
         println()
         println("Re-tasking a cart in mid-journey - what the passive paradigm has no place for")
         println()
@@ -176,4 +203,8 @@ object RetaskingInFlightExample {
         println("  waiting longest still looks like one, and the fact that it was passed over is")
         println("  reported rather than absorbed.")
     }
+}
+
+fun main() {
+    RetaskingInFlightExample.report()
 }

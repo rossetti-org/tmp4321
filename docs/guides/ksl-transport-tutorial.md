@@ -53,6 +53,15 @@ A test — `KSLExamples/src/test/kotlin/ksl/examples/general/doc/TransportTutori
 file its case names. If an example is edited and this page is not, the build says
 so.
 
+**Reading the numbers.** Every comparison on this page is **paired**: the alternatives
+run on common random numbers through a `ScenarioRunner`, and the reported difference is
+computed replication by replication with a half-width beside it. A difference smaller than
+its half-width means *no detectable difference at this sample size*, which is not the same
+as "the same". Two cases report no intervals and say why — case 5 is deterministic, and
+cases 9 and 10 measure wall-clock time. The full half-width summary report for every
+configuration, covering every response the model keeps, is printed by the runner: to the
+console for the small studies and to the KSL output directory for the larger ones.
+
 **Reading the figures.** Every case that models a network has a figure of it,
 drawn from the code that builds it. The figures are **topological**: an arrow is
 a link, and a number on it is that link's *declared length*, which is what
@@ -121,17 +130,17 @@ cart. Four properties of that description are load-bearing:
 
 ### The code
 
-`SimpleAGVExample.kt` in full, in the order the file declares it, with nothing
-left out but the file's own documentation comments — which this page replaces. The
-file is 218 lines including those comments; what follows is the rest of it. Every
-later case is presented the same way, so if you read one walk-through closely,
-read this one.
+`SimpleAGVExample.kt` in full, in the order the file declares it, with nothing left
+out but the GPL header and the file's own documentation comments — which this page
+replaces. Every later case is presented the same way, so if you read one
+walk-through closely, read this one.
 
 #### 1. Imports
 
 ```kotlin
 package ksl.examples.general.guidedpath
 
+import ksl.controls.experiments.ScenarioRunner
 import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.GuidedPathTransportSystem
@@ -144,36 +153,38 @@ import ksl.modeling.guidedpath.rules.EndOfZoneControl
 import ksl.modeling.guidedpath.rules.ParkInPlaceRule
 import ksl.modeling.guidedpath.rules.ReturnToHomeBaseRule
 import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
 import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.simulation.Model
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ConstantRV
 import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
 ```
 
-Worth reading once, because they say what a guide-path model is assembled from
-and you will not see them again in this tutorial.
+Worth reading once, because they say what a guide-path study is assembled from, and
+you will not see them again in this tutorial.
 
 - `ProcessModel` is the base class for a model whose entities are written as
-  suspending processes. `ModelElement` and `Model` are the framework: everything
-  in a KSL model is a `ModelElement` in a tree, and `Model` is the root you
-  simulate.
-- The `guidedpath` package is the substrate: a `GuidedPathNetwork` is the layout,
-  a `GuidedPathTransportSystem` runs vehicles over it, a `GuidedTransporter` is a
-  vehicle, and a `GuidedTransporterPoolWithQ` is a group of them that entities
-  queue for. `LinkType` and `TransporterPlacement` are small enumerations used
-  below.
+  suspending processes. `ModelElement` and `Model` are the framework: everything in
+  a KSL model is a `ModelElement` in a tree, and `Model` is the root you simulate.
+- The `guidedpath` package is the substrate: a `GuidedPathNetwork` is the layout, a
+  `GuidedPathTransportSystem` runs vehicles over it, a `GuidedTransporter` is a
+  vehicle, and a `GuidedTransporterPoolWithQ` is a group of them that entities queue
+  for.
 - The three `rules` imports are **policies**, and they are the whole experiment:
-  `ClosestByNetworkDistanceRule` chooses which cart comes,
-  `ReturnToHomeBaseRule` and `ParkInPlaceRule` say what an idle cart does.
-  `EndOfZoneControl` is a *zone control* rule, which decides at what point a
-  moving vehicle releases the zone behind it.
-- `Response` and `Counter` are the two statistic types: a `Response` collects
-  observations of a quantity (time in system), a `Counter` counts events (parts
-  delivered).
-- `ConstantRV` and `ExponentialRV` are random variables. A constant one is still
-  a random variable, which is how a fixed velocity is supplied where a
-  distribution is expected.
+  `ClosestByNetworkDistanceRule` chooses which cart comes, `ReturnToHomeBaseRule`
+  and `ParkInPlaceRule` say what an idle cart does. `EndOfZoneControl` decides at
+  what point a moving vehicle releases the zone behind it.
+- `Response`, `Counter` and `RandomVariable` are model elements: a `Response`
+  collects observations, a `Counter` counts events, and a `RandomVariable` wraps a
+  distribution so that it has a name, a stream the model manages, and a place in the
+  report. Each has a read-only `CIfc` companion interface, used in part 6.
+- `ScenarioRunner` and `MultipleComparisonAnalyzer` are the study machinery, and
+  parts 8 and 9 are where they earn their place.
 
 #### 2. The object, and the names the model is written in
 
@@ -186,23 +197,22 @@ object SimpleAGVExample {
     const val EXIT_STATION: String = "ExitStation"
     const val AGV1_HOME: String = "I6"
     const val AGV2_HOME: String = "I7"
+    const val SYSTEM_NAME: String = "AgvSystem"
 ```
 
-An `object` rather than a class because this file is a runnable study, not a
-component: there is one of it. The six constants are the vocabulary of everything
-below.
+An `object` rather than a class because this file is a study, not a component: there
+is one of it. The constants are the vocabulary of everything below.
 
-The two zone lengths are the interesting pair. **A zone is the unit of exclusion
-on a guide path — one zone holds one vehicle** — so choosing 12 for the loop says
-that two carts on the loop can never be closer than one zone apart, which for
-six-foot carts is the physical minimum. The home spurs are six feet long
-altogether: one cart, one zone. A single network-wide zone size could not express
-both, which is the argument for `zoneLength` being an argument of `link`, as it is
-in part 3.
+The two zone lengths are the interesting pair. **A zone is the unit of exclusion on a
+guide path — one zone holds one vehicle** — so choosing 12 for the loop says that two
+carts on the loop can never be closer than one zone apart, which for six-foot carts is
+the physical minimum. The home spurs are six feet long altogether: one cart, one zone.
+A single network-wide zone size could not express both, which is the argument for
+`zoneLength` being an argument of `link`, as it is in part 3.
 
-`AGV1_HOME` and `AGV2_HOME` are intersection names (`I6`, `I7`) rather than
-station names, and that is legal: anywhere the model asks for a place, an
-intersection name will do. A station is a *named* intersection, nothing more.
+`AGV1_HOME` and `AGV2_HOME` are intersection names rather than station names, and that
+is legal: anywhere the model asks for a place, an intersection name will do. A station
+is a *named* intersection, nothing more.
 
 #### 3. The layout
 
@@ -237,44 +247,37 @@ intersection name will do. A station is a *named* intersection, nothing more.
             .build()
 ```
 
-This is the whole network — the thing Figure 1 draws — and it is worth reading
-line by line because every argument does something.
+This is the whole network — the thing Figure 1 draws — and every argument does
+something.
 
-**`intersection(name, x, y)`** declares a node. The coordinates are for drawing
-and animation **only**. Routing never reads them; it reads the declared link
-lengths in the calls beneath. That separation is what lets case 6 put a hospital
-on two floors without the network knowing what a floor is.
+**`intersection(name, x, y)`** declares a node. The coordinates are for drawing and
+animation **only**. Routing never reads them; it reads the declared link lengths in the
+calls beneath. That separation is what lets case 6 put a hospital on two floors without
+the network knowing what a floor is.
 
-**`link(name, from, to, length, zoneLength, beginDirection)`** declares a
-one-way aisle from `from` to `to`. Four things to notice:
+**`link(name, from, to, length, zoneLength, beginDirection)`** declares a one-way
+aisle. Four things to notice:
 
-- `length` is the **routing** distance. Nothing checks it against the
-  coordinates, and nothing should: an aisle that bends, or that runs up a shaft,
-  is longer than the straight line between its ends.
-- `zoneLength` cuts the link into zones. `Link1` is 48 long at 12 a zone, so it
-  is four zones and holds up to four carts nose to tail. `Link5` is 6 long at 6 a
-  zone: one zone, one cart.
-- `beginDirection` is a compass bearing in degrees used for animation and for
-  deciding a vehicle's initial heading on the link. It is not routing either.
-- The four loop links form a **cycle**, `I1 → I2 → I3 → I4 → I1`, all one way.
-  There is no link in the other direction anywhere on the loop, which is what
-  makes a head-on meeting impossible rather than merely unlikely.
+- `length` is the **routing** distance. Nothing checks it against the coordinates, and
+  nothing should: an aisle that bends, or that runs up a shaft, is longer than the
+  straight line between its ends.
+- `zoneLength` cuts the link into zones. `Link1` is 48 long at 12 a zone, so it is four
+  zones and holds up to four carts nose to tail. `Link5` is 6 long at 6 a zone: one
+  zone, one cart.
+- `beginDirection` is a compass bearing used for animation and for a vehicle's initial
+  heading. It is not routing either.
+- The four loop links form a **cycle**, `I1 → I2 → I3 → I4 → I1`, all one way. There is
+  no link in the other direction anywhere on the loop, which is what makes a head-on
+  meeting impossible rather than merely unlikely.
 
-**`type = LinkType.SPUR`** is the other kind of link. A spur is a dead end: a
-vehicle enters from the junction end, and leaves the way it came. Because a spur
-admits one vehicle at a time, the second cart sent to the exit station waits at
-the mouth — out on the loop — rather than following the first in and facing it
-with neither able to reverse. The three spurs here are the exit station and one
-parking place per cart.
+**`type = LinkType.SPUR`** is the other kind of link: a dead end, entered from the
+junction end and left the way it came. Because a spur admits one vehicle at a time, the
+second cart sent to the exit station waits at the mouth — out on the loop — rather than
+following the first in and facing it with neither able to reverse.
 
-**`station(name, intersection)`** attaches a name a process can ask for.
-`ENTRY_STATION` is `I1`, `EXIT_STATION` is `I5` at the end of the spur.
-
-**`build()`** returns an immutable `GuidedPathNetwork`. Because the loop is one
-way the distances it computes are not symmetric: entry to exit is 204 (48 + 72 +
-48 + 36, the long way round), and exit back to entry is 108 (36 back up the spur,
-then `Link4`'s 72). A routing rule that scored a cart's proximity by straight-line
-distance would get both of those wrong.
+**`station(name, intersection)`** attaches a name a process can ask for. **`build()`**
+returns an immutable `GuidedPathNetwork`. Because the loop is one way its distances are
+not symmetric: entry to exit is 204 the long way round, and exit back to entry is 108.
 
 #### 4. The model class, and the line that makes locations mean something
 
@@ -292,27 +295,24 @@ distance would get both of those wrong.
             spatialModel = network
         }
 
-        val system = GuidedPathTransportSystem(this, network, name = "AgvSystem")
+        val system = GuidedPathTransportSystem(this, network, name = SYSTEM_NAME)
 ```
 
-`AgvShop` extends `ProcessModel`, which is what allows the `Part` class further
-down to be written as a suspending process. `parent: ModelElement` is the KSL
-convention: every element is constructed into a tree under the `Model`.
+`AgvShop` extends `ProcessModel`, which is what allows the `Part` class further down to
+be written as a suspending process. `parent: ModelElement` is the KSL convention: every
+element is constructed into a tree under the `Model`.
 
-`sendCartsHome` is the experimental factor, and `timeBtwArrivals` is the load. Both
-are constructor parameters with defaults, so a study varies them by calling rather
-than by editing.
+`sendCartsHome` is the experimental factor and `timeBtwArrivals` is the load. Both are
+constructor parameters with defaults, so a study varies them by calling rather than by
+editing.
 
-Three declarations then put the shop on the guide path:
+**`spatialModel = network`** is the easily-missed line. It tells the framework that this
+model's entities live in that network's space, which is what makes `currentLocation` in
+part 7 mean *a junction on this network*. Leave it out and a part has no meaningful
+position for a transporter to be sent to.
 
-- `network` is built by the function in part 3.
-- **`spatialModel = network`** is the easily-missed one. It tells the framework
-  that this model's entities live in that network's space, which is what makes
-  `currentLocation` in part 7 mean *a junction on this network*. Leave it out and
-  a part has no meaningful position for a transporter to be sent to.
-- `system` is the runtime. The network is geometry; `GuidedPathTransportSystem`
-  is the object that owns zone occupancy, moves vehicles, detects blocking and
-  reports the statistics the table below reads.
+The network is the geometry; `GuidedPathTransportSystem` is the object that owns zone
+occupancy, moves vehicles, detects blocking, and keeps the statistics part 9 reads.
 
 #### 5. The carts, and the one line the experiment turns on
 
@@ -333,38 +333,46 @@ Three declarations then put the shop on the guide path:
         )
 ```
 
-A `GuidedTransporter` takes, in order: the system it belongs to, where it starts,
-how fast it goes, how many zones long it is, its zone-control rule, and its name.
+A `GuidedTransporter` takes, in order: the system it belongs to, where it starts, how
+fast it goes, how many zones long it is, its zone-control rule, and its name.
 
 - `TransporterPlacement.At(AGV1_HOME)` starts the cart on its own parking spur.
-  Starting both carts at the same place would be an error on a guide path — one
-  zone, one vehicle — and this is the first of several points in this tutorial
-  where a fleet needs somewhere of its own to stand.
-- `ConstantRV(10.0)` is the velocity. A distribution would be equally acceptable
-  here; a constant makes this example's arithmetic checkable.
-- `1` is the vehicle's **length in zones**. A cart occupying two zones would
-  claim two, and could not fit on a one-zone spur at all.
-- `EndOfZoneControl()` says the cart releases the zone behind it when it has
-  fully left it — the conservative choice, and the one that models a physical
-  vehicle rather than a point.
-- `.apply { homeBase = ... }` names where "home" is for the idle rule below.
+  Starting both carts at the same place would be an error on a guide path — one zone,
+  one vehicle.
+- `ConstantRV(10.0)` is the velocity. A distribution would be equally acceptable; a
+  constant makes this example's arithmetic checkable.
+- `1` is the vehicle's **length in zones**. A cart occupying two zones would claim two,
+  and could not fit on a one-zone spur at all.
+- `EndOfZoneControl()` says the cart releases the zone behind it when it has fully left
+  it — the conservative choice, and the one that models a physical vehicle rather than
+  a point.
 
-Then the pool, which is what the parts actually ask:
+Then the pool, which is what the parts actually ask. It takes **two** rules, and they
+answer different questions: `ClosestByNetworkDistanceRule` decides which cart comes when
+one is wanted, scored by distance *along the network*; the *idle disposition* rule
+decides where a cart goes when nobody wants it. Only the second changes between the two
+scenarios, by way of a single `if` in a single argument position. `homeBase` is set on
+both carts either way, so even the declarations are identical; what differs is whether
+anything ever reads them.
 
-- `listOf(cart1, cart2)` — its members.
-- `ClosestByNetworkDistanceRule()` — **which cart comes** when one is wanted,
-  scored by distance *along the network*, not straight line. On a one-way loop
-  those differ enormously, and the network distance is the honest one.
-- `if (sendCartsHome) ReturnToHomeBaseRule() else ParkInPlaceRule()` — **what an
-  idle cart does**, and the entire difference between the two runs in the table
-  below. Everything else, `homeBase` included, is declared identically either
-  way; what changes is whether anything ever reads it.
-
-#### 6. The statistics, and the arrival process
+#### 6. The statistics, the inputs, and the arrival process
 
 ```kotlin
-        val timeInSystem = Response(this, "TimeInSystem")
-        val completed = Counter(this, "PartsDelivered")
+        private val myTimeInSystem = Response(this, "TimeInSystem")
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
+
+        private val myCompleted = Counter(this, "PartsDelivered")
+        val completed: CounterCIfc
+            get() = myCompleted
+
+        private val myLoadingTime = RandomVariable(this, ConstantRV(0.5), name = "LoadingTime")
+        val loadingTimeRV: RandomVariableCIfc
+            get() = myLoadingTime
+
+        private val myUnLoadingTime = RandomVariable(this, ConstantRV(0.5), name = "UnLoadingTime")
+        val unLoadingTimeRV: RandomVariableCIfc
+            get() = myUnLoadingTime
 
         @Suppress("unused")
         private val generator = EntityGenerator(
@@ -373,21 +381,25 @@ Then the pool, which is what the parts actually ask:
         )
 ```
 
-`Response(this, "TimeInSystem")` collects one observation per part; the framework
-computes the within- and across-replication statistics from it. `Counter` counts.
-Naming them matters: those names appear in the output report and are how a study
-looks a result up afterwards.
+This is the KSL house style for a model's outputs and inputs, and it is worth copying.
 
-`EntityGenerator(::Part, timeUntilFirst, timeBtwEvents)` is the standard arrival
-process. It takes a **constructor reference** — `::Part` — and calls it on a
-schedule, activating each new entity's default process. The two random variables
-are the time until the first arrival and the time between subsequent ones; both
-are exponential with the same mean here, which makes the arrivals a Poisson
-process in steady state.
+**Each statistic is a private field with a public read-only accessor.** The model owns
+`myTimeInSystem` and can write to it; a caller gets `timeInSystem: ResponseCIfc` and can
+only ask it questions. A model whose responses are public `val`s invites anything to
+write to them; a model whose responses are private with no accessor cannot be asked
+anything at all, which is a frustrating way to discover that a run has to be repeated.
 
-`streamNum = 1` pins the random number stream. Two configurations that name the
-same stream see **the same arrivals at the same instants**, which is what makes
-the comparison below a comparison of parking rules rather than of luck.
+**The loading and unloading delays are `RandomVariable`s rather than bare `ConstantRV`s.**
+Wrapping a distribution in a `RandomVariable` makes it a model element: it gets a name in
+the report, a stream the model manages across replications, and — through the
+`RandomVariableCIfc` accessor — a handle a study can use to change the input without
+editing the model.
+
+`EntityGenerator(::Part, timeUntilFirst, timeBtwEvents)` is the standard arrival process.
+It takes a **constructor reference** and calls it on a schedule, activating each new
+entity's default process. `streamNum = 1` pins the random number stream, so both
+scenarios see **the same arrivals at the same instants** — which is what makes part 9's
+paired comparison a comparison of parking rules rather than of luck.
 
 #### 7. The part, which is the whole of the passive paradigm
 
@@ -401,148 +413,177 @@ the comparison below a comparison of parking rules rather than of luck.
                     carts,
                     destination = EXIT_STATION,
                     pickupLocation = ENTRY_STATION,
-                    loadingDelay = ConstantRV(0.5),
-                    unLoadingDelay = ConstantRV(0.5)
+                    loadingDelay = myLoadingTime,
+                    unLoadingDelay = myUnLoadingTime
                 )
-                timeInSystem.value = time - arrived
-                completed.increment()
+                myTimeInSystem.value = time - arrived
+                myCompleted.increment()
             }
         }
 ```
 
-Everything a part does, in twelve lines.
+Everything a part does, in a dozen lines.
 
-`process(isDefaultProcess = true)` declares the entity's behaviour as a coroutine
-and marks it the one the generator activates. Inside it:
+`process(isDefaultProcess = true)` declares the entity's behaviour as a coroutine and
+marks it the one the generator activates. Inside it:
 
-- `val arrived = time` — `time` is the current simulated time, readable anywhere
-  inside a process.
-- `currentLocation = network.requireLocation(ENTRY_STATION)` — the part states
-  where it is standing. This is **required** on a guide path and it is the API
-  surfacing a physical fact: a transporter is summoned to a named junction, so
-  the part must say which one it is at. `requireLocation` throws on a name the
-  network does not know, which turns a typo into an immediate failure rather than
-  a mysterious one.
-- **`guidedTransport(...)` is the entire journey and it suspends.** The pool
-  chooses a cart; the cart drives to `ENTRY_STATION`, claiming each zone ahead of
-  it and possibly waiting for one that is occupied; it is loaded for half a
-  minute; it carries the part round the loop and down the exit spur; it is
-  unloaded. Only then does the next line run. The part never sees a cart, never
-  chooses one, and cannot tell which came.
-- The last two lines record the result.
+- `currentLocation = network.requireLocation(ENTRY_STATION)` — the part states where it
+  is standing. This is **required** on a guide path and it is the API surfacing a
+  physical fact: a transporter is summoned to a named junction. `requireLocation` throws
+  on a name the network does not know, which turns a typo into an immediate failure
+  rather than a mysterious one.
+- **`guidedTransport(...)` is the entire journey and it suspends.** The pool chooses a
+  cart; the cart drives to the entry station, claiming each zone ahead of it and possibly
+  waiting for one that is occupied; it is loaded; it carries the part round the loop and
+  down the exit spur; it is unloaded. Only then does the next line run.
 
-**That the choice of cart is made here, inside the asking part's own process, at
-the instant it happens to ask, over whatever is free at that instant, is what
-"passive" means.** There is nowhere else it could be made, because no other
-object is running. Case 2 is the same shop with that decision moved somewhere
-else.
+**That the choice of cart is made here, inside the asking part's own process, at the
+instant it happens to ask, over whatever is free at that instant, is what "passive"
+means.** There is nowhere else it could be made, because no other object is running.
+Case 2 is the same shop with that decision moved somewhere else.
 
-#### 8. Running it
+#### 8. The experiment: two scenarios over one factor
 
 ```kotlin
-    fun run(sendCartsHome: Boolean): AgvShop {
-        val m = Model(if (sendCartsHome) "SimpleAGVExample" else "SimpleAGVExampleParked")
-        val shop = AgvShop(m, sendCartsHome = sendCartsHome)
-        m.numberOfReplications = 10
-        m.lengthOfReplication = 8_000.0
-        m.lengthOfReplicationWarmUp = 1_000.0
-        m.simulate()
-        return shop
+    const val REPLICATIONS: Int = 10
+    const val HORIZON: Double = 8_000.0
+    const val WARM_UP: Double = 1_000.0
+
+    const val SENT_HOME: String = "CartsSentHome"
+    const val LEFT_IN_PLACE: String = "CartsLeftInPlace"
+
+    /**
+     *  One scenario per configuration. Both get the same replications, horizon, warm-up and arrival
+     *  stream, because the only thing being compared is where an idle cart waits and any difference
+     *  in the run settings would swamp it.
+     */
+    fun buildRunner(): ScenarioRunner {
+        val runner = ScenarioRunner("SimpleAgvHomeBases")
+        for ((label, sendHome) in listOf(SENT_HOME to true, LEFT_IN_PLACE to false)) {
+            val m = Model("SimpleAGV_$label")
+            AgvShop(m, sendCartsHome = sendHome)
+            runner.addScenario(
+                model = m,
+                name = label,
+                inputs = emptyMap(),
+                numberReplications = REPLICATIONS,
+                lengthOfReplication = HORIZON,
+                lengthOfReplicationWarmUp = WARM_UP
+            )
+        }
+        return runner
     }
 ```
 
-`Model` is the root. Constructing `AgvShop(m, ...)` attaches the shop to it, and
-`m.simulate()` runs it.
+The two configurations are two **scenarios** in a `ScenarioRunner`, rather than two
+hand-written calls to `simulate()`.
 
-The three settings are the experiment design: ten replications, each 8,000 time
-units long, of which the first 1,000 are discarded as warm-up so that the
-statistics describe steady state rather than the empty shop at time zero. **Both
-configurations get identical settings** — that is the point of them being written
-once in a function that takes the factor as its only parameter. A study that
-varied the horizon alongside the parking rule would produce a difference it could
-not attribute.
+`addScenario` takes the model, a name, any control overrides — none here — and the run
+parameters. Both scenarios get the same ten replications, the same 8,000-unit horizon and
+the same 1,000-unit warm-up, because the only thing being compared is where an idle cart
+waits and any difference in the run settings would swamp it.
 
-#### 9. The study, and how a result is read back
+The fleet is *structural* here — each cart needs its own parking spur — so this is a
+runner over **model instances** rather than over control values. Both forms are
+supported; a study varying a scalar input would pass it in the `inputs` map instead and
+reuse one model.
+
+What the runner adds over two bare `simulate()` calls: identical run parameters by
+construction, a KSL database capturing both runs, a standard half-width summary report
+per scenario, and — the part this study needs — the **per-replication** observations
+behind each average.
+
+#### 9. Reading the result, and why the comparison is paired
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val designed = run(sendCartsHome = true)
-        val parked = run(sendCartsHome = false)
+fun main() {
+    val runner = SimpleAGVExample.buildRunner()
+    runner.simulate()
+    runner.print()
 
-        println()
-        println("Simple AGV shop - where an idle cart waits, and what it costs")
-        println()
-        println("                        carts sent home    carts left in place")
-        println(
-            "  parts delivered  %20.1f %22.1f".format(
-                designed.completed.acrossReplicationStatistic.average,
-                parked.completed.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  time in system   %20.2f %22.2f".format(
-                designed.timeInSystem.acrossReplicationStatistic.average,
-                parked.timeInSystem.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  obstructions     %20.1f %22.1f".format(
-                designed.system.numObstructionsDetected.acrossReplicationStatistic.average,
-                parked.system.numObstructionsDetected.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  fraction blocked %20.4f %22.4f".format(
-                designed.system.numTransportersBlocked.acrossReplicationStatistic.average / 2.0,
-                parked.system.numTransportersBlocked.acrossReplicationStatistic.average / 2.0
-            )
-        )
-        println()
-        println("  Neither run fails and neither reports an error. The obstruction count is the")
-        println("  only thing that distinguishes them, and it is why the condition is counted into")
-        println("  the standard report rather than only written to a log: it is a design defect")
-        println("  that a run is perfectly capable of hiding.")
+    val home = SimpleAGVExample.SENT_HOME
+    val parked = SimpleAGVExample.LEFT_IN_PLACE
+    println()
+    println("Where an idle cart waits: $home minus $parked, paired by replication")
+    println("(${SimpleAGVExample.REPLICATIONS} replications, 95% intervals)")
+    println()
+    println("  %-40s %12s %12s %12s".format("response", "difference", "half-width", "detectable?"))
+    for (response in listOf(
+        "PartsDelivered",
+        "TimeInSystem",
+        "${SimpleAGVExample.SYSTEM_NAME}:NumObstructionsDetected",
+        "${SimpleAGVExample.SYSTEM_NAME}:NumTransportersBlocked"
+    )) {
+        val observations = runner.observationsAsMap(response)
+        check(observations.size == 2) {
+            "expected per-replication observations of $response for both scenarios, got " +
+                "${observations.keys}. A missing response would print an empty row rather than say so."
+        }
+        val mca = MultipleComparisonAnalyzer(observations, response)
+        val d = checkNotNull(mca.pairedDifferenceStatistic(home, parked)) {
+            "no paired difference for '$home - $parked' of $response"
+        }
+        val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+        println("  %-40s %12.4f %12.4f %12s".format(response, d.average, d.halfWidth, detectable))
     }
+
+    println()
+    println("  Neither run fails and neither reports an error, and their delivered counts are")
+    println("  indistinguishable:")
+    println("  this shop is arrival-limited, so the damage never reaches the headline number. The")
+    println("  obstruction count is the only thing that separates them, which is why that condition")
+    println("  is counted into the standard report rather than only written to a log. It is a design")
+    println("  defect that a run is perfectly capable of hiding.")
+}
 ```
 
-`main` runs both configurations and prints them side by side.
+`runner.print()` writes the standard half-width summary report for both scenarios: every
+response the model keeps, with a confidence interval, rather than the four columns the
+author happened to think of.
 
-The pattern `x.acrossReplicationStatistic.average` is how any KSL statistic is
-read after a run: each replication produces one within-replication summary, and
-the across-replication statistic is computed over those ten numbers. It is the
-number a confidence interval would be built around.
+Then the comparison. `runner.observationsAsMap(response)` returns, for one response, a
+map of scenario name to that scenario's **per-replication** values, which is exactly what
+`MultipleComparisonAnalyzer` wants. `pairedDifferenceStatistic` gives the difference
+computed replication by replication, with its own interval.
 
-Three of the four rows come from the model's own `Response` and `Counter`. The
-other two come from the **transport system**, not from the shop:
-`system.numObstructionsDetected` and `system.numTransportersBlocked`. Those are
-statistics the substrate keeps about itself — how often a vehicle found the space
-it wanted held by something that was not going to move, and how much of the fleet
-was stopped — and they are the two that separate the runs. The division by 2.0 in
-the last row converts "how many of the two carts were blocked, on average" into a
-fraction of the fleet.
+**Why pairing matters here.** Both scenarios draw arrivals from the same stream, so
+replication *k* of one faces the same arrivals as replication *k* of the other. The
+arrival variability cancels in the difference, and the interval around the paired
+difference is far tighter than the interval around either average.
 
-The closing `println` block is the example telling you what to make of its own
-output, which is the habit this tutorial is trying to spread.
+Two habits in this block are worth taking:
+
+- **`check(observations.size == 2)`.** If a response name were misspelled the map would
+  come back empty and the loop would print nothing at all. A silently empty table is the
+  failure mode this study exists to warn about, so the code refuses to produce one.
+- **The direction of the difference is stated rather than assumed.** The analyzer forms
+  each pair once, in insertion order, so asking for it backwards returns `null` rather
+  than a sign-flipped answer.
 
 ### What it shows
 
-The example ships a second run, `runWithoutHomeBases()`, which changes one thing
-— the carts are left where they stop — and produces this:
+Two scenarios, ten replications, common arrivals — so the comparison is paired
+replication by replication rather than average against average:
 
-| | carts sent home | carts left in place |
-|---|---|---|
-| parts delivered | 349.9 | 349.8 |
-| time in system | 61.76 | 62.96 |
-| **obstructions detected** | **0.0** | **40.5** |
-| fraction of fleet blocked | 0.0052 | 0.0742 |
+```
+  response                                   difference   half-width  detectable?
+  PartsDelivered                                 0.1000       0.5278           no
+  TimeInSystem                                  -1.2009       1.0846          yes
+  AgvSystem:NumObstructionsDetected            -40.5000       5.3453          yes
+  AgvSystem:NumTransportersBlocked              -0.1380       0.0126          yes
+```
+
+Each row is *carts sent home* minus *carts left in place*. The full half-width summary
+report for both configurations — every response the model keeps — is printed above this
+table by `runner.print()`.
 
 ### What to learn
 
-**Neither run fails, and throughput is identical.** This shop is arrival-limited,
-so the damage does not reach the headline number. The *only* clear signal is the
-obstruction count — which is why that condition is counted into the standard
-report rather than merely logged.
+**Neither run fails, and the delivered counts are indistinguishable** — a paired
+difference of 0.10 against a half-width of 0.53. This shop is arrival-limited, so the
+damage does not reach the headline number. The obstruction count is the signal that
+survives: 40.5 more of them, against a half-width of 5.3. That is why the condition is
+counted into the standard report rather than merely logged.
 
 > **A destination is a resource.** A transporter that stops goes on holding its
 > zones for the rest of the run. Any model in which two vehicles finish in the
@@ -598,12 +639,44 @@ it could be made, because no other object is running.
 
 ### The code
 
-`TwoParadigmsExample.kt` in full, minus its documentation comments. It contains
-**two complete models** of the same shop, and the exercise is to read them
-against each other: everything they share is the world, and everything they do
-not is the paradigm.
+`TwoParadigmsExample.kt` in full, minus its GPL header and documentation comments. It
+contains **two complete models** of the same shop, and the exercise is to read them
+against each other: everything they share is the world, and everything they do not is
+the paradigm.
 
-#### 1. Names, and the layout both shops use
+#### 1. Imports and names
+
+```kotlin
+package ksl.examples.general.agv
+
+import ksl.controls.experiments.ScenarioRunner
+import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.entity.ProcessModel
+import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.guidedpath.GuidedPathTransportSystem
+import ksl.modeling.guidedpath.GuidedTransporter
+import ksl.modeling.guidedpath.GuidedTransporterPoolWithQ
+import ksl.modeling.guidedpath.LinkType
+import ksl.modeling.guidedpath.TransporterPlacement
+import ksl.modeling.guidedpath.rules.ClosestByNetworkDistanceRule
+import ksl.modeling.guidedpath.rules.ReturnToHomeBaseRule
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
+import ksl.simulation.Model
+import ksl.simulation.ModelElement
+import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
+```
+
+The same substrate imports as case 1, plus `AgvSystem` and `AgvVehicle` from
+`ksl.modeling.agv` — the active binding — and `ScenarioRunner` and
+`MultipleComparisonAnalyzer` for the comparison.
 
 ```kotlin
 object TwoParadigmsExample {
@@ -611,9 +684,20 @@ object TwoParadigmsExample {
     const val ENTRY: String = "EntryStation"
     const val EXIT: String = "ExitStation"
     const val DEPOT: String = "CartDepot"
+
+    /** Both shops name their statistics identically, so the two runs can be compared replication
+     *  by replication rather than only average by average. */
+    const val TIME_IN_SYSTEM: String = "TimeInSystem"
+    const val DELIVERED: String = "Delivered"
 ```
 
-Three station names, and then one function that builds the network:
+Three station names, then two response names as constants. **The two shops name their
+statistics identically on purpose.** Had one called its response `PassiveShop:TimeInSystem`
+and the other `ActiveShop:TimeInSystem`, the two runs could only be compared average
+against average; sharing the name is what lets them be compared replication by
+replication in part 6.
+
+#### 2. The layout both shops use
 
 ```kotlin
     fun createNetwork(): GuidedPathNetwork = GuidedPathNetwork.builder("ShopFloor")
@@ -637,31 +721,29 @@ Three station names, and then one function that builds the network:
         .build()
 ```
 
-This is case 1's loop with one cart's depot instead of two — the same four one-way
-links, the same exit spur, the same zone size of 12 on the loop and 6 on the depot
-spur. Part 1 of case 1 explains every argument; nothing new is happening here.
+Case 1's loop with one cart's depot instead of two — the same four one-way links, the
+same exit spur, the same zone size of 12 on the loop and 6 on the depot spur. Part 3 of
+case 1 explains every argument.
 
-**What matters is that it is one function, called by both models.** Not a copied
-builder, not two networks that ought to agree: if the layouts could drift apart,
-the comparison below would be measuring the drift and reporting it as a paradigm
-difference.
+**What matters is that it is one function, called by both models.** Not a copied builder,
+not two networks that ought to agree: if the layouts could drift apart, the comparison
+below would be measuring the drift and reporting it as a paradigm difference.
 
-#### 2. The load, common to both
+#### 3. The load, common to both
 
 ```kotlin
-    private const val MEAN_TIME_BETWEEN_ARRIVALS = 40.0
-    private const val ARRIVAL_STREAM = 1
-    private const val NUM_ARRIVALS = 400
-    private const val CART_SPEED = 10.0
+    const val MEAN_TIME_BETWEEN_ARRIVALS: Double = 40.0
+    const val ARRIVAL_STREAM: Int = 1
+    const val NUM_ARRIVALS: Int = 400
+    const val CART_SPEED: Double = 10.0
 ```
 
-Four constants that fix the workload. `ARRIVAL_STREAM = 1` is the important one:
-both models name **the same random number stream**, so both see the same 400
-arrivals at the same instants. Without that the two runs could agree to three
-digits and differ in the fourth, and nobody could say whether that was the
-paradigm or the sampling.
+Four constants that fix the workload. `ARRIVAL_STREAM = 1` is the important one: both
+models name **the same random number stream**, so both see the same 400 arrivals at the
+same instants. Without that the two runs could agree to three digits and differ in the
+fourth, and nobody could say whether that was the paradigm or the sampling.
 
-#### 3. The passive shop, in full
+#### 4. The passive shop, in full
 
 ```kotlin
     /** The part steers the cart: ask for one, be collected, be carried, hand it back. */
@@ -683,25 +765,34 @@ paradigm or the sampling.
             this, space, listOf(cart), ClosestByNetworkDistanceRule(), ReturnToHomeBaseRule(), "Carts"
         )
 
-        val timeInSystem = Response(this, "PassiveShop:TimeInSystem")
-        val delivered = Counter(this, "PassiveShop:Delivered")
+        private val myTimeInSystem = Response(this, TIME_IN_SYSTEM)
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
 
-        private val timeBetweenArrivals = ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)
+        private val myDelivered = Counter(this, DELIVERED)
+        val delivered: CounterCIfc
+            get() = myDelivered
+
+        private val myTimeBetweenArrivals = RandomVariable(
+            this, ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM), name = "TBA"
+        )
+        val timeBetweenArrivals: RandomVariableCIfc
+            get() = myTimeBetweenArrivals
 
         inner class Part : Entity() {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(ENTRY)
                 guidedTransport(carts, destination = EXIT, pickupLocation = ENTRY)
-                timeInSystem.value = time - arrived
-                delivered.increment()
+                myTimeInSystem.value = time - arrived
+                myDelivered.increment()
             }
         }
 
         inner class Source : Entity() {
             val arrivals = process(isDefaultProcess = true) {
                 repeat(NUM_ARRIVALS) {
-                    delay(timeBetweenArrivals)
+                    delay(myTimeBetweenArrivals)
                     activate(Part().production)
                 }
             }
@@ -716,37 +807,31 @@ paradigm or the sampling.
 Read it top to bottom.
 
 `GuidedPathTransportSystem` is the substrate's runtime. `GuidedTransporter` is one
-vehicle, placed at the depot at ten units of velocity. `GuidedTransporterPoolWithQ`
-is the group the parts will ask, with its two rules —
-`ClosestByNetworkDistanceRule` for which cart comes, `ReturnToHomeBaseRule` for
-what an idle cart does.
+vehicle at the depot. `GuidedTransporterPoolWithQ` is the group the parts will ask, with
+its two rules — `ClosestByNetworkDistanceRule` for which cart comes,
+`ReturnToHomeBaseRule` for what an idle cart does.
 
-The part's process is four lines of work:
+The statistics follow the house style of case 1's part 6: private field, public `CIfc`
+accessor, and the arrival distribution wrapped in a `RandomVariable` so that it is a
+named model element rather than an anonymous field.
 
-- `currentLocation = network.requireLocation(ENTRY)` states where the part is
-  standing, because a transporter is summoned to a named junction.
-- `guidedTransport(carts, destination = EXIT, pickupLocation = ENTRY)` is the
-  whole journey and it suspends until the part has been set down at the exit.
-- The remaining two lines record the result.
+The part's process is four lines of work: state where it is standing, ask the pool,
+record, count. `guidedTransport` suspends until the part has been set down at the exit.
 
-`Source` is an alternative to case 1's `EntityGenerator`: an entity whose entire
-process is a loop that delays and activates parts. It is more code and it is worth
-knowing, because a generator can only produce identical entities on a schedule
-while a source can decide what to make and when — case 4 uses exactly that freedom
-to alternate its pickup points.
+`Source` is an alternative to case 1's `EntityGenerator`: an entity whose whole process
+is a loop that delays and activates parts. It is more code and it is worth knowing,
+because a generator can only produce identical entities on a schedule while a source can
+decide what to make and when — case 4 uses exactly that freedom to alternate its pickup
+points.
 
-`override fun initialize()` runs at the start of every replication. Activating the
-source there rather than in a constructor is what makes replication two start
-fresh; anything set up once at construction would persist across replications, and
-that class of mistake is the subject of a note in case 6.
+`override fun initialize()` runs at the start of **every** replication. Activating the
+source there rather than in a constructor is what makes replication two start fresh.
 
-**Nothing in this class holds a commitment.** The pool is a container of
-candidates. The choice of which cart comes is made inside `guidedTransport`, in
-the asking part's own process, at the instant it asks, over whatever is free at
-that instant. There is nowhere else it could be made, because no other object is
-running.
+**Nothing in this class holds a commitment.** The pool is a container of candidates. The
+choice of which cart comes is made inside `guidedTransport`, in the asking part's own
+process, at the instant it asks, over whatever is free at that instant.
 
-#### 4. The active shop, in full
+#### 5. The active shop, in full
 
 ```kotlin
     /** The part states what it needs and suspends. A dispatcher and a vehicle do the rest. */
@@ -764,25 +849,34 @@ running.
             agv, TransporterPlacement.At(DEPOT), ConstantRV(CART_SPEED), name = "Cart"
         ).apply { homeBase = DEPOT }
 
-        val timeInSystem = Response(this, "ActiveShop:TimeInSystem")
-        val delivered = Counter(this, "ActiveShop:Delivered")
+        private val myTimeInSystem = Response(this, TIME_IN_SYSTEM)
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
 
-        private val timeBetweenArrivals = ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)
+        private val myDelivered = Counter(this, DELIVERED)
+        val delivered: CounterCIfc
+            get() = myDelivered
+
+        private val myTimeBetweenArrivals = RandomVariable(
+            this, ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM), name = "TBA"
+        )
+        val timeBetweenArrivals: RandomVariableCIfc
+            get() = myTimeBetweenArrivals
 
         inner class Part : Entity() {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(ENTRY)
                 transportByFleet(agv, destination = EXIT, origin = ENTRY)
-                timeInSystem.value = time - arrived
-                delivered.increment()
+                myTimeInSystem.value = time - arrived
+                myDelivered.increment()
             }
         }
 
         inner class Source : Entity() {
             val arrivals = process(isDefaultProcess = true) {
                 repeat(NUM_ARRIVALS) {
-                    delay(timeBetweenArrivals)
+                    delay(myTimeBetweenArrivals)
                     activate(Part().production)
                 }
             }
@@ -797,184 +891,154 @@ running.
 Now the same shop with the decision moved out of the part.
 
 **The declarations are shorter.** There is no pool and no rules object, because an
-`AgvSystem` **is** the fleet and the dispatcher: vehicles are constructed into it,
-and its assignment policy is a constructor argument that defaults to
-`NearestVehiclePolicy()`. The vehicle is an `AgvVehicle` rather than a
-`GuidedTransporter`, but the arguments are word for word the same — the same
-`TransporterPlacement.At(DEPOT)`, the same `ConstantRV(CART_SPEED)`, the same
-`homeBase`.
+`AgvSystem` **is** the fleet and the dispatcher: vehicles are constructed into it, and its
+assignment policy is a constructor argument that defaults to `NearestVehiclePolicy()`.
+The vehicle is an `AgvVehicle` rather than a `GuidedTransporter`, but the arguments are
+word for word the same — the same placement, the same velocity, the same `homeBase`.
 
 **One line inside the process differs:**
 
 - passive — `guidedTransport(carts, destination = EXIT, pickupLocation = ENTRY)`
 - active — `transportByFleet(agv, destination = EXIT, origin = ENTRY)`
 
-Read the receivers. The passive call names `carts`, a **pool**, which the part is
-choosing from at this instant. The active call names `agv`, a **system**, which
-will decide on the part's behalf — possibly later, possibly after weighing work
-this part cannot see. The rename from `pickupLocation` to `origin` says the same
-thing from the other end: the part is no longer arranging its own collection, it
-is stating where its load is.
+Read the receivers. The passive call names `carts`, a **pool**, which the part is choosing
+from at this instant. The active call names `agv`, a **system**, which will decide on the
+part's behalf — possibly later, possibly after weighing work this part cannot see. The
+rename from `pickupLocation` to `origin` says the same thing from the other end: the part
+is no longer arranging its own collection, it is stating where its load is.
 
-Everything else — the `Source`, the `initialize`, the statistics, the arrival
-stream — is identical to the passive shop, line for line.
+Everything else — the `Source`, the `initialize`, the statistics, the arrival stream — is
+identical to the passive shop, line for line.
 
-#### 5. Running both
+#### 6. The experiment
 
 ```kotlin
-    private const val REPLICATIONS = 20
-    private const val HORIZON = 8_000.0
-    private const val WARM_UP = 1_000.0
+    const val REPLICATIONS: Int = 20
+    const val HORIZON: Double = 8_000.0
+    const val WARM_UP: Double = 1_000.0
 
-    fun runPassive(): PassiveShop {
-        val m = Model("TwoParadigms-Passive")
-        val shop = PassiveShop(m)
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return shop
-    }
+    const val PASSIVE: String = "Passive"
+    const val ACTIVE: String = "Active"
 
-    fun runActive(): ActiveShop {
-        val m = Model("TwoParadigms-Active")
-        val shop = ActiveShop(m)
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return shop
+    /**
+     *  One scenario per paradigm. Both build the same network from the same function, run the same
+     *  replications over the same horizon, and draw arrivals from the same stream, so anything that
+     *  differs between them is the paradigm and nothing else.
+     */
+    fun buildRunner(): ScenarioRunner {
+        val runner = ScenarioRunner("TwoParadigms")
+        val passiveModel = Model("TwoParadigms_Passive")
+        PassiveShop(passiveModel)
+        runner.addScenario(
+            model = passiveModel, name = PASSIVE, inputs = emptyMap(),
+            numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+            lengthOfReplicationWarmUp = WARM_UP
+        )
+        val activeModel = Model("TwoParadigms_Active")
+        ActiveShop(activeModel)
+        runner.addScenario(
+            model = activeModel, name = ACTIVE, inputs = emptyMap(),
+            numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+            lengthOfReplicationWarmUp = WARM_UP
+        )
+        return runner
     }
 ```
 
-Twenty replications of 8,000 with a 1,000 warm-up, and the two functions are
-copies of each other but for the class they construct. That is deliberate: a
-single parameterised runner would have to take the model as a parameter, and the
-two models have no common supertype worth inventing for a two-line function.
+One scenario per paradigm, both with the same run parameters. Two different **model
+classes** in one runner, which is legitimate: a scenario is a model plus its run
+parameters, and nothing requires the models to be related.
 
-#### 6. The comparison, and what only one side can answer
+#### 7. The comparison, and what only one side can answer
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val passive = runPassive()
-        val active = runActive()
+fun main() {
+    val runner = TwoParadigmsExample.buildRunner()
+    runner.simulate()
+    runner.print()
 
-        println()
-        println("One shop, modelled two ways - the same world, decided by different objects")
-        println()
-        println("                              passive               active")
-        println(
-            "  parts delivered    %18.2f %20.2f".format(
-                passive.delivered.acrossReplicationStatistic.average,
-                active.delivered.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  time in system     %18.4f %20.4f".format(
-                passive.timeInSystem.acrossReplicationStatistic.average,
-                active.timeInSystem.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  cart transporting  %18.4f %20.4f".format(
-                passive.cart.fracTimeTransporting.acrossReplicationStatistic.average,
-                active.cart.fracTimeTransporting.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  cart moving empty  %18.4f %20.4f".format(
-                passive.cart.fracTimeMovingEmpty.acrossReplicationStatistic.average,
-                active.cart.fracTimeMovingEmpty.acrossReplicationStatistic.average
-            )
-        )
-        println()
-        println("  With one cart, \"closest idle transporter\" and \"nearest vehicle\" are the same")
-        println("  rule, so the two models should agree - and they do, to the digit rather than")
-        println("  within a confidence interval. That is what makes the active subsystem a second")
-        println("  way of modelling this world rather than a different world.")
-        println()
-        println("What only the active model can report")
-        println()
-        println(
-            "  waited to be assigned %15.4f".format(
-                active.agv.dispatcher.waitForAssignment.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  waited in the queue   %15.4f".format(
-                active.agv.dispatcher.taskQ.timeInQ.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  time aboard a vehicle %15.4f".format(
-                active.agv.timeAboard.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  fraction on task      %15.4f".format(
-                active.cart.fracTimeOnTask.acrossReplicationStatistic.average
-            )
-        )
-        println()
-        println("  A passive pool has no object that holds a commitment, so nothing there could")
-        println("  separate \"how long until someone was assigned\" from \"how long until it arrived\".")
-        println("  Here a dispatcher decides at one instant and a vehicle arrives at another, so the")
-        println("  two are different questions with different answers.")
-        println()
-        println("  \"On task\" is not the same as \"moving\", and neither contains the other: a cart is")
-        println("  on task while it stands still being loaded, and it is moving but not on task while")
-        println("  it returns to its depot. Only the active model has an object that could tell the")
-        println("  difference, because only there is there something that holds a commitment.")
-        println()
-        println("  The warnings above the table are the horizon diagnostics doing their job, not a")
-        println("  fault. Each replication ends with a cart mid-delivery and a load still waiting,")
-        println("  which is exactly what a busy shop looks like when the clock stops. They are worth")
-        println("  reading rather than silencing: the statistics are computed over the loads that")
-        println("  were served, so a run that served far less than it was asked to would report")
-        println("  perfectly healthy averages and say so only here.")
+    println()
+    println("One shop, modelled two ways: ${TwoParadigmsExample.PASSIVE} minus ${TwoParadigmsExample.ACTIVE}")
+    println("(paired by replication, ${TwoParadigmsExample.REPLICATIONS} replications, 95% intervals)")
+    println()
+    println("  %-22s %14s %14s %14s".format("response", "difference", "half-width", "detectable?"))
+    for (response in listOf(TwoParadigmsExample.DELIVERED, TwoParadigmsExample.TIME_IN_SYSTEM)) {
+        val observations = runner.observationsAsMap(response)
+        check(observations.size == 2) {
+            "expected per-replication observations of $response for both paradigms, got " +
+                "${observations.keys}. Both shops must name this response identically or there is " +
+                "nothing to pair."
+        }
+        val mca = MultipleComparisonAnalyzer(observations, response)
+        val d = checkNotNull(
+            mca.pairedDifferenceStatistic(TwoParadigmsExample.PASSIVE, TwoParadigmsExample.ACTIVE)
+        ) { "no paired difference for $response" }
+        val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+        println("  %-22s %14.6f %14.6f %14s".format(response, d.average, d.halfWidth, detectable))
     }
+
+    println()
+    println("  Every paired difference is exactly zero, replication by replication, and so is every")
+    println("  half-width. The two models are not close: they agree. With one cart, \"closest idle")
+    println("  transporter\" and \"nearest vehicle\" are the same rule -- there is only ever one")
+    println("  candidate -- so they should agree, and the fact that they do is what makes the active")
+    println("  subsystem a second way of modelling this world rather than a different world.")
+    println()
+    println("  Had they differed, every comparison a researcher wanted to make between paradigms")
+    println("  would have been confounded by the modelling choice itself.")
+    println()
+    println("What only the active model can report")
+    println()
+    println("  Look for these rows in the Active report above; the Passive report has no equivalent:")
+    println("    Agv:Dispatcher:WaitForAssignment  - from asking to somebody committing a vehicle")
+    println("    Agv:Dispatcher:TaskQ:TimeInQ      - the dispatcher's own queue of open work")
+    println("    Agv:TimeAboard                    - how long a load rode")
+    println("    Cart:FracTimeOnTask               - committed, whether moving or not")
+    println()
+    println("  A passive pool has no object that holds a commitment, so nothing in it could separate")
+    println("  \"how long until someone was assigned\" from \"how long until it arrived\". Here a")
+    println("  dispatcher decides at one instant and a vehicle arrives at another, so the two are")
+    println("  different questions with different answers.")
+    println()
+    println("  \"On task\" is not the same as \"moving\", and neither contains the other: a cart is on")
+    println("  task while it stands still being loaded, and it is moving but not on task while it")
+    println("  returns to its depot.")
 ```
 
-The first table reads four quantities from both models.
-`delivered` and `timeInSystem` are the shop's own statistics; `fracTimeTransporting`
-and `fracTimeMovingEmpty` are the **vehicle's**, and both subsystems keep them
-because both have a vehicle that knows whether it is carrying something.
+`runner.print()` writes both half-width summary reports.
 
-The second table has no passive column, and that is the point of the example
-rather than an omission:
+Then the paired comparison, on the two responses the shops name identically. The result
+is the strongest form the claim can take: **every paired difference is exactly zero, and
+so is every half-width.** Not "within a confidence interval" — identical, replication by
+replication. With one cart, "closest idle transporter" and "nearest vehicle" are the same
+rule, so they should agree, and the fact that they do is what makes the active subsystem a
+second way of modelling this world rather than a different world.
 
-- `agv.dispatcher.waitForAssignment` — from the instant a load asked to the
-  instant somebody committed a vehicle to it. **A passive pool has no object that
-  holds a commitment**, so there is no instant to measure from.
-- `agv.dispatcher.taskQ.timeInQ` — the dispatcher's own queue of outstanding
-  tasks, which likewise only exists because something other than the load is
-  keeping the board.
-- `agv.timeAboard` and `cart.fracTimeOnTask` — "on task" is not "moving", and
-  neither contains the other: a cart is on task while standing still being
-  loaded, and moving but not on task while returning to its depot. Distinguishing
-  them requires an object that holds a commitment.
+The closing block points at rows that appear in the Active report and have no Passive
+equivalent:
 
-The closing paragraphs are the example reading its own output, including the
-horizon warnings printed above the table. Those are not a fault: each replication
-ends with a cart mid-delivery and a load still waiting, which is what a busy shop
-looks like when the clock stops. They are worth reading rather than silencing,
-because a run that served far less work than it was asked to would report
-perfectly healthy averages and say so only there.
+- `Agv:Dispatcher:WaitForAssignment` — from the instant a load asked to the instant
+  somebody committed a vehicle to it. **A passive pool has no object that holds a
+  commitment**, so there is no instant to measure from.
+- `Agv:Dispatcher:TaskQ:TimeInQ` — the dispatcher's own queue of outstanding work.
+- `Agv:TimeAboard` and `Cart:FracTimeOnTask` — "on task" is not "moving", and neither
+  contains the other: a cart is on task while standing still being loaded, and moving but
+  not on task while returning to its depot.
 
 ### What it shows
 
-With one cart, "closest idle transporter" and "nearest vehicle" are the same
-rule — there is only ever one candidate — so the models should agree. They do:
+With one cart, "closest idle transporter" and "nearest vehicle" are the same rule — there
+is only ever one candidate — so the models should agree. They do, and the paired form of
+the claim is the strongest one available:
 
-| | passive | active |
-|---|---|---|
-| parts delivered | 174.90 | 174.90 |
-| time in system | 88.2894 | 88.2894 |
-| cart transporting | 0.5096 | 0.5096 |
-| cart moving empty | 0.3636 | 0.3636 |
+```
+  response                   difference     half-width    detectable?
+  Delivered                    0.000000       0.000000             no
+  TimeInSystem                 0.000000       0.000000             no
+```
 
-**Exactly, to the digit** — not within a confidence interval.
+**Every paired difference is exactly zero, replication by replication, and so is every
+half-width.** Not "within a confidence interval" — identical, twenty times over.
 
 ### What to learn
 
@@ -1572,11 +1636,47 @@ choice does not matter.
 
 ### The code
 
-`DispatchingRuleComparison.kt` in full, minus documentation comments and imports.
-It is a **one-factor experiment**: one model class, six values of one constructor
-argument, and common random numbers throughout.
+`DispatchingRuleComparison.kt` in full, minus its GPL header and documentation comments.
+It is a **one-factor experiment**: one model class, six values of one constructor argument,
+common random numbers throughout, and a paired analysis of the result.
 
-#### 1. The places, and the ring
+#### 1. Imports
+
+```kotlin
+package ksl.examples.general.agv
+
+import ksl.controls.experiments.ScenarioRunner
+import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.entity.ProcessModel
+import ksl.modeling.fleet.policies.AssignmentPolicyIfc
+import ksl.modeling.fleet.policies.BatchedAssignmentPolicy
+import ksl.modeling.fleet.policies.ContractNetAssignmentPolicy
+import ksl.modeling.fleet.policies.FurthestVehiclePolicy
+import ksl.modeling.fleet.policies.LeastUsedVehiclePolicy
+import ksl.modeling.fleet.policies.NearestVehiclePolicy
+import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.guidedpath.LinkType
+import ksl.modeling.guidedpath.TransporterPlacement
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
+import ksl.simulation.Model
+import ksl.simulation.ModelElement
+import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.io.KSL
+import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
+```
+
+Six policies from `ksl.modeling.fleet.policies`, the model-element types, and the two study
+classes: `ScenarioRunner` to run the six configurations under identical conditions,
+`MultipleComparisonAnalyzer` to compare them.
+
+#### 2. The places, and the ring
 
 ```kotlin
 object DispatchingRuleComparison {
@@ -1587,11 +1687,12 @@ object DispatchingRuleComparison {
     const val DEPOT_A: String = "DepotA"
     const val DEPOT_B: String = "DepotB"
     const val DEPOT_C: String = "DepotC"
-```
 
-Six names: two pickup points, one shipping point, three depots.
-
-```kotlin
+    /**
+     *  A one-way ring of four legs with a depot spur for each of the three carts.
+     *
+     *  Two pickup stations, at opposite corners, for the reason in this file's header.
+     */
     fun createNetwork(): GuidedPathNetwork = GuidedPathNetwork.builder("RingShop")
         .intersection("N", x = 0.0, y = 100.0)
         .intersection("E", x = 100.0, y = 0.0)
@@ -1619,75 +1720,93 @@ Six names: two pickup points, one shipping point, three depots.
         .build()
 ```
 
-Figure 4's ring, one way round, four legs of 120 cut into zones of 12 — ten zones
-a leg, so ten carts could in principle queue on one. Three spurs of 24, one per
-cart, off `N`, `E` and `S`.
+Figure 4's ring, one way round, four legs of 120 cut into zones of 12 — ten zones a leg, so
+ten carts could in principle queue on one. Three spurs of 24, one per cart.
 
-**The two pickup stations are the design decision in this layout.** `NORTH_PICKUP`
-is at `N` and `SOUTH_PICKUP` at `S`, diagonally opposite. On a single-origin
-layout every waiting task costs a given vehicle the same, so any rule that ranks
-*tasks* rather than vehicles would be indistinguishable from any other, and the
-comparison would quietly report that the choice of rule does not matter. That
-would be an artefact of the layout, not a finding.
+**The two pickup stations are the design decision in this layout.** `NORTH_PICKUP` is at `N`
+and `SOUTH_PICKUP` at `S`, diagonally opposite. On a single-origin layout every waiting task
+costs a given vehicle the same, so any rule that ranks *tasks* rather than vehicles would be
+indistinguishable from any other, and the comparison would quietly report that the choice of
+rule does not matter. That would be an artefact of the layout, not a finding.
 
-#### 2. The load
+#### 3. The load
 
 ```kotlin
-    private const val MEAN_TIME_BETWEEN_ARRIVALS = 26.0
-    private const val ARRIVAL_STREAM = 1
-    private const val NUM_ARRIVALS = 600
+    const val MEAN_TIME_BETWEEN_ARRIVALS: Double = 26.0
+    const val ARRIVAL_STREAM: Int = 1
+    const val NUM_ARRIVALS: Int = 600
 ```
 
-600 loads, exponential with mean 26, **stream 1**. Every one of the six runs names
-the same stream, which is what "common random numbers" means here: all six see the
-same arrivals at the same instants, so a difference between them cannot be
-sampling noise in the arrivals.
+600 loads, exponential with mean 26, **stream 1**. All six runs name the same stream, which
+is what "common random numbers" means here: they see the same arrivals at the same instants,
+so the paired differences in part 8 have the arrival variability removed from them rather
+than merely averaged over.
 
-#### 3. The shop, with the rule as a parameter
+#### 4. The shop, with the rule as a parameter
 
 ```kotlin
-    class Shop(parent: ModelElement, policy: AssignmentPolicyIfc) : ProcessModel(parent, "Shop") {
+    class Shop(
+        parent: ModelElement,
+        policy: AssignmentPolicyIfc,
+        name: String? = "Shop"
+    ) : ProcessModel(parent, name) {
 
-        val network = createNetwork()
+        val network: GuidedPathNetwork = createNetwork()
 
         init {
             spatialModel = network
         }
 
-        val agv = AgvSystem(this, network, assignmentPolicy = policy, name = "Agv")
+        val agv: AgvSystem = AgvSystem(this, network, assignmentPolicy = policy, name = "Agv")
 
-        val fleet = listOf(DEPOT_A, DEPOT_B, DEPOT_C).mapIndexed { i, depot ->
+        val fleet: List<AgvVehicle> = listOf(DEPOT_A, DEPOT_B, DEPOT_C).mapIndexed { i, depot ->
             AgvVehicle(agv, TransporterPlacement.At(depot), ConstantRV(12.0), name = "Cart${i + 1}")
                 .apply { homeBase = depot }
         }
 
-        val waitForVehicle = Response(this, "Shop:WaitForVehicle")
-        val timeInSystem = Response(this, "Shop:TimeInSystem")
-        val delivered = Counter(this, "Shop:Delivered")
+        private val myWaitForVehicle = Response(this, "${this.name}:WaitForVehicle")
+        val waitForVehicle: ResponseCIfc
+            get() = myWaitForVehicle
+
+        private val myTimeInSystem = Response(this, "${this.name}:TimeInSystem")
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
+
+        private val myDelivered = Counter(this, "${this.name}:Delivered")
+        val delivered: CounterCIfc
+            get() = myDelivered
 
         /** Largest minus smallest per-vehicle completions: how unevenly the work fell. Observed at
          *  the horizon, so a Response rather than a Counter -- it is one measurement of the finished
          *  replication, not a total that accumulated during it. */
-        val fleetImbalance = Response(this, "Shop:FleetImbalance")
+        private val myFleetImbalance = Response(this, "${this.name}:FleetImbalance")
+        val fleetImbalance: ResponseCIfc
+            get() = myFleetImbalance
 
-        private val timeBetweenArrivals = ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)
+        // A model element rather than a bare random variable, so that the arrival rate is a named
+        // input a scenario can override and the report says what it was.
+        private val myTimeBetweenArrivals = RandomVariable(
+            this, ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM), name = "${this.name}:TBA"
+        )
+        val timeBetweenArrivals: RandomVariableCIfc
+            get() = myTimeBetweenArrivals
 ```
 
-`policy: AssignmentPolicyIfc` is the substitution point, and it is passed straight
-through to `AgvSystem`. That interface is the seam: a policy is handed the board —
-the outstanding tasks and the fleet — and answers which vehicle should take which
-task, however it likes, **including by taking simulated time to decide**. Nothing
-else in this class knows which rule is running.
+`policy: AssignmentPolicyIfc` is the substitution point, passed straight to `AgvSystem`. That
+interface is the seam: a policy is handed the board — the outstanding tasks and the fleet —
+and answers which vehicle should take which task, however it likes, **including by taking
+simulated time to decide**. Nothing else in this class knows which rule is running.
 
-Three carts, one per depot, created by mapping over the depot names so that adding
-a fourth would be a one-word change.
+Three carts, one per depot, created by mapping over the depot names.
 
-Four statistics. Three are ordinary. The fourth,
-`fleetImbalance`, is worth stopping on: it is a `Response` and not a `Counter`
-because it is **one observation of a finished replication**, not a total that
-accumulates during one. Part 6 computes it.
+Four statistics, each private with a public read-only accessor. `myFleetImbalance` is worth
+stopping on: it is a `Response` and not a `Counter` because it is **one observation of a
+finished replication**, not a total that accumulates during one. Part 6 computes it.
 
-#### 4. The load's process, and the wait split in two
+The arrival distribution is a `RandomVariable` rather than a bare `ExponentialRV`, so the
+arrival rate is a named input a scenario could override and the report says what it was.
+
+#### 5. The load's process, and the wait split in two
 
 ```kotlin
         inner class Load(private val from: String) : Entity() {
@@ -1695,37 +1814,29 @@ accumulates during one. Part 6 computes it.
                 val arrived = time
                 currentLocation = network.requireLocation(from)
                 val result = transportByFleet(agv, destination = SHIPPING, origin = from)
-                waitForVehicle.value = result.waitForAssignment + result.waitForArrival
-                timeInSystem.value = time - arrived
-                delivered.increment()
+                myWaitForVehicle.value = result.waitForAssignment + result.waitForArrival
+                myTimeInSystem.value = time - arrived
+                myDelivered.increment()
             }
         }
 ```
 
-```kotlin
-val result = transportByFleet(agv, destination = SHIPPING, origin = from)
-waitForVehicle.value = result.waitForAssignment + result.waitForArrival
-```
+`transportByFleet` returns a `FleetTransportResult`, and the two fields added here are **two
+different clocks**: `waitForAssignment` runs from the instant the load asked to the instant a
+dispatcher committed a vehicle to it, and `waitForArrival` from that commitment to the vehicle
+arriving.
 
-`transportByFleet` returns a `FleetTransportResult`, and the two fields added here
-are **two different clocks**:
+The batched rule's cost is almost entirely the first of these. A model that reported only
+their sum would show the cost without showing where it came from — and a passive pool could
+not report the split at all, because there is no object in it that holds a commitment.
 
-- `waitForAssignment` — from the instant the load asked to the instant a
-  dispatcher committed a vehicle to it.
-- `waitForArrival` — from that commitment to the vehicle actually arriving.
-
-The batched row in the results table is almost entirely the first of these. A model
-that reported only their sum would show the cost without showing where it came
-from, and a passive pool could not report the split at all, because there is no
-object in it that holds a commitment.
-
-#### 5. The source, and why the origin alternates
+#### 6. The source, and imbalance at the horizon
 
 ```kotlin
         inner class Source : Entity() {
             val arrivals = process(isDefaultProcess = true) {
                 repeat(NUM_ARRIVALS) {
-                    delay(timeBetweenArrivals)
+                    delay(myTimeBetweenArrivals)
                     // Alternating origins, so that which task is nearest genuinely varies.
                     val from = if (it % 2 == 0) NORTH_PICKUP else SOUTH_PICKUP
                     activate(Load(from).production)
@@ -1736,215 +1847,258 @@ object in it that holds a commitment.
         override fun initialize() {
             activate(Source().arrivals)
         }
-```
 
-A `Source` entity rather than an `EntityGenerator`, because a generator produces
-identical entities on a schedule and this study needs the origin to alternate.
-`it` is the repeat index, so even-numbered loads come from the north and odd from
-the south — which is what gives the rules something to disagree about, per part 1.
-
-#### 6. Imbalance, measured when the replication ends
-
-```kotlin
         override fun replicationEnded() {
             super.replicationEnded()
             val counts = fleet.map { it.numTasksCompleted.value }
-            fleetImbalance.value = counts.max() - counts.min()
+            myFleetImbalance.value = counts.max() - counts.min()
         }
-```
-
-`replicationEnded()` is called once per replication, after the run and before the
-statistics are collected. `numTasksCompleted` is a statistic the **vehicle** keeps
-about itself, so largest minus smallest is how unevenly the work fell across the
-fleet.
-
-This is the natural home for any quantity that is a property of the finished run
-rather than of an event during it, and putting it anywhere else — a counter
-incremented as tasks complete, say — would produce a number with no meaning.
-
-#### 7. Running one configuration
-
-```kotlin
-    private const val REPLICATIONS = 15
-    private const val HORIZON = 10_000.0
-    private const val WARM_UP = 1_500.0
-
-    fun run(label: String, policy: AssignmentPolicyIfc): Shop {
-        val m = Model("DispatchRules-$label")
-        val shop = Shop(m, policy)
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return shop
     }
 ```
 
-Fifteen replications of 10,000 with a 1,500 warm-up. `label` only names the model,
-and `policy` is the entire difference between the six runs.
+A `Source` entity rather than an `EntityGenerator`, because a generator produces identical
+entities on a schedule and this study needs the origin to alternate: `it` is the repeat index,
+so even-numbered loads come from the north and odd from the south. That is what gives the
+rules something to disagree about.
 
-#### 8. The six rules, and reading the table
+`replicationEnded()` is called once per replication, after the run and before the statistics
+are collected. `numTasksCompleted` is a statistic the **vehicle** keeps about itself, so
+largest minus smallest is how unevenly the work fell across the fleet.
+
+#### 7. The six rules, and the runner
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val rules = listOf(
-            "nearest vehicle" to NearestVehiclePolicy(),
-            "furthest vehicle" to FurthestVehiclePolicy(),
-            "least used" to LeastUsedVehiclePolicy(),
-            "batched (window 30)" to BatchedAssignmentPolicy(30.0),
-            "contract net (instant)" to ContractNetAssignmentPolicy(0.0),
-            "contract net (deadline 5)" to ContractNetAssignmentPolicy(5.0)
-        )
+    const val REPLICATIONS: Int = 15
+    const val HORIZON: Double = 10_000.0
+    const val WARM_UP: Double = 1_500.0
 
-        val results = rules.map { (label, policy) -> label to run(label.filter { c -> c.isLetter() }, policy) }
+    /**
+     *  The six rules, in the order they are reported. Scenario names are also experiment names in
+     *  the runner's database and directory names on disk, so they carry no punctuation.
+     */
+    fun rules(): List<Pair<String, AssignmentPolicyIfc>> = listOf(
+        "NearestVehicle" to NearestVehiclePolicy(),
+        "FurthestVehicle" to FurthestVehiclePolicy(),
+        "LeastUsed" to LeastUsedVehiclePolicy(),
+        "BatchedWindow30" to BatchedAssignmentPolicy(30.0),
+        "ContractNetInstant" to ContractNetAssignmentPolicy(0.0),
+        "ContractNetDeadline5" to ContractNetAssignmentPolicy(5.0)
+    )
 
-        println()
-        println("Three carts, one ring, six dispatching rules - common random numbers throughout")
-        println()
-        println("  %-26s %10s %12s %12s %11s".format("rule", "delivered", "wait", "in system", "imbalance"))
-        for ((label, shop) in results) {
-            println(
-                "  %-26s %10.1f %12.2f %12.2f %11.2f".format(
-                    label,
-                    shop.delivered.acrossReplicationStatistic.average,
-                    shop.waitForVehicle.acrossReplicationStatistic.average,
-                    shop.timeInSystem.acrossReplicationStatistic.average,
-                    shop.fleetImbalance.acrossReplicationStatistic.average
-                )
+    /**
+     *  Builds the runner with one scenario per rule. Every scenario gets its own model and the same
+     *  run parameters, and the runner leaves the random streams alone, so the six runs see the same
+     *  arrivals -- which is what makes the paired comparison below valid.
+     */
+    fun buildRunner(): ScenarioRunner {
+        val runner = ScenarioRunner("DispatchingRules")
+        for ((label, policy) in rules()) {
+            val m = Model("DispatchRules_$label")
+            Shop(m, policy)
+            runner.addScenario(
+                model = m,
+                name = label,
+                inputs = emptyMap(),
+                numberReplications = REPLICATIONS,
+                lengthOfReplication = HORIZON,
+                lengthOfReplicationWarmUp = WARM_UP
             )
         }
+        return runner
+    }
 ```
 
-The six policies, in the order the table prints them:
+The six policies, in the order the tables print them:
 
-- **`NearestVehiclePolicy`** — the obvious rule, and the baseline.
-- **`FurthestVehiclePolicy`** — deliberately poor. It exists so that "nearest is
-  better" can be a *finding* rather than an assertion: without a rule that should
-  do badly, a table in which everything performs similarly is uninterpretable.
+- **`NearestVehiclePolicy`** — the obvious rule, and the baseline every difference is taken
+  against.
+- **`FurthestVehiclePolicy`** — deliberately poor. It exists so that "nearest is better" can
+  be a *finding* rather than an assertion: without a rule that should do badly, a table in
+  which everything performs similarly is uninterpretable.
 - **`LeastUsedVehiclePolicy`** — balances wear rather than time.
-- **`BatchedAssignmentPolicy(30.0)`** — holds decisions open for thirty time units
-  and then allocates over everything that accumulated. **This is the rule that
-  cannot exist under the passive paradigm**, because it consumes simulated time
-  before answering.
-- **`ContractNetAssignmentPolicy(0.0)`** — an auction in which vehicles bid, with
-  no deadline, so bidding is instantaneous.
-- **`ContractNetAssignmentPolicy(5.0)`** — the same auction with a five-unit
-  deadline, so negotiating is charged for.
+- **`BatchedAssignmentPolicy(30.0)`** — holds decisions open for thirty time units, then
+  allocates over everything that accumulated. **This is the rule that cannot exist under the
+  passive paradigm**, because it consumes simulated time before answering.
+- **`ContractNetAssignmentPolicy(0.0)`** — an auction with no deadline, so bidding is
+  instantaneous.
+- **`ContractNetAssignmentPolicy(5.0)`** — the same auction with a five-unit deadline, so
+  negotiating is charged for.
 
-`label.filter { c -> c.isLetter() }` strips the punctuation out of the label before
-it becomes a model name. That is not cosmetic: **a model element's name cannot
-contain a `.`**, and a name built from a swept numeric value is a well-known way to
-get a result table full of `NaN`.
+`buildRunner` gives each rule its own model and its own scenario, all with the same run
+parameters. Scenario names carry no punctuation because they become experiment names in the
+runner's database and directory names on disk — and because **a model element's name cannot
+contain a `.`**: it is silently rewritten to `_`, and a lookup by the name you wrote then
+returns null.
 
-#### 9. The example reading its own output
+#### 8. The comparison, and the mistake it replaces
 
 ```kotlin
-        val byLabel = results.toMap()
-        val nearest = byLabel.getValue("nearest vehicle")
-        val leastUsed = byLabel.getValue("least used")
-        val batched = byLabel.getValue("batched (window 30)")
-        val instantAuction = byLabel.getValue("contract net (instant)")
+fun main() {
+    val runner = DispatchingRuleComparison.buildRunner()
+    runner.simulate()
 
-        val unbatched = results.filterNot { it.first.startsWith("batched") }
-            .map { it.second.delivered.acrossReplicationStatistic.average }
-        val unbatchedSpread = unbatched.max() - unbatched.min()
-        val batchedLoss = nearest.delivered.acrossReplicationStatistic.average -
-                batched.delivered.acrossReplicationStatistic.average
+    // The standard half-width summary report for every scenario -- every response the model keeps,
+    // with its confidence interval, rather than the four columns the author happened to think of.
+    // Written to the KSL output file rather than the console: six scenarios of full reports is
+    // several hundred lines, and the console is where the comparison belongs.
+    runner.write()
+    println()
+    println("Full half-width summary reports for all six rules: ${KSL.outDir}")
 
+    // The analyzer forms each paired difference once, in the order the data was inserted, so the
+    // pair that exists is "first inserted - later". NearestVehicle is inserted first, so every
+    // difference below is reported in that direction rather than being silently absent.
+    val base = DispatchingRuleComparison.rules().first().first
+    for ((response, label) in listOf(
+        "Shop:Delivered" to "loads delivered",
+        "Shop:TimeInSystem" to "time in system",
+        "Shop:FleetImbalance" to "fleet imbalance"
+    )) {
+        val observations = runner.observationsAsMap(response)
+        check(observations.size == DispatchingRuleComparison.rules().size) {
+            "expected per-replication observations of $response for every scenario, got " +
+                "${observations.keys}. An empty or partial map would print an empty table, which " +
+                "is exactly the sort of silence this study exists to avoid."
+        }
+        val mca = MultipleComparisonAnalyzer(observations, label)
         println()
-        println("  Five of the six rules deliver within %.1f loads of one another.".format(unbatchedSpread))
-        println("  With a fleet this size the guide path is the constraint, not the decision, so a")
-        println("  study that measured throughput alone would conclude that dispatching does not")
-        println("  matter here - and would be wrong about everything except throughput.")
+        println("Paired differences in $label, $base minus each rule")
+        println("(common random numbers, ${DispatchingRuleComparison.REPLICATIONS} replications, 95% intervals)")
         println()
-        println("  What the rule changes is who waits and how evenly the fleet is worn.")
-        println(
-            "  Least-used leaves an imbalance of %.2f against nearest-vehicle's %.2f, at throughput".format(
-                leastUsed.fleetImbalance.acrossReplicationStatistic.average,
-                nearest.fleetImbalance.acrossReplicationStatistic.average
-            )
-        )
-        println("  that differs in the second decimal place. Nearest-vehicle concentrates work on")
-        println("  whichever cart is closest to the busy part of the layout, which on a one-way ring")
-        println("  is persistently the same cart. Whether that matters depends on whether the cost")
-        println("  being managed is time or wear - a modelling question, not a library one.")
-        println()
-        println("  Batching is the exception, and instructively so. It costs %.1f loads and".format(batchedLoss))
-        println(
-            "  %.0f time units of waiting against nearest-vehicle's %.0f.".format(
-                batched.waitForVehicle.acrossReplicationStatistic.average,
-                nearest.waitForVehicle.acrossReplicationStatistic.average
-            )
-        )
-        println("  A window pays for itself when a fleet has slack and the board has choices to weigh")
-        println("  up. This fleet is saturated: the window delays every decision, the queue never")
-        println("  drains, and the delay compounds. The rule is not broken - it is being asked to do")
-        println("  the one thing it is worst at, which is the sort of thing a comparison is for.")
-        println()
-        println(
-            "  Note also that the instant auction reproduces nearest-vehicle almost exactly (%.2f".format(
-                instantAuction.waitForVehicle.acrossReplicationStatistic.average
-            )
-        )
-        println("  against %.2f). That is a check rather than a coincidence: with distance bidding".format(
-            nearest.waitForVehicle.acrossReplicationStatistic.average))
-        println("  the vehicles quote what the rule would have computed, so the negotiation machinery")
-        println("  is shown not to be changing the answer by itself. The deadline row shows what it")
-        println("  costs once negotiating is charged for, which is the honest way to model it.")
+        println("  %-22s %12s %12s %12s".format("rule", "difference", "half-width", "detectable?"))
+        for ((name, _) in DispatchingRuleComparison.rules()) {
+            if (name == base) continue
+            val d = checkNotNull(mca.pairedDifferenceStatistic(base, name)) {
+                "no paired difference for '$base - $name'"
+            }
+            val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+            println("  %-22s %12.3f %12.3f %12s".format(name, d.average, d.halfWidth, detectable))
+        }
     }
+
+    println()
+    println("Reading the three tables")
+    println()
+    println("  Throughput: the half-width on any one rule's delivered count is about seven loads,")
+    println("  and the paired half-width is under one. Five of the six rules are indistinguishable")
+    println("  from nearest-vehicle in throughput -- which is a finding here and was an assertion")
+    println("  when this example printed six unpaired averages. Batching is the exception and is")
+    println("  detectably worse: on a saturated fleet the window delays every decision.")
+    println()
+    println("  Time in system and imbalance are where the rules actually differ, and both")
+    println("  differences are far outside their intervals. Least-used trades time for evenness on")
+    println("  purpose; furthest-vehicle is deliberately poor so that 'nearest is better' can be")
+    println("  measured rather than asserted.")
+    println()
+    println("  The instant auction reproduces nearest-vehicle replication for replication -- a")
+    println("  difference of zero with a half-width of zero. That is a check rather than a")
+    println("  coincidence: with distance bidding the vehicles quote what the rule would have")
+    println("  computed, so the negotiation machinery is shown not to change the answer by itself.")
+    println("  The deadline row then shows what it costs once negotiating is charged for.")
+    println()
+    println("  Where the table says no, the honest statement is 'no detectable difference at this")
+    println("  sample size', not 'the rules are the same'.")
+}
 ```
 
-The rest of `main` computes three things from the results and then says what they
-mean: the spread across the five unbatched rules, what batching cost against
-nearest-vehicle, and the imbalance gap between least-used and nearest.
+`runner.write()` sends the standard half-width summary report for all six scenarios to the KSL
+output file rather than the console — six full reports is several hundred lines, and the
+console is where the comparison belongs.
 
-It is worth noticing *what* is compared. `unbatchedSpread` is computed rather than
-quoted, so the sentence "five of the six rules deliver within N loads of one
-another" is true of the run in front of you rather than of the run that was in
-front of the author. That is the habit this tutorial is trying to spread: a
-narrative that recomputes itself cannot go stale.
+Then three paired tables, one per response. **This block is the correction of a real
+mistake.** An earlier version of this example printed six point estimates of loads delivered,
+observed that five lay within 0.3 loads of each other, and concluded that the rules were
+equivalent in throughput. The half-width on any *one* rule's delivered count is about seven
+loads: nothing on that page could have told a real difference of five loads from none at all.
+
+The pairing is what makes the claim possible. All six rules see the same arrivals, so the
+difference can be taken replication by replication, where the arrival variability cancels —
+and the paired half-width comes out under one load instead of seven. With that, "five of the
+six are indistinguishable in throughput" is a measurement rather than an impression, and
+"batching costs about forty loads" is separable from noise.
+
+Two habits worth copying:
+
+- **`check(observations.size == …)`** before the table. A misspelled response name would
+  return an empty map and print an empty table — the same silence this example exists to warn
+  about.
+- **The direction of each difference is stated in the heading**, and the base rule is read off
+  the first entry of `rules()` rather than assumed. The analyzer forms each pair once, in
+  insertion order, so asking for it backwards returns `null` rather than a sign-flipped answer.
 
 ### What it shows
 
+Six rules, fifteen replications, common random numbers. The console prints the paired
+difference of each rule against nearest-vehicle; the full half-width summary reports go to
+the KSL output file.
+
 ```
-  rule                        delivered         wait    in system   imbalance
-  nearest vehicle                 323.6        11.49        31.51       69.93
-  furthest vehicle                323.6        26.54        46.57       46.60
-  least used                      323.9        20.53        40.57        1.00
-  batched (window 30)             283.8       820.02       860.96        1.13
-  contract net (instant)          323.6        11.50        31.53       70.40
-  contract net (deadline 5)       323.6        21.33        41.47       50.93
+Paired differences in loads delivered, NearestVehicle minus each rule
+
+  rule                     difference   half-width  detectable?
+  FurthestVehicle               0.000        0.554           no
+  LeastUsed                    -0.333        0.401           no
+  BatchedWindow30              39.800        7.302          yes
+  ContractNetInstant            0.000        0.000           no
+  ContractNetDeadline5         -0.000        0.419           no
+
+Paired differences in time in system, NearestVehicle minus each rule
+
+  rule                     difference   half-width  detectable?
+  FurthestVehicle             -15.053        0.592          yes
+  LeastUsed                    -9.056        0.591          yes
+  BatchedWindow30            -829.449      113.097          yes
+  ContractNetInstant           -0.016        0.200           no
+  ContractNetDeadline5         -9.954        0.580          yes
+
+Paired differences in fleet imbalance, NearestVehicle minus each rule
+
+  rule                     difference   half-width  detectable?
+  FurthestVehicle              23.333        3.653          yes
+  LeastUsed                    68.933        4.554          yes
+  BatchedWindow30              68.800        4.568          yes
+  ContractNetInstant           -0.467        1.712           no
+  ContractNetDeadline5         19.000        4.170          yes
 ```
+
+For scale: the half-width on any **one** rule's delivered count is about 7.35 loads. The
+paired half-width is under 0.6.
 
 ### What to learn
 
-**Five of the six deliver within 0.3 loads of one another.** With a fleet this
-size the guide path is the constraint, not the decision — so a study that
-measured throughput alone would conclude that dispatching does not matter here,
-and would be wrong about everything except throughput.
+**Five of the six are indistinguishable in throughput** — every paired difference
+inside its own interval. With a fleet this size the guide path is the constraint, not
+the decision, so a study that measured throughput alone would conclude that dispatching
+does not matter here and would be wrong about everything except throughput.
 
-What the rule changes is **who waits and how evenly the fleet is worn**.
-Least-used leaves an imbalance of 1.00 against nearest-vehicle's 69.93, at
-throughput differing in the second decimal place. Whether that matters depends
-on whether the cost being managed is time or wear — a modelling question, not a
-library one.
+That sentence is worth more than it looks, because **an earlier version of this example
+could not have made it.** It printed six point estimates, saw them lie within 0.3 loads
+of each other, and inferred equivalence. The half-width on any one rule's throughput is
+7.35 loads: that page could not have told a real difference of five loads from none.
+The pairing removes the arrival variability, brings the half-width down to about half a
+load, and turns an impression into a measurement.
 
-**Batching is the exception, instructively.** It costs 39.8 loads and 820 time
-units of waiting against nearest-vehicle's 11. A window pays for itself when a
-fleet has slack and the board has choices to weigh; this fleet is saturated, so
-the window delays every decision and the delay compounds. The rule is not broken
-— it is being asked to do the thing it is worst at, which is what a comparison
-is for.
+What the rule changes is **who waits and how evenly the fleet is worn**, and both
+differences are far outside their intervals. Least-used costs 9.06 ± 0.59 in time in
+system and buys 68.93 ± 4.55 in imbalance. Whether that trade is worth making depends on
+whether the cost being managed is time or wear — a modelling question, not a library one.
+
+**Batching is the exception, instructively.** It is the one rule that loses throughput
+detectably: 39.8 ± 7.3 loads, and 829 ± 113 time units of waiting. A window pays for
+itself when a fleet has slack and the board has choices to weigh; this fleet is
+saturated, so the window delays every decision and the delay compounds. The rule is not
+broken — it is being asked to do the thing it is worst at, which is what a comparison is
+for.
 
 **And one check rather than a coincidence:** the instant auction reproduces
-nearest-vehicle almost exactly, 11.50 against 11.49. With distance bidding the
-vehicles quote what the rule would have computed, so the negotiation machinery
-is shown not to be changing the answer by itself. The deadline row then shows
-what it costs once negotiating is charged for.
+nearest-vehicle **exactly** — a paired difference of zero with a half-width of zero, in
+throughput and in imbalance alike. With distance bidding the vehicles quote what the
+rule would have computed, so the negotiation machinery is shown not to change the answer
+by itself. The deadline row then shows what it costs once negotiating is charged for:
+9.95 ± 0.58 in time in system.
 
-**`FurthestVehiclePolicy` is deliberately poor** and exists so that "nearest is
-better" can be a finding rather than an assertion.
+**`FurthestVehiclePolicy` is deliberately poor** and exists so that "nearest is better"
+can be a finding rather than an assertion — here, 15.05 ± 0.59 worse in time in system.
 
 ---
 
@@ -1984,10 +2138,9 @@ re-tasking with the near job at t = 15, by which point the swap would *cost*
 
 ### The code
 
-`RetaskingInFlightExample.kt` in full, minus documentation comments and imports.
-It is the shortest model in the tutorial — 179 lines with the comments — because
-what it demonstrates is a **rule**, and demonstrating a rule needs no randomness,
-no arrival process and no warm-up.
+`RetaskingInFlightExample.kt` in full, minus its GPL header and documentation comments.
+It is the shortest model in the tutorial, because what it demonstrates is a **rule**, and
+demonstrating a rule needs no randomness, no arrival process and no warm-up.
 
 #### 1. Four places and a ring
 
@@ -2015,16 +2168,15 @@ object RetaskingInFlightExample {
         .station(FAR_PICKUP, "W")
         .station(SHIPPING, "S")
         .station(DEPOT, "Park")
+        .build()
 ```
 
-Figure 5's ring: four legs of 100, one way round `N → E → S → W → N`, cut at 10 so
-each leg is ten zones. A parking spur of 20 off `N`, which is one zone.
+Figure 5's ring: four legs of 100, one way round `N → E → S → W → N`, cut at 10 so each
+leg is ten zones. A parking spur of 20 off `N`, which is one zone.
 
-The three stations sit at three of the four corners: the near pickup at `E`, the
-far pickup at `W`, shipping at `S`. **Because the ring runs one way, those three
-positions are not interchangeable**, and the arithmetic of the whole example comes
-out of that. From `N`, the near pickup is one leg ahead and the far pickup is
-three.
+The three stations sit at three of the four corners. **Because the ring runs one way,
+those positions are not interchangeable**, and the arithmetic of the whole example comes
+out of that: from `N`, the near pickup is one leg ahead and the far pickup is three.
 
 #### 2. The shop
 
@@ -2061,28 +2213,24 @@ three.
             activate(Load("far", FAR_PICKUP).production)
             activate(Load("near", NEAR_PICKUP).production, timeUntilActivation = nearArrivesAt)
         }
+    }
 ```
 
-One cart at `ConstantRV(10.0)`, the assignment policy taken as a parameter, and no
-arrival process at all.
+One cart at `ConstantRV(10.0)`, the assignment policy taken as a parameter, and no arrival
+process at all.
 
 `delivered` is a `LinkedHashMap` keyed by label, holding the **result object** each
-transport returned rather than a summary of it. `linkedMapOf` preserves insertion
-order, so the report prints the loads in the order they were delivered — which for
-this example is a result in itself, since the middle run delivers them in the
-opposite order to the third.
+transport returned rather than a summary of it. `linkedMapOf` preserves insertion order, so
+the report prints the loads in the order they were delivered — which for this example is a
+result in itself, since the middle run delivers them in the opposite order to the third.
 
-`initialize()` is the whole scenario:
+`initialize()` is the whole scenario: clear the map, activate the far load at time zero,
+activate the near load at `nearArrivesAt`. That parameter is the experiment; everything
+else is held fixed. `delivered.clear()` is state that must not survive a replication —
+there is only one here, but writing it correctly costs nothing and the opposite habit is a
+real source of quietly wrong second replications.
 
-- `delivered.clear()` — state that must not survive a replication. There is only
-  one replication here, but writing it correctly costs nothing and the opposite
-  habit is a real and recurring source of quietly wrong second replications.
-- The far load is activated at time zero.
-- The near load is activated at `nearArrivesAt`, using `timeUntilActivation`.
-
-That parameter is the experiment. Everything else is held fixed.
-
-#### 3. Running one scenario
+#### 3. Running one scenario, and reporting it
 
 ```kotlin
     fun run(policy: AssignmentPolicyIfc, nearArrivesAt: Double): Shop {
@@ -2093,19 +2241,7 @@ That parameter is the experiment. Everything else is held fixed.
         m.simulate()
         return shop
     }
-```
 
-**One replication, no warm-up, and that is the right design here.** The claim being
-made is not "re-tasking is better on average" — it is "at t = 2 the swap saves
-exactly 200 and the rule takes it; at t = 15 it costs exactly 200 and the rule
-refuses". Those are arithmetic facts about a deterministic model, and a confidence
-interval would obscure them rather than support them.
-
-The 2,000-unit horizon is simply long enough for two deliveries on a 400-unit ring.
-
-#### 4. The report
-
-```kotlin
     private fun report(title: String, shop: Shop) {
         println("  $title")
         for ((label, r) in shop.delivered) {
@@ -2124,18 +2260,22 @@ The 2,000-unit horizon is simply long enough for two deliveries on a 400-unit ri
     }
 ```
 
-Per load: when it was delivered, how long it waited, and **how many times it was
-reassigned**. Then, from the dispatcher, how many assignments were revoked.
+**One replication, no warm-up, and no confidence intervals — and that is the right design
+here.** The claim being made is not "re-tasking is better on average"; it is "at t = 2 the
+swap saves exactly 200 and the rule takes it; at t = 15 it costs exactly 200 and the rule
+refuses". Those are arithmetic facts about a deterministic model, and an interval around
+them would obscure rather than support them. Every other comparison in this tutorial
+reports half-widths because every other comparison is of a random variable.
 
-`shop.agv.dispatcher.numAssignmentsRevoked` is a statistic that only exists in this
-paradigm. A passive pool has no dispatcher, nothing that holds a commitment, and so
-nothing that could revoke one.
+The report prints, per load, when it was delivered, how long it waited, and **how many
+times it was reassigned** — then, from the dispatcher, how many assignments were revoked.
+`numAssignmentsRevoked` only exists in this paradigm: a passive pool has no dispatcher,
+nothing that holds a commitment, and so nothing that could revoke one.
 
-#### 5. The three runs
+#### 4. The three runs
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
+    fun report() {
         println()
         println("Re-tasking a cart in mid-journey - what the passive paradigm has no place for")
         println()
@@ -2168,38 +2308,44 @@ nothing that could revoke one.
         println("  waiting longest still looks like one, and the fact that it was passed over is")
         println("  reported rather than absorbed.")
     }
+}
 ```
 
 Read the three calls as a designed experiment with two factors and three cells.
 
-- **Run 1** — `NearestVehiclePolicy()`, near job at t = 2. The baseline: the cart
-  commits at time zero and finishes what it started. This run exists to show what
-  the layout does without any re-tasking in it, so that the second run's numbers
-  have something to be different from.
-- **Run 2** — `ReassigningPolicy(improvementThreshold = 20.0)`, near job at t = 2.
-  At that instant the cart has travelled 20 and stands at `N`; its own pickup at
-  `W` is 300 ahead and the new one at `E` is 100. The swap saves 200, comfortably
-  over the threshold, and the rule takes it.
-- **Run 3** — the same policy, near job at t = 15. Now the cart has travelled 150
-  and is fifty units past `E`. Its own pickup at `W` is 150 ahead; the new one at
-  `E` is 350, all the way back round. The swap would *cost* 200 and the rule
-  declines.
+- **Run 1** — `NearestVehiclePolicy()`, near job at t = 2. The baseline: the cart commits
+  at time zero and finishes what it started, so run 2's numbers have something to be
+  different from.
+- **Run 2** — `ReassigningPolicy(improvementThreshold = 20.0)`, near job at t = 2. At that
+  instant the cart has travelled 20 and stands at `N`; its own pickup at `W` is 300 ahead
+  and the new one at `E` is 100. The swap saves 200 and the rule takes it.
+- **Run 3** — the same policy, near job at t = 15. Now the cart is fifty units past `E`;
+  its own pickup is 150 ahead and the new one 350, all the way back round. The swap would
+  *cost* 200 and the rule declines.
 
-**Run 3 is what makes run 2 a finding.** A policy that always swapped would produce
-run 2's numbers exactly and run 3's wrongly, and on a busy floor it would churn —
-revoking and re-revoking as the board shifts, with carts spending their time
-changing their minds. `improvementThreshold` is what makes a swap have to be worth
-making, and `ReassigningPolicy` refuses a threshold of zero at construction for
-that reason.
+**Run 3 is what makes run 2 a finding.** A policy that always swapped would produce run 2's
+numbers exactly and run 3's wrongly, and on a busy floor it would churn.
+`improvementThreshold` is what makes a swap have to be worth making, and `ReassigningPolicy`
+refuses a threshold of zero at construction for that reason.
 
-The closing paragraphs record two facts about the mechanism that the numbers alone
-would not show. **The cart never reverses**: a redirect takes effect at the next
-zone boundary, because something between two places cannot stop and turn round, and
-that is the same code the passive subsystem has always used. And **the put-back
-load keeps its accumulated wait**, because its task never left the queue —
-re-queueing it would reset the clock and make the load that had waited longest look
-as though it had just arrived, corrupting both the statistic and any age-based rule
-reading it.
+The closing paragraphs record two facts the numbers alone would not show. **The cart never
+reverses**: a redirect takes effect at the next zone boundary, because something between two
+places cannot stop and turn round, and that is the same code the passive subsystem has
+always used. And **the put-back load keeps its accumulated wait**, because its task never
+left the queue — re-queueing it would reset the clock and make the load that had waited
+longest look as though it had just arrived.
+
+#### 5. The entry point
+
+```kotlin
+fun main() {
+    RetaskingInFlightExample.report()
+}
+```
+
+The corpus convention: a top-level `fun main()` that runs the study. Keeping the body in the
+object and calling it from here means the study can also be invoked from a test or another
+example without going through a `main`.
 
 ### What it shows
 
@@ -2285,11 +2431,38 @@ cycle rides each shaft exactly once**. Three studies run on it.
 
 ### The code
 
-`MultiFloorHospitalExample.kt` in full, minus documentation comments and imports.
-Three studies run on one model, and the interesting code is not the lift — the lift
-is one argument — but the arithmetic that keeps the three studies comparable.
+`MultiFloorHospitalExample.kt` in full, minus its GPL header and documentation comments.
+Three studies run on one model, and the interesting code is not the lift — the lift is one
+argument — but the arithmetic that keeps the studies comparable.
 
-#### 1. Names and constants
+#### 1. Imports and constants
+
+```kotlin
+package ksl.examples.general.agv
+
+import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.entity.KSLProcess
+import ksl.modeling.entity.ProcessModel
+import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.guidedpath.LinkType
+import ksl.modeling.guidedpath.TransporterPlacement
+import ksl.controls.ControlType
+import ksl.controls.KSLControl
+import ksl.controls.experiments.ScenarioRunner
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
+import ksl.modeling.variable.ResponseCIfc
+import ksl.modeling.variable.Response
+import ksl.simulation.KSLEvent
+import ksl.simulation.Model
+import ksl.simulation.ModelElement
+import ksl.utilities.io.KSL
+import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.random.rvariable.ExponentialRV
+```
 
 ```kotlin
 object MultiFloorHospitalExample {
@@ -2312,12 +2485,9 @@ object MultiFloorHospitalExample {
     private const val MAX_PORTERS = 8
 ```
 
-`parkingSpur(i)` is a function rather than a constant because there is one per
-porter and the number of porters is swept.
-
-`CIRCUIT = 400.0` is the load-bearing constant, and part 2 shows what it buys.
-`MAX_PORTERS` is how many parking spurs get built, so the network can serve any
-fleet size the studies use.
+`parkingSpur(i)` is a function rather than a constant because there is one per porter and the
+number of porters is swept. `CIRCUIT = 400.0` is the load-bearing constant, and part 2 shows
+what it buys. `MAX_PORTERS` is how many parking spurs get built.
 
 #### 2. The layout, and the two lines that make it a hospital
 
@@ -2363,53 +2533,47 @@ fleet size the studies use.
 
 Two lines here matter more than the rest.
 
-```kotlin
-val corridor = (CIRCUIT - 2.0 * shaftLength - 120.0) / 2.0
-require(corridor > 0.0) { "the shafts leave no room for corridors" }
-```
-
-**The corridors absorb whatever the shafts do not use.** The circuit is 400
-whatever `shaftLength` is: two shafts, two fixed 60-unit legs, and two corridors
-that take up the slack. This is what makes studies 2 and 3 comparable — a single
-porter travels the same 400 with a slow lift or a fast one, so it delivers at the
-same rate in both, and every difference further down the two tables is about how
-many porters the shaft will pass and about nothing else. The `require` catches a
-sweep that pushed `shaftLength` past 140 and would otherwise build a network with
+**`val corridor = (CIRCUIT - 2.0 * shaftLength - 120.0) / 2.0`** — the corridors absorb
+whatever the shafts do not use. The circuit is 400 whatever `shaftLength` is, which is what
+makes studies 2 and 3 comparable: a single porter travels the same 400 with a slow lift or a
+fast one, so it delivers at the same rate in both, and every difference further down the two
+tables is about how many porters the shaft will pass and about nothing else. The `require`
+catches a sweep that pushed `shaftLength` past 140 and would otherwise build a network with
 negative corridors.
 
-```kotlin
-// The lift: one zone, so exactly one porter may be inside it at a time.
-.link("ShaftUp", "G3", "F1", length = shaftLength, zoneLength = shaftLength, beginDirection = 90.0)
-```
+**`zoneLength = shaftLength` on the shaft links is the whole lift.** The zone is the entire
+link, so the link contains exactly one zone, so it admits exactly one vehicle. Nothing was
+written to make that true — it is the general rule ("one zone, one vehicle") applied to a link
+of a particular shape. There is no elevator class, no floor attribute, no capacity semaphore,
+and no branch anywhere in the dispatcher or the vehicle control loop.
 
-**`zoneLength = shaftLength` is the whole lift.** The zone is the entire link, so
-the link contains exactly one zone, so it admits exactly one vehicle. Nothing was
-written to make that true — it is the general rule ("one zone, one vehicle")
-applied to a link of a particular shape. There is no elevator class, no floor
-attribute, no capacity semaphore, and no branch anywhere in the dispatcher or the
-vehicle control loop.
+The `z = shaftLength` on the first-floor intersections is a **third coordinate**, and it is
+for drawing only. Routing reads the declared link lengths and never a coordinate, which is
+precisely why a network can span floors. The circuit is one way — up one shaft, along the
+first floor, down the other — so **every delivery cycle rides each shaft exactly once**, which
+is what makes the capacity arithmetic exact.
 
-The `z = shaftLength` on the first-floor intersections is a **third coordinate**,
-and it is for drawing only. Before intersections carried a height this layout had
-to offset the upper floor in `y` to be drawable at all, which put the wards
-somewhere they are not. Routing reads the declared link lengths and never a
-coordinate, which is precisely why a network can span floors.
-
-The circuit is one way: up one shaft, along the first floor, down the other. So
-**every delivery cycle rides each shaft exactly once**, which is what makes the
-capacity arithmetic in the results section exact.
-
-A spur per porter at the end, for case 1's reason.
-
-#### 3. The hospital, and a closed population
+#### 3. The hospital, a control, and a closed population
 
 ```kotlin
     class Hospital(
         parent: ModelElement,
         val numPorters: Int,
         shaftLength: Double,
-        private val ordersInCirculation: Int
+        ordersInCirculation: Int
     ) : ProcessModel(parent, "Hospital") {
+
+        /**
+         *  How much work is outstanding. Read only in [initialize], so it is a genuine input a
+         *  scenario can override rather than a structural choice baked into the constructor.
+         */
+        @set:KSLControl(controlType = ControlType.INTEGER, lowerBound = 1.0)
+        var ordersInCirculation: Int = ordersInCirculation
+            set(value) {
+                require(value > 0) { "There must be at least one order in circulation." }
+                require(!model.isRunning) { "Cannot change the outstanding work while the model is running." }
+                field = value
+            }
 
         val network = createNetwork(shaftLength)
 
@@ -2425,19 +2589,35 @@ A spur per porter at the end, for case 1's reason.
             ).apply { homeBase = parkingSpur(i) }
         }
 
-        val delivered = Counter(this, "Delivered")
-        val cycleTime = Response(this, "CycleTime")
+        private val myDelivered = Counter(this, "Delivered")
+        val delivered: CounterCIfc
+            get() = myDelivered
 
-        private val preparation = ExponentialRV(MEAN_PREPARATION, 1)
+        private val myCycleTime = Response(this, "CycleTime")
+        val cycleTime: ResponseCIfc
+            get() = myCycleTime
+
+        /** The fleet's average blocked fraction, observed once per replication so that it carries a
+         *  confidence interval like any other response. Averaging the porters' across-replication
+         *  averages afterwards would give the same point estimate and no interval at all. */
+        private val myFleetBlocked = Response(this, "FleetFracBlocked")
+        val fleetBlocked: ResponseCIfc
+            get() = myFleetBlocked
+
+        private val myPreparation = RandomVariable(
+            this, ExponentialRV(MEAN_PREPARATION, 1), name = "PreparationTime"
+        )
+        val preparationRV: RandomVariableCIfc
+            get() = myPreparation
 
         inner class Order : Entity() {
             val delivery: KSLProcess = process(isDefaultProcess = true) {
                 val placed = time
                 currentLocation = network.requireLocation(PHARMACY)
-                delay(preparation)
+                delay(myPreparation)
                 transportByFleet(agv, destination = WARD, origin = PHARMACY)
-                cycleTime.value = time - placed
-                delivered.increment()
+                myCycleTime.value = time - placed
+                myDelivered.increment()
                 // The shelf is never the constraint: the next order is ready the moment this one
                 // is delivered, which is what holds the outstanding work constant.
                 activate(Order().delivery)
@@ -2447,28 +2627,32 @@ A spur per porter at the end, for case 1's reason.
         override fun initialize() {
             repeat(ordersInCirculation) { activate(Order().delivery) }
         }
+
+        override fun replicationEnded() {
+            super.replicationEnded()
+            myFleetBlocked.value =
+                porters.sumOf { it.fracTimeBlocked.withinReplicationStatistic.weightedAverage } / numPorters
+        }
+    }
 ```
 
-`ordersInCirculation` is the key parameter. Look at the last line of the order's
-process:
+**`ordersInCirculation` is a `@KSLControl`.** It is read only in `initialize()`, so it is a
+genuine input a scenario can override rather than a structural choice baked into the
+constructor — unlike the fleet size, which decides how many parking spurs the network has. The
+setter refuses a change while the model is running and refuses a value below one, which is the
+KSL convention: validate at the point of assignment, so a bad input fails where it was
+supplied.
 
-```kotlin
-activate(Order().delivery)
-```
+Look at the last line of the order's process: **an order that completes activates its own
+successor**, so the number outstanding never changes for the entire run. That single line is
+what makes this a *closed* system, and it has two consequences: cycle time becomes a number
+about the hospital rather than about how long the run was, and Little's law can be checked
+against the table — orders outstanding = throughput × cycle time.
 
-**An order that completes activates its own successor**, so the number of orders
-outstanding never changes for the entire run. That single line is what makes this a
-*closed* system, and it has two consequences worth understanding:
-
-- **Cycle time means something.** It is a number about the hospital rather than
-  about how long the run was. In an open model with a saturated fleet, waiting time
-  grows without bound and the average you measure is a fact about your horizon.
-- **Little's law can be checked.** Orders outstanding = throughput × cycle time,
-  and the results section does exactly that arithmetic against the table.
-
-`delay(preparation)` is the pharmacy making the order up. It is deliberately short
-— mean 1 against a 400-unit circuit — so the shelf is never the constraint and the
-transport system is what is being measured.
+`replicationEnded()` records the fleet's average blocked fraction as a response of its own.
+That is deliberate: averaging the porters' *across-replication* averages afterwards would give
+the same point estimate and **no interval at all**, whereas one observation per replication
+carries a half-width like any other response.
 
 #### 4. The watcher, and two mistakes it is built to avoid
 
@@ -2524,102 +2708,71 @@ transport system is what is being measured.
     }
 ```
 
-Study 1 needs to know whether the lift is doing what the model claims, and it
-cannot ask the lift, because there is no lift object. So it samples the shaft's
-zones directly.
+Study 1 needs to know whether the lift is doing what the model claims, and it cannot ask the
+lift, because there is no lift object. So it samples the shaft's zones directly.
+`WatchedHospital` wraps a `Hospital` rather than extending it, which keeps the observation
+apparatus out of the model being observed.
 
-`WatchedHospital` wraps a `Hospital` rather than extending it, and forwards
-`network` and `delivered`. That keeps the observation apparatus out of the model
-being observed.
+Two details, both learned the hard way:
 
-Two details, both learned the hard way, and both worth carrying to your own models:
+**Sampling is on the half-tick.** With a constant velocity and equal zone lengths, every zone
+transition in this model lands on a whole number. An observer scheduled at those same instants
+sees whichever side of them event priority happens to put it on — and this one, scheduled on
+the whole tick, once reported an unused lift in a model that was plainly using one.
 
-```kotlin
-var t = 0.5
-while (t < horizon) {
-    schedule(::sampleShaft, t)
-    t += 1.0
-}
-```
+**`isHeld`, not `isOccupied`.** A zone is claimed from the moment it is *reserved*, not from
+the moment a vehicle is inside it, and it is the reservation that does the excluding.
 
-**Sampling is on the half-tick.** With a constant velocity and equal zone lengths,
-every zone transition in this model lands on a whole number. An observer scheduled
-at those same instants sees whichever side of them event priority happens to put it
-on — and this one, scheduled on the whole tick, once reported an unused lift in a
-model that was plainly using one. That is not a subtlety of this subsystem; it is
-what makes a deterministic model easy to observe wrongly.
-
-```kotlin
-val shaft = network.link("ShaftUp")!!.zones
-// `isHeld`, not `isOccupied` -- see the note in this file's header.
-val inside = shaft.count { it.isHeld }
-```
-
-**`isHeld`, not `isOccupied`.** A zone is claimed from the moment it is *reserved*,
-not from the moment a vehicle is physically inside it, and it is the reservation
-that does the excluding. Counting occupancy would undercount the exclusion and make
-the lift look less busy than it is.
-
-`initialize()` resets all four accumulators, because a `ModelElement`'s state must
-not survive a replication.
+`initialize()` resets all four accumulators, because a `ModelElement`'s state must not survive
+a replication.
 
 #### 5. The experiment design
 
 ```kotlin
-    private const val REPLICATIONS = 4
-    private const val HORIZON = 4_000.0
-    private const val WARM_UP = 500.0
+    const val REPLICATIONS: Int = 4
+    const val HORIZON: Double = 4_000.0
+    const val WARM_UP: Double = 500.0
 
     /** How much work is outstanding: enough that a porter never waits for one, and no more. */
     fun ordersFor(numPorters: Int): Int = numPorters + 2
 
-    /** One point of a fleet study: the fleet size, and what the fleet managed. */
-    data class FleetResult(
-        val numPorters: Int,
-        val deliveries: Double,
-        val cycleTime: Double,
-        val fracBlocked: Double
-    ) {
-        /** Deliveries per 100 time units, which is the quantity a capacity study is about. */
-        val throughput: Double get() = 100.0 * deliveries / (HORIZON - WARM_UP)
+    /** Deliveries per 100 time units, which is the quantity a capacity study is about. */
+    fun throughputPer100(deliveries: Double): Double = 100.0 * deliveries / (HORIZON - WARM_UP)
+
+    /**
+     *  One scenario per fleet size, all on the same lift. Every scenario is a fresh model because
+     *  the fleet size is structural -- the network carries one parking spur per porter -- so this
+     *  is a runner over model instances rather than over control values.
+     */
+    fun buildRunner(name: String, shaftLength: Double, sizes: List<Int>): ScenarioRunner {
+        val runner = ScenarioRunner(name)
+        for (n in sizes) {
+            val m = Model("${name}_$n")
+            Hospital(m, n, shaftLength, ordersFor(n))
+            runner.addScenario(
+                model = m, name = "Porters$n", inputs = emptyMap(),
+                numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+                lengthOfReplicationWarmUp = WARM_UP
+            )
+        }
+        return runner
     }
 ```
 
 Four replications of 4,000 with a 500 warm-up.
 
-```kotlin
-fun ordersFor(numPorters: Int): Int = numPorters + 2
-```
+**The outstanding work scales with the fleet**: `ordersFor(n) = n + 2` is enough that a porter
+never waits for one and no more, so the fleet is what is being measured rather than the order
+supply. Holding the population fixed while sweeping the fleet would starve the small fleets or
+flood the large ones.
 
-**The outstanding work scales with the fleet.** Two spare orders is enough that a
-porter never waits for one and no more, so the fleet is the thing being measured
-rather than the order supply. Holding the population fixed while sweeping the fleet
-would starve the small fleets or flood the large ones, and either way the table
-would be measuring the wrong thing.
+`buildRunner` makes one scenario per fleet size. The fleet size is structural — the network
+carries one parking spur per porter — so this is a runner over **model instances** rather than
+over control values, exactly as in cases 1 and 4.
 
-`FleetResult.throughput` converts deliveries into **deliveries per 100 time units**
-over the post-warm-up horizon, which is the quantity a capacity study is actually
-about — and the quantity that can be compared against the shaft's theoretical
-maximum.
-
-#### 6. Running a fleet size, and a fleet table
+#### 6. Running the studies
 
 ```kotlin
-    fun runFleet(numPorters: Int, shaftLength: Double): FleetResult {
-        val m = Model("Hospital-$numPorters-${shaftLength.toInt()}")
-        val h = Hospital(m, numPorters, shaftLength, ordersFor(numPorters))
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return FleetResult(
-            numPorters = numPorters,
-            deliveries = h.delivered.acrossReplicationStatistic.average,
-            cycleTime = h.cycleTime.acrossReplicationStatistic.average,
-            fracBlocked = h.porters.sumOf { it.fracTimeBlocked.acrossReplicationStatistic.average } / numPorters
-        )
-    }
-
     fun runWatched(): WatchedHospital {
         val m = Model("Hospital-Watched")
         val h = WatchedHospital(
@@ -2631,188 +2784,211 @@ maximum.
         return h
     }
 
-    private fun fleetTable(title: String, shaftLength: Double, sizes: List<Int>) {
+    /**
+     *  Runs one fleet sweep and prints it. The full half-width summary report for every fleet size
+     *  goes to the KSL output file; the console gets the three columns the study is about, each
+     *  with its half-width, because a capacity ceiling that is inside the sampling error is not a
+     *  ceiling.
+     */
+    fun fleetTable(title: String, name: String, shaftLength: Double, sizes: List<Int>) {
         val rideTime = shaftLength / SPEED
+        val runner = buildRunner(name, shaftLength, sizes)
+        runner.simulate()
+        runner.write()
         println("  $title")
         println(
             "  a ride costs %.1f time units, so the shaft passes at most %.2f porters per 100"
                 .format(rideTime, 100.0 / rideTime)
         )
         println()
-        println("    porters   orders out   deliveries   per 100 units   cycle time   blocked")
+        println(
+            "    %7s %9s %11s %9s %11s %8s %11s %8s".format(
+                "porters", "orders", "deliveries", "hw", "cycle time", "hw", "blocked", "hw"
+            )
+        )
         for (n in sizes) {
-            val r = runFleet(n, shaftLength)
+            val run = checkNotNull(runner.scenarioByName("Porters$n")?.simulationRun) {
+                "scenario Porters$n did not run"
+            }
+            val stats = run.acrossReplicationStatistics()
+            val d = checkNotNull(stats["Delivered"]) { "no Delivered response" }
+            val c = checkNotNull(stats["CycleTime"]) { "no CycleTime response" }
+            val b = checkNotNull(stats["FleetFracBlocked"]) { "no FleetFracBlocked response" }
             println(
-                "    %7d   %10d   %10.1f   %13.3f   %10.2f   %7.4f".format(
-                    r.numPorters, ordersFor(n), r.deliveries, r.throughput, r.cycleTime, r.fracBlocked
+                "    %7d %9d %11.1f %9.1f %11.2f %8.2f %11.4f %8.4f".format(
+                    n, ordersFor(n), d.average, d.halfWidth, c.average, c.halfWidth,
+                    b.average, b.halfWidth
                 )
             )
         }
         println()
+        println("    throughput per 100 units: " + sizes.joinToString {
+            val run = runner.scenarioByName("Porters$it")!!.simulationRun!!
+            "%d:%.3f".format(it, throughputPer100(run.acrossReplicationStatistics()["Delivered"]!!.average))
+        })
+        println()
     }
+}
 ```
 
-`fracBlocked` is averaged over the fleet: the sum of each porter's
-`fracTimeBlocked` divided by the number of porters. That gives "what fraction of an
-average porter's time was spent stopped", which multiplied by the fleet size is
-**how many porters' worth of the fleet is standing still** — the arithmetic the
-results section turns on.
+`fleetTable` runs one sweep and prints it. `runner.write()` sends the full half-width summary
+report for every fleet size to the KSL output file; the console gets the three columns the
+study is about, **each with its half-width**, because a capacity ceiling that is inside the
+sampling error is not a ceiling.
 
-`fleetTable` prints the shaft's theoretical capacity before the table:
-
-```kotlin
-val rideTime = shaftLength / SPEED
-```
-
-```kotlin
-"  a ride costs %.1f time units, so the shaft passes at most %.2f porters per 100"
-    .format(rideTime, 100.0 / rideTime)
-```
-
-**Computing the ceiling before running the sweep is the point.** It turns "the
-table flattens at 12.486" from an observation into a confirmation, and it is what
-distinguishes a capacity finding from a coincidence.
+Computing the shaft's theoretical capacity *before* running the sweep is the point of the line
+above the table: it turns "the table flattens at 12.486" from an observation into a
+confirmation, and it is what distinguishes a capacity finding from a coincidence.
 
 #### 7. The three studies
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
-        println()
-        println("A hospital on two floors - and no lift class anywhere in it")
-        println()
 
-        val watched = runWatched()
-        val ward = watched.network.requireLocation(WARD)
-        val pharmacy = watched.network.requireLocation(PHARMACY)
-        println("  Study 1: three porters, one shaft, watched for 600 time units")
-        println(
-            "    is the first floor reachable from the ground floor? %s"
-                .format(watched.network.isReachable(ward, pharmacy))
-        )
-        println("    routed distance, ward to pharmacy:       %8.1f".format(watched.network.distance(ward, pharmacy)))
-        println("    deliveries completed:                    %8.0f".format(watched.delivered.value))
-        println(
-            "    fraction of samples with the shaft held: %8.4f".format(
-                watched.samplesHeld.toDouble() / watched.samples
-            )
-        )
-        println("    most porters ever inside the shaft:      %8d".format(watched.maxInShaft))
-        println("    porters seen using it:                   %s".format(watched.holders.joinToString(", ")))
-        println()
-        println("  Both floors are reachable and the routed distance is a real number, so the network")
-        println("  knows the floors connect - by declared length, since nothing here has a third")
-        println("  coordinate. Every porter used the lift, and never two at once. Nothing was written")
-        println("  to make that true: a zone admits one vehicle, and a lift is one zone.")
-        println()
-        println("  The held fraction is worth checking against the deliveries rather than taken on")
-        println("  trust. Each delivery cycle rides the up shaft once, at 8 units a ride, so 42")
-        println("  deliveries in 600 units account for about 0.56 of it. The sampled figure is a")
-        println("  little higher, and should be: the zone is held from the moment it is reserved,")
-        println("  not from the moment a porter enters it, and that reservation is the exclusion.")
-        println()
+    println()
+    println("A hospital on two floors - and no lift class anywhere in it")
+    println()
 
-        fleetTable(
-            "Study 2: a slow lift - an 8 unit ride, 60 unit corridors, circuit 400",
-            shaftLength = 80.0,
-            sizes = listOf(1, 2, 3, 4, 6, 8)
+    val watched = MultiFloorHospitalExample.runWatched()
+    val ward = watched.network.requireLocation(MultiFloorHospitalExample.WARD)
+    val pharmacy = watched.network.requireLocation(MultiFloorHospitalExample.PHARMACY)
+    println("  Study 1: three porters, one shaft, watched for 600 time units")
+    println(
+        "    is the first floor reachable from the ground floor? %s"
+            .format(watched.network.isReachable(ward, pharmacy))
+    )
+    println("    routed distance, ward to pharmacy:       %8.1f".format(watched.network.distance(ward, pharmacy)))
+    println("    deliveries completed:                    %8.0f".format(watched.delivered.value))
+    println(
+        "    fraction of samples with the shaft held: %8.4f".format(
+            watched.samplesHeld.toDouble() / watched.samples
         )
-        fleetTable(
-            "Study 3: a fast lift - a 2 unit ride, 120 unit corridors, circuit still 400",
-            shaftLength = 20.0,
-            sizes = listOf(1, 2, 3, 4, 6, 8)
-        )
+    )
+    println("    most porters ever inside the shaft:      %8d".format(watched.maxInShaft))
+    println("    porters seen using it:                   %s".format(watched.holders.joinToString(", ")))
+    println()
+    println("  Both floors are reachable and the routed distance is a real number, so the network")
+    println("  knows the floors connect - by declared length, since nothing here has a third")
+    println("  coordinate. Every porter used the lift, and never two at once. Nothing was written")
+    println("  to make that true: a zone admits one vehicle, and a lift is one zone.")
+    println()
+    println("  The held fraction is worth checking against the deliveries rather than taken on")
+    println("  trust. Each delivery cycle rides the up shaft once, at 8 units a ride, so 42")
+    println("  deliveries in 600 units account for about 0.56 of it. The sampled figure is a")
+    println("  little higher, and should be: the zone is held from the moment it is reserved,")
+    println("  not from the moment a porter enters it, and that reservation is the exclusion.")
+    println()
 
-        println("  Read the two tables against each other, one porter first. A single porter travels")
-        println("  the same 400 in both, so it delivers at the same rate in both, which is the whole")
-        println("  reason the corridors were lengthened when the shaft was shortened. Any difference")
-        println("  further down the tables is therefore about how many porters the shaft will pass,")
-        println("  and about nothing else.")
-        println()
-        println("  Study 2 scales cleanly to four porters - 2.486, 4.971, 7.486, 10.000, which is")
-        println("  essentially 2.5 apiece - then stops dead at 12.486 for six porters and for eight.")
-        println("  That ceiling is not an artefact of the fleet or of the dispatching rule: an 8")
-        println("  unit ride passes at most 12.50 deliveries per 100 units, which is five porters'")
-        println("  worth, and the fleet reaches it and can go no further however many more are hired.")
-        println()
-        println("  What the surplus porters do instead is visible in the last two columns, and the")
-        println("  arithmetic is exact. Six porters are blocked 0.1667 of the time and 6 x 0.1667 is")
-        println("  1; eight are blocked 0.3750 and 8 x 0.3750 is 3. One porter's worth of the fleet")
-        println("  is standing still at six, three porters' worth at eight - precisely the surplus")
-        println("  over the five the shaft will carry. Cycle time rises to match, from 60.0 at four")
-        println("  porters to 80.0 at eight, because the extra orders are waiting rather than moving.")
-        println("  Buying porters buys queue.")
-        println()
-        println("  In study 3 the same fleet sizes keep converting into throughput: eight porters")
-        println("  deliver 19.94 per 100 against the 20.00 that perfect scaling would give, because a")
-        println("  2 unit ride will pass 50 per 100 and the fleet never comes near it. Same circuit,")
-        println("  same porters, same rule, same code - a different lift.")
-        println()
-        println("  The columns are not independent, and it is worth checking that they hang together.")
-        println("  Little's law says orders outstanding = throughput x cycle time, with throughput")
-        println("  put back on a per-unit basis by dividing the column by 100. Eight porters in study")
-        println("  2: 0.12486 x 80.00 = 9.99, against 10 orders out. In study 3: 0.19943 x 49.98 =")
-        println("  9.97. It holds because the system is closed, which is also why cycle time here is")
-        println("  a number about the hospital rather than about the length of the run.")
-        println()
-        println("  The warnings above each table are the horizon diagnostics doing their job and")
-        println("  finding nothing wrong. A closed system necessarily has its whole population")
-        println("  outstanding when the clock stops, so those counts never exceed the orders-out")
-        println("  column - which is exactly the reading that would tell you something was wrong if")
-        println("  they did.")
-        println()
-        println("  What none of this needed: an elevator object, a floor attribute, a capacity")
-        println("  semaphore, or a branch anywhere in the dispatcher or the vehicle control loop. A")
-        println("  lift is a one-way link of a single zone. The floors are placed at their own")
-        println("  heights, so the picture is right as well as the behaviour - and because a height")
-        println("  is layout and nothing else, placing them changed not one number above.")
-    }
+    MultiFloorHospitalExample.fleetTable(
+    "Study 2: a slow lift - an 8 unit ride, 60 unit corridors, circuit 400",
+    name = "HospitalSlowLift", shaftLength = 80.0, sizes = listOf(1, 2, 3, 4, 6, 8)
+    )
+    MultiFloorHospitalExample.fleetTable(
+    "Study 3: a fast lift - a 2 unit ride, 120 unit corridors, circuit still 400",
+    name = "HospitalFastLift", shaftLength = 20.0, sizes = listOf(1, 2, 3, 4, 6, 8)
+    )
+    println("  Full half-width summary reports for every fleet size: ${KSL.outDir}")
+    println()
+
+    println("  Read the two tables against each other, one porter first. A single porter travels")
+    println("  the same 400 in both, so it delivers at the same rate in both, which is the whole")
+    println("  reason the corridors were lengthened when the shaft was shortened. Any difference")
+    println("  further down the tables is therefore about how many porters the shaft will pass,")
+    println("  and about nothing else.")
+    println()
+    println("  Study 2 scales cleanly to four porters - 2.486, 4.971, 7.486, 10.000, which is")
+    println("  essentially 2.5 apiece - then stops dead at 12.486 for six porters and for eight.")
+    println("  That ceiling is not an artefact of the fleet or of the dispatching rule: an 8")
+    println("  unit ride passes at most 12.50 deliveries per 100 units, which is five porters'")
+    println("  worth, and the fleet reaches it and can go no further however many more are hired.")
+    println()
+    println("  What the surplus porters do instead is visible in the last two columns, and the")
+    println("  arithmetic is exact. Six porters are blocked 0.1667 of the time and 6 x 0.1667 is")
+    println("  1; eight are blocked 0.3750 and 8 x 0.3750 is 3. One porter's worth of the fleet")
+    println("  is standing still at six, three porters' worth at eight - precisely the surplus")
+    println("  over the five the shaft will carry. Cycle time rises to match, from 60.0 at four")
+    println("  porters to 80.0 at eight, because the extra orders are waiting rather than moving.")
+    println("  Buying porters buys queue.")
+    println()
+    println("  In study 3 the same fleet sizes keep converting into throughput: eight porters")
+    println("  deliver 19.94 per 100 against the 20.00 that perfect scaling would give, because a")
+    println("  2 unit ride will pass 50 per 100 and the fleet never comes near it. Same circuit,")
+    println("  same porters, same rule, same code - a different lift.")
+    println()
+    println("  The columns are not independent, and it is worth checking that they hang together.")
+    println("  Little's law says orders outstanding = throughput x cycle time, with throughput")
+    println("  put back on a per-unit basis by dividing the column by 100. Eight porters in study")
+    println("  2: 0.12486 x 80.00 = 9.99, against 10 orders out. In study 3: 0.19943 x 49.98 =")
+    println("  9.97. It holds because the system is closed, which is also why cycle time here is")
+    println("  a number about the hospital rather than about the length of the run.")
+    println()
+    println("  The warnings above each table are the horizon diagnostics doing their job and")
+    println("  finding nothing wrong. A closed system necessarily has its whole population")
+    println("  outstanding when the clock stops, so those counts never exceed the orders-out")
+    println("  column - which is exactly the reading that would tell you something was wrong if")
+    println("  they did.")
+    println()
+    println("  What none of this needed: an elevator object, a floor attribute, a capacity")
+    println("  semaphore, or a branch anywhere in the dispatcher or the vehicle control loop. A")
+    println("  lift is a one-way link of a single zone. The floors are placed at their own")
+    println("  heights, so the picture is right as well as the behaviour - and because a height")
+    println("  is layout and nothing else, placing them changed not one number above.")
+    
+}
 ```
 
-**Study 1** checks that the model means what it says, before any capacity claim is
-made. It asks the network whether the first floor is reachable from the ground
-floor, what the routed distance is, how often the shaft was held, the most porters
-ever inside it, and which porters used it. The answers — reachable, a real
-distance, never more than one inside, all three porters seen — establish that the
-floors connect by *declared length* and that the lift excludes, without anything
-having been written to make either true.
+**Study 1** checks that the model means what it says before any capacity claim is made: is the
+first floor reachable, what is the routed distance, how often was the shaft held, the most
+porters ever inside it, and which porters used it. The answers establish that the floors
+connect *by declared length* and that the lift excludes, without anything having been written
+to make either true. It then checks the sampled figure against the deliveries rather than
+taking it on trust.
 
-It then checks the sampled figure against the deliveries rather than taking it on
-trust: each cycle rides the up shaft once at 8 units a ride, so 42 deliveries in 600
-units account for about 0.56 of it. The sampled figure is a little higher and
-**should** be, for the `isHeld` reason in part 4.
+**Studies 2 and 3** are the same sweep with a slow lift and a fast one. Read the one-porter
+rows against each other first: they should be equal, and if they were not the corridor
+arithmetic in part 2 would be wrong and nothing below would mean anything.
 
-**Studies 2 and 3** are the same sweep with a slow lift and a fast one. Read the
-one-porter rows against each other first: they should be equal, and if they were
-not the corridor arithmetic in part 2 would be wrong and nothing below would mean
-anything.
-
-The commentary that follows is the example doing what this tutorial asks of a
-model: stating the ceiling, showing the surplus fleet converting into blocked time
-at exactly the predicted rate, and checking the columns against Little's law rather
-than presenting them as independent facts.
+The half-widths in these tables come out at zero, and that is a result rather than a defect:
+the population is closed and the only randomness is a preparation time short enough that the
+transport system absorbs it, so every replication delivers the same count. A ceiling with a
+zero half-width is not a sampling artefact at all.
 
 ### What it shows
 
-With an 8-unit ride, throughput scales cleanly to four porters — 2.486, 4.971,
-7.486, 10.000 per 100 units, essentially 2.5 apiece — then **stops dead at
-12.486** for six porters and for eight.
+Study 1 establishes that the model means what it says: both floors reachable, a real routed
+distance, all three porters seen using the shaft, and never two inside it at once.
 
-That ceiling is not an artefact of the fleet or the rule: an 8-unit ride passes
-at most 12.50 deliveries per 100 units, which is five porters' worth.
+Study 2, the slow lift — an 8-unit ride, so the shaft passes at most 12.50 deliveries per
+100 time units:
 
-What the surplus porters do instead is exact:
+```
+    porters    orders  deliveries        hw  cycle time       hw     blocked       hw
+          1         3        87.0       0.0      120.00     0.00      0.0000   0.0000
+          2         4       174.0       0.0       80.00     0.00      0.0000   0.0000
+          3         5       262.0       0.0       66.63     0.00      0.0000   0.0000
+          4         6       350.0       0.0       59.98     0.00      0.0000   0.0000
+          6         8       437.0       0.0       64.00     0.00      0.1667   0.0000
+          8        10       437.0       0.0       80.00     0.00      0.3750   0.0000
 
-| porters | blocked | porters' worth standing still |
-|---|---|---|
-| 6 | 0.1667 | 6 × 0.1667 = **1** |
-| 8 | 0.3750 | 8 × 0.3750 = **3** |
+    throughput per 100 units: 1:2.486, 2:4.971, 3:7.486, 4:10.000, 6:12.486, 8:12.486
+```
 
-Precisely the surplus over the five the shaft will carry. Cycle time rises to
-match, 60.0 at four porters to 80.0 at eight. With a 2-unit ride instead, eight
-porters deliver 19.94 per 100 against the 20.00 perfect scaling would give — the
-fleet never comes near that shaft's 50 per 100. **Same circuit, same porters,
-same rule, same code; a different lift.**
+Study 3, the same circuit with a 2-unit ride — the shaft would pass 50 per 100:
+
+```
+    porters    orders  deliveries        hw  cycle time       hw     blocked       hw
+          1         3        87.0       0.0      120.00     0.00      0.0000   0.0000
+          2         4       174.0       0.0       80.00     0.00      0.0000   0.0000
+          3         5       261.0       0.0       66.67     0.01      0.0000   0.0000
+          4         6       348.0       0.0       60.00     0.00      0.0000   0.0000
+          6         8       522.0       0.0       53.33     0.00      0.0000   0.0000
+          8        10       698.0       0.0       49.98     0.00      0.0000   0.0000
+
+    throughput per 100 units: 1:2.486, 2:4.971, 3:7.457, 4:9.943, 6:14.914, 8:19.943
+```
+
+**The half-widths are zero, and that is a result.** The population is closed and the only
+randomness is a preparation time the transport system absorbs, so every replication delivers
+the same count. A ceiling with a zero half-width is not a sampling artefact at all.
 
 ### What to learn
 
@@ -2879,12 +3055,34 @@ layout rather than the arrival stream is what limits the answer.
 
 ### The code
 
-`TwoLaneWarehouseExample.kt` in full, minus documentation comments and imports.
-Unlike the other cases this one is a top-level `class` with free functions around
-it rather than an `object`, because the model is constructed once per design point
-and there are two sweeps.
+`TwoLaneWarehouseExample.kt` in full, minus its GPL header and documentation comments.
+Unlike the other cases this one is a top-level `class` with free functions around it, because
+the model is constructed once per design point and there are two sweeps.
 
-#### 1. The class, and the factor it takes
+#### 1. Imports, the class, and the dimensions of the building
+
+```kotlin
+package ksl.examples.general.agv
+
+import ksl.modeling.agv.AgvSystem
+import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.entity.ProcessModel
+import ksl.modeling.guidedpath.GuidedPathNetwork
+import ksl.modeling.guidedpath.LinkType
+import ksl.modeling.guidedpath.TransporterPlacement
+import ksl.modeling.guidedpath.exceptions.GuidedPathDeadlockException
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
+import ksl.simulation.Model
+import ksl.simulation.ModelElement
+import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.random.rvariable.UniformRV
+```
 
 ```kotlin
 class TwoLaneWarehouseExample(
@@ -2894,14 +3092,7 @@ class TwoLaneWarehouseExample(
     name: String,
     private val meanTBA: Double = 9.0
 ) : ProcessModel(parent, name) {
-```
 
-`numCarts` and `twoLane` are the two factors. `meanTBA` is the load, defaulted here
-and overridden by the studies to a value deliberately above capacity.
-
-#### 2. The dimensions of the building
-
-```kotlin
     companion object {
         const val NUM_AISLES: Int = 3
         const val AISLE_SPACING: Double = 40.0
@@ -2914,13 +3105,11 @@ and overridden by the studies to a value deliberately above capacity.
         const val DOCK: String = "Dock"
 ```
 
-Three pick aisles 120 long, 40 apart, cut into zones of 20 — six zones an aisle,
-two zones a cross-aisle span. Spurs of 10, one zone. Carts at 25.
+`numCarts` and `twoLane` are the two factors; `meanTBA` is the load. Three pick aisles 120
+long, 40 apart, cut into zones of 20 — six zones an aisle, two zones a cross-aisle span. Spurs
+of 10, one zone. Carts at 25.
 
-`pickFace(i)` and `DOCK` are the station names: three faces at the top of the
-aisles, one dock at the bottom.
-
-#### 3. The layout, and the one function the whole study turns on
+#### 2. The layout, and the one function the whole study turns on
 
 ```kotlin
         fun build(numCarts: Int, twoLane: Boolean, name: String): GuidedPathNetwork {
@@ -2965,54 +3154,28 @@ aisles, one dock at the bottom.
     }
 ```
 
-Read `span` first, because it is the experiment:
+Read `span` first, because it is the experiment. **A two-way span is two calls to `link` on
+one builder.** Nothing in a network keys on the pair of endpoints, so a second link between
+the same junctions is not a duplicate of anything — and both lanes end at junctions the other
+lane also touches, which is what lets a vehicle change direction by taking the return lane.
+That is ordinary routing, not a manoeuvre.
 
-```kotlin
-fun span(from: String, to: String, length: Double) {
-    if (twoLane) {
-        b.link("$from-$to", from, to, length = length, zoneLength = ZONE)
-        b.link("$to-$from", to, from, length = length, zoneLength = ZONE)
-    } else {
-        b.link("$from~$to", from, to, length = length, zoneLength = ZONE,
-            type = LinkType.BIDIRECTIONAL)
-    }
-}
-```
+Two networks would be worse than redundant. Routing, blocking and deadlock detection are all
+**per network**, so a vehicle on one could not see a vehicle on the other, and the entire point
+of a road layout is that the two directions share the junctions.
 
-**That is the answer to "is it one network or two?", written out.** A two-way span
-is *two calls to `link` on one builder*. Nothing in a network keys on the pair of
-endpoints, so a second link between the same junctions is not a duplicate of
-anything — and both lanes end at junctions the other lane also touches, which is
-what lets a vehicle change direction by taking the return lane. That is ordinary
-routing, not a manoeuvre.
+The single-lane arm is the same span as one `LinkType.BIDIRECTIONAL` link, and the naming marks
+which is which: `B0-T0` and `T0-B0` against `B0~T0`.
 
-Two networks would be worse than redundant. Routing, blocking and deadlock
-detection are all **per network**, so a vehicle on one could not see a vehicle on
-the other, and the entire point of a road layout is that the two directions share
-the junctions.
+With `span` written, the building is two loops — **and the layout code contains no `if` at
+all**, which is what lets the two studies claim to be the same building rather than two
+buildings that resemble each other.
 
-The single-lane arm is the same span as one `LinkType.BIDIRECTIONAL` link, and the
-naming marks which is which: `B0-T0` and `T0-B0` against `B0~T0`.
+The parking row is built *for* a fleet size, one spur per cart. A shared parking area would
+stage one vehicle and leave the rest standing on the approach: available in the fleet's eyes,
+and stuck in the building's. Case 1's lesson, applied before it could bite.
 
-With `span` written, the building is three calls:
-
-```kotlin
-for (i in 0 until NUM_AISLES) span("B$i", "T$i", AISLE_LENGTH)          // the pick aisles
-for (i in 0 until NUM_AISLES - 1) {
-    span("B$i", "B${i + 1}", AISLE_SPACING)                              // bottom cross-aisle
-    span("T$i", "T${i + 1}", AISLE_SPACING)                              // top cross-aisle
-}
-```
-
-**and the layout code contains no `if` at all**, which is what lets the two studies
-claim to be the same building rather than two buildings that resemble each other.
-
-The parking row is built *for* a fleet size — one spur per cart, running east from
-the last pick aisle. A shared parking area would stage one vehicle and leave the
-rest standing on the approach: available in the fleet's eyes, and stuck in the
-building's. Case 1's lesson, applied before it could bite.
-
-#### 4. The model
+#### 3. The model
 
 ```kotlin
     val network: GuidedPathNetwork = build(numCarts, twoLane, "${name}Net")
@@ -3029,48 +3192,76 @@ building's. Case 1's lesson, applied before it could bite.
         ).apply { homeBase = "P$k" }
     }
 
-    val timeInSystem = Response(this, "${this.name}:TimeInSystem")
-    val delivered = Counter(this, "${this.name}:Delivered")
+    private val myTimeInSystem = Response(this, "${this.name}:TimeInSystem")
+    val timeInSystem: ResponseCIfc
+        get() = myTimeInSystem
 
-    private val timeBetweenArrivals = ExponentialRV(meanTBA, streamNum = 1)
-    private val whichFace = UniformRV(0.0, NUM_AISLES.toDouble(), streamNum = 2)
-    private val pickTime = ConstantRV(2.0)
+    private val myDelivered = Counter(this, "${this.name}:Delivered")
+    val delivered: CounterCIfc
+        get() = myDelivered
+
+    /** The fleet's average blocked fraction, observed once per replication so that it carries a
+     *  confidence interval like any other response. */
+    private val myFleetBlocked = Response(this, "${this.name}:FleetFracBlocked")
+    val fleetBlocked: ResponseCIfc
+        get() = myFleetBlocked
+
+    // Two streams, deliberately separated: sharing one would couple which face a pallet came from
+    // to when it arrived, so changing the fleet size would change the sequence of pick faces too.
+    private val myTimeBetweenArrivals = RandomVariable(
+        this, ExponentialRV(meanTBA, streamNum = 1), name = "${this.name}:TBA"
+    )
+    val timeBetweenArrivalsRV: RandomVariableCIfc
+        get() = myTimeBetweenArrivals
+
+    private val myWhichFace = RandomVariable(
+        this, UniformRV(0.0, NUM_AISLES.toDouble(), streamNum = 2), name = "${this.name}:WhichFace"
+    )
+    val whichFaceRV: RandomVariableCIfc
+        get() = myWhichFace
+
+    private val myPickTime = RandomVariable(this, ConstantRV(2.0), name = "${this.name}:PickTime")
+    val pickTimeRV: RandomVariableCIfc
+        get() = myPickTime
 ```
 
-An `AgvSystem` with its default `NearestVehiclePolicy`, one `AgvVehicle` per cart
-starting on its own spur.
+An `AgvSystem` with its default `NearestVehiclePolicy`, one `AgvVehicle` per cart starting on
+its own spur.
 
-The response and counter names are built from `this.name`, which is the model's
-name, so the two sweeps' statistics do not collide when both are read back by name.
-**Do not build such a name out of a value that renders with a decimal point** — a
-model element's name cannot contain a `.`, it is silently rewritten to `_`, and a
-lookup by the name you wrote then returns null.
+The statistics follow the house style, and `myFleetBlocked` is the same device as case 6's:
+one observation per replication, so the blocked column in the sweep carries a half-width
+instead of being an average of averages with no interval.
 
-Two random streams, deliberately separated: stream 1 for arrivals, stream 2 for
-which pick face. Sharing one stream would couple the two, so that changing the
-fleet size would change *which* faces were visited as well as when.
+The response names are built from `this.name`, which is the model's name, so the two sweeps'
+statistics do not collide. **Do not build such a name out of a value that renders with a
+decimal point** — a model element's name cannot contain a `.`, it is silently rewritten to
+`_`, and a lookup by the name you wrote then returns null.
 
-#### 5. The pallet, and the source
+Two random streams, deliberately separated: stream 1 for arrivals, stream 2 for which pick
+face. Sharing one would couple them, so changing the fleet size would change *which* faces were
+visited as well as when.
+
+#### 4. The pallet, the source, and the fleet's blocked time
 
 ```kotlin
     inner class Pallet : Entity() {
         val movement = process(isDefaultProcess = true) {
             val arrived = time
-            val face = pickFace(whichFace.value.toInt().coerceIn(0, NUM_AISLES - 1))
+            val face = pickFace(myWhichFace.value.toInt().coerceIn(0, NUM_AISLES - 1))
             currentLocation = network.requireLocation(face)
             transportByFleet(
                 agv, destination = DOCK, origin = face,
-                loadingDelay = pickTime, unLoadingDelay = pickTime
+                loadingDelay = myPickTime, unLoadingDelay = myPickTime
             )
-            timeInSystem.value = time - arrived
-            delivered.increment()
+            myTimeInSystem.value = time - arrived
+            myDelivered.increment()
         }
     }
 
     inner class Source : Entity() {
         val arrivals = process(isDefaultProcess = true) {
             while (true) {
-                delay(timeBetweenArrivals)
+                delay(myTimeBetweenArrivals)
                 activate(Pallet().movement)
             }
         }
@@ -3079,51 +3270,66 @@ fleet size would change *which* faces were visited as well as when.
     override fun initialize() {
         activate(Source().arrivals)
     }
+
+    override fun replicationEnded() {
+        super.replicationEnded()
+        myFleetBlocked.value =
+            carts.sumOf { it.fracTimeBlocked.withinReplicationStatistic.weightedAverage } / numCarts
+    }
+}
 ```
 
-A pallet appears at a random pick face, is carried to the dock, and leaves. The
-pick time appears twice — as `loadingDelay` and `unLoadingDelay` — which is the
-picker loading it and the dock taking it off.
+A pallet appears at a random pick face, is carried to the dock, and leaves. The pick time
+appears twice — as `loadingDelay` and `unLoadingDelay` — which is the picker loading it and the
+dock taking it off.
 
-`whichFace.value.toInt().coerceIn(0, NUM_AISLES - 1)` is defensive about the
-boundary: `UniformRV(0.0, 3.0)` can in principle return exactly 3.0, and
-`pickFace(3)` names no station.
+`myWhichFace.value.toInt().coerceIn(0, NUM_AISLES - 1)` is defensive about the boundary:
+`UniformRV(0.0, 3.0)` can in principle return exactly 3.0, and `pickFace(3)` names no station.
 
-The source loops forever rather than for a fixed count, because these runs are
-terminated by the horizon and a fixed count could be exhausted early by a fast
-configuration — which would make the sweep's later rows measure a shorter run.
+The source loops forever rather than for a fixed count, because these runs are terminated by
+the horizon and a fixed count could be exhausted early by a fast configuration — which would
+make the sweep's later rows measure a shorter run.
 
-#### 6. Demand above capacity, on purpose
+#### 5. Demand above capacity, and why this sweep is run by hand
 
 ```kotlin
 private const val MEAN_TBA: Double = 3.0
 
 private class Outcome(
     val delivered: Double,
+    val deliveredHW: Double,
     val timeInSystem: Double,
+    val timeInSystemHW: Double,
     val blocked: Double,
+    val blockedHW: Double,
     val deadlockedAmong: Int = 0
 ) {
     val deadlocked: Boolean get() = deadlockedAmong > 0
+
+    companion object {
+        fun deadlock(participants: Int) =
+            Outcome(Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, participants)
+    }
 }
 ```
 
-```kotlin
-/** Demand deliberately above what the building can serve, so that the layout is the constraint. */
-private const val MEAN_TBA: Double = 3.0
-```
+The comment on `MEAN_TBA` is load-bearing. With demand *below* capacity the throughput column
+flattens at the **arrival rate**, and a reader concludes that the aisles bind when nothing of
+the sort has been shown — the trap this tutorial's closing section names in three of its ten
+cases.
 
-The comment is load-bearing. With demand *below* capacity the throughput column
-flattens at the **arrival rate**, and a reader concludes that the aisles bind when
-nothing of the sort has been shown — the trap this tutorial's closing section names
-in three of its ten cases.
+`Outcome` now carries a half-width beside each figure, and `deadlockedAmong` — the size of the
+circular wait, which is what says whether the cycle closed through a lane or through the
+junctions.
 
-`Outcome` carries the three numbers plus `deadlockedAmong`, the size of the
-circular wait. That count is what says whether the cycle closed through a lane or
-through the junctions, which is the difference between "this aisle is too narrow"
-and "this grid gridlocks".
+**And the KDoc above `Outcome` says why this one sweep is not a `ScenarioRunner`.** A design
+point here can end in a circular wait, which is a *result* rather than a failure; a runner would
+propagate that exception out of the whole sweep and lose the rows on either side of it. The
+half-widths a runner would have supplied are computed here instead, from each response's
+across-replication statistic. Where the library fits, use it; where it does not, say why in the
+code rather than leaving the reader to wonder.
 
-#### 7. Running a design point, and catching a deadlock
+#### 6. Running a design point, and catching a deadlock
 
 ```kotlin
 private fun runFleet(carts: Int, twoLane: Boolean): Outcome {
@@ -3135,58 +3341,51 @@ private fun runFleet(carts: Int, twoLane: Boolean): Outcome {
     m.lengthOfReplicationWarmUp = 1000.0
     return try {
         m.simulate()
+        val d = shop.delivered.acrossReplicationStatistic
+        val t = shop.timeInSystem.acrossReplicationStatistic
+        val b = shop.fleetBlocked.acrossReplicationStatistic
         Outcome(
-            delivered = shop.delivered.acrossReplicationStatistic.average,
-            timeInSystem = m.response("W$tag$carts:TimeInSystem")
-                ?.acrossReplicationStatistic?.average ?: Double.NaN,
-            blocked = shop.carts.sumOf { it.fracTimeBlocked.acrossReplicationStatistic.average } / carts
+            delivered = d.average, deliveredHW = d.halfWidth,
+            timeInSystem = t.average, timeInSystemHW = t.halfWidth,
+            blocked = b.average, blockedHW = b.halfWidth
         )
     } catch (e: GuidedPathDeadlockException) {
         // A domain outcome, not a defect: this layout cannot carry this fleet. The report names
         // every participant in the cycle, which is what says whether it closed through a lane or
         // through the junctions.
-        Outcome(Double.NaN, Double.NaN, Double.NaN, deadlockedAmong = e.report.participants.size)
+        Outcome.deadlock(e.report.participants.size)
     }
 }
 ```
 
-Ten replications of 5,000 with a 1,000 warm-up, and then:
+Ten replications of 5,000 with a 1,000 warm-up, and then the `catch`.
 
-```kotlin
-} catch (e: GuidedPathDeadlockException) {
-    // A domain outcome, not a defect: this layout cannot carry this fleet. The report names
-    // every participant in the cycle, which is what says whether it closed through a lane or
-    // through the junctions.
-    Outcome(Double.NaN, Double.NaN, Double.NaN, deadlockedAmong = e.report.participants.size)
-}
-```
+**A deadlock is a result here, not a failure.** The model is valid and the answer is "this
+configuration deadlocks", which is very often the finding a study is after. The sweep records
+the design point as infeasible and carries on to the next.
 
-**A deadlock is a result here, not a failure.** The model is valid and the answer is
-"this configuration deadlocks", which is very often the finding a study is after.
-The sweep records the design point as infeasible and carries on to the next.
+Note what is *not* done: detection is not switched off. A run with detection disabled would
+still deadlock — it would simply stop saying so, and the row would read as a slow configuration
+rather than an impossible one.
 
-Note what is *not* done: detection is not switched off. A run with detection
-disabled would still deadlock — it would simply stop saying so, and the row would
-read as a slow configuration rather than an impossible one.
-
-The `m.response("W$tag$carts:TimeInSystem")` lookup is the name-by-string route,
-and it is why part 4 warned about names containing a `.`: a null here would become
-a `NaN` in the table, indistinguishable from a real one.
-
-#### 8. The two sweeps
+#### 7. The two sweeps
 
 ```kotlin
 private fun table(title: String, sizes: List<Int>, results: Map<Int, Outcome>) {
     println()
     println(title)
     println()
-    println("  %-8s %12s %12s %10s".format("carts", "delivered", "in system", "blocked"))
+    println("  %-6s %11s %8s %11s %9s %9s %8s".format(
+        "carts", "delivered", "hw", "in system", "hw", "blocked", "hw"))
     for (n in sizes) {
         val o = results.getValue(n)
         if (o.deadlocked) {
-            println("  %-8d %12s %12s %10s".format(n, "DEADLOCK", "--", "--"))
+            println("  %-6d %11s %8s %11s %9s %9s %8s".format(
+                n, "DEADLOCK", "--", "--", "--", "--", "--"))
         } else {
-            println("  %-8d %12.1f %12.2f %10.4f".format(n, o.delivered, o.timeInSystem, o.blocked))
+            println("  %-6d %11.1f %8.1f %11.2f %9.2f %9.4f %8.4f".format(
+                n, o.delivered, o.deliveredHW, o.timeInSystem, o.timeInSystemHW,
+                o.blocked, o.blockedHW))
         }
     }
 }
@@ -3215,12 +3414,20 @@ fun main() {
     }
     println()
     if (plateau != null && peak != null) {
-        println("  Throughput reaches its ceiling at %d cart(s) and does not move after it.".format(plateau))
         val big = served.maxOrNull()!!
-        println("  From %d to %d carts, deliveries go %.1f -> %.1f while fleet time blocked goes %.1f%% -> %.1f%%.".format(
-            plateau, big,
-            two.getValue(plateau).delivered, two.getValue(big).delivered,
-            100.0 * two.getValue(plateau).blocked, 100.0 * two.getValue(big).blocked
+        val a = two.getValue(plateau)
+        val b = two.getValue(big)
+        val gain = b.delivered - a.delivered
+        val bound = a.deliveredHW + b.deliveredHW
+        println("  Throughput flattens at %d cart(s).".format(plateau))
+        println("  From %d to %d carts, deliveries go %.1f (+/- %.1f) -> %.1f (+/- %.1f): a gain of %.1f".format(
+            plateau, big, a.delivered, a.deliveredHW, b.delivered, b.deliveredHW, gain
+        ))
+        println("  against intervals summing to %.1f, so it is %s.".format(
+            bound, if (gain > bound) "real but negligible" else "not distinguishable from none"
+        ))
+        println("  Over the same range fleet time blocked goes %.1f%% -> %.1f%%.".format(
+            100.0 * a.blocked, 100.0 * b.blocked
         ))
         println("  The carts bought past the ceiling are not idle. They are in each other's way.")
     }
@@ -3262,43 +3469,53 @@ fun main() {
 }
 ```
 
-`table` prints a sweep, writing `DEADLOCK` where the outcome has no numbers.
-`largestFeasible` is the largest fleet the layout carried without a circular wait,
-and the closing comparison is that number for two lanes against that number for
-one.
+`table` prints a sweep with half-widths, writing `DEADLOCK` where the outcome has no numbers.
+`largestFeasible` is the largest fleet the layout carried without a circular wait, and the
+closing comparison is that number for two lanes against that number for one.
 
-The commentary between the tables is computed rather than quoted — `peak`,
-`plateau`, `gridlock` are all derived from the results in front of you. That is the
-same habit as case 4: a narrative that recomputes itself cannot go stale.
-
-The three findings it draws out are in the section below, and the third is the one
-worth carrying: paired one-way lanes remove the head-on meeting **on a link** and
-do nothing whatever about a cycle closing through the junctions at each end of a
-span.
+The commentary between the tables is **computed** rather than quoted — `peak`, `plateau`,
+`gridlock` are all derived from the results in front of you, and the plateau sentence now
+compares the gain against the two intervals around it rather than asserting that the count
+"stops moving". On this building the last four carts buy about a load and a half, which is
+outside the intervals and therefore real, and negligible beside a blocked fraction that goes
+from 19% to 51%. Saying so precisely is worth more than rounding it to "flat".
 
 ### What it shows
 
-Two-lane, sweeping the fleet:
+Two-lane, sweeping the fleet (ten replications of 5,000 after a 1,000 warm-up):
 
-| carts | delivered | in system | blocked |
-|---|---|---|---|
-| 2 | 443.7 | 2007.78 | 2.2% |
-| 4 | 834.7 | 1132.61 | 8.0% |
-| 6 | 1109.4 | 525.30 | 18.6% |
-| 8 | 1111.0 | 522.16 | 38.9% |
-| 10 | 1111.0 | 523.06 | 51.1% |
-| 12 | **DEADLOCK** | — | — |
+```
+  carts    delivered       hw   in system        hw   blocked       hw
+  2            443.7      2.0     2007.78     24.92    0.0215   0.0013
+  4            834.7      5.3     1132.61     31.14    0.0797   0.0040
+  6           1109.4      0.9      525.30     33.21    0.1861   0.0015
+  8           1111.0      0.0      522.16     33.53    0.3886   0.0013
+  10          1111.0      0.0      523.06     33.02    0.5109   0.0011
+  12        DEADLOCK       --          --        --        --       --
+```
 
-The same building with single two-way aisles **deadlocks at two carts**.
+The same building with single two-way aisles:
+
+```
+  carts    delivered       hw   in system        hw   blocked       hw
+  1            226.7      1.9     2491.73     22.43    0.0000   0.0000
+  2         DEADLOCK       --          --        --        --       --
+  3         DEADLOCK       --          --        --        --       --
+  4         DEADLOCK       --          --        --        --       --
+```
+
+**Single two-way aisles carry one cart; paired one-way lanes carry ten.**
 
 ### What to learn
 
 **Three findings, and the third is the one to take away.**
 
-1. **Throughput ceilings at six carts.** Where the reward stops is the number a
-   fleet-sizing study exists to find.
-2. **The carts added past it are not idle — they are blocked.** 6 → 10 carts
-   moves deliveries 1109.4 → 1111.0 while fleet time blocked goes 18.6% → 51.1%.
+1. **Throughput flattens at six carts.** The last four carts buy 1.6 loads against
+   intervals summing to 0.9 — real, and negligible. Where the reward stops being worth
+   paying for is the number a fleet-sizing study exists to find, and stating it with the
+   interval beside it is what makes "flattens" a measurement.
+2. **The carts added past it are not idle — they are blocked.** 6 → 10 carts moves
+   deliveries 1109.4 → 1111.0 while fleet time blocked goes 18.6% → 51.1%.
 3. **The grid gridlocks at twelve**, among six transporters:
 
 ```
@@ -3373,11 +3590,36 @@ Two cart capacities against two batching windows.
 
 ### The code
 
-`FreePathFleetExample.kt` in full, minus documentation comments and imports. Read
-it against case 4 or case 7: **the fleet layer is written identically** and only
-the two lines that name the substrate have changed.
+`FreePathFleetExample.kt` in full, minus its GPL header and documentation comments. Read it
+against case 4 or case 7: **the fleet layer is written identically**, and only the two lines
+that name the substrate have changed.
 
-#### 1. The class and its factors
+#### 1. Imports and the class
+
+```kotlin
+package ksl.examples.general.fleet
+
+import ksl.modeling.entity.ProcessModel
+import ksl.modeling.fleet.FreePathFleet
+import ksl.modeling.fleet.FreePathVehicle
+import ksl.modeling.fleet.policies.BatchedAssignmentPolicy
+import ksl.modeling.fleet.policies.ConsolidatingPolicy
+import ksl.modeling.fleet.policies.NearestVehiclePolicy
+import ksl.controls.experiments.ScenarioRunner
+import ksl.modeling.spatial.Euclidean2DPlane
+import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
+import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
+import ksl.simulation.Model
+import ksl.simulation.ModelElement
+import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.io.KSL
+import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
+```
 
 ```kotlin
 class FreePathFleetExample(
@@ -3387,7 +3629,6 @@ class FreePathFleetExample(
     private val meanTimeBetweenArrivals: Double = 20.0,
     private val batchWindow: Double = 20.0,
     numCarts: Int = 2
-) : ProcessModel(parent, name) {
 ```
 
 `cartCapacity` and `batchWindow` are the two factors the study crosses.
@@ -3410,23 +3651,16 @@ class FreePathFleetExample(
     }
 ```
 
-```kotlin
-private val plane = Euclidean2DPlane()
-```
+`Euclidean2DPlane()` is the whole substrate. There is no network to build, no zones to size, no
+link directions to get right and no parking spurs to invent — which is the free path's real
+advantage, and it is an advantage in **modelling effort**, not in fidelity.
 
-That is the whole substrate. There is no network to build, no zones to size, no
-link directions to get right, and no parking spurs to invent — which is the free
-path's real advantage, and it is an advantage in **modelling effort**, not in
-fidelity.
+`plane.Point(x, y, name)` names a location. A fleet is always written in *named places*,
+whichever substrate it runs over — that is the seam — and the spatial model supplies the
+geometry between them. Here the geometry is straight-line distance, and two vehicles may stand
+on the same ground.
 
-`plane.Point(x, y, name)` names a location. A fleet is always written in *named
-places*, whichever substrate it runs over — that is the seam — and the spatial
-model supplies the geometry between them. Here the geometry is straight-line
-distance: 300 along the bottom, 200 up the side, 360.6 across a diagonal, and two
-vehicles may stand on the same ground.
-
-`spatialModel = plane` does the same job as `spatialModel = network` in every
-guide-path case.
+`spatialModel = plane` does the same job as `spatialModel = network` in every guide-path case.
 
 #### 3. The fleet, and a policy composed from three parts
 
@@ -3445,38 +3679,39 @@ guide-path case.
     }
 ```
 
-Read the policy from the inside out:
+Read the policy from the inside out: `NearestVehiclePolicy()` is the rule,
+`ConsolidatingPolicy(...)` wraps it and fills a vehicle that still has room rather than sending
+a second one, and `BatchedAssignmentPolicy(window = ..., inner = ...)` wraps *that* and holds
+decisions open for `window` time units so that there is something to consolidate.
 
-- `NearestVehiclePolicy()` is the rule.
-- `ConsolidatingPolicy(...)` wraps it, and fills a vehicle that still has room
-  rather than sending a second one.
-- `BatchedAssignmentPolicy(window = ..., inner = ...)` wraps *that*, and holds
-  decisions open for `window` time units so that there is something to consolidate.
+**All three are ordinary fleet-layer policies and none of them knows what it is running over.**
+Exchange `FreePathFleet` for an `AgvSystem` and `FreePathVehicle` for an `AgvVehicle` over a
+network, and this composition is untouched.
 
-**All three are ordinary fleet-layer policies and none of them knows what it is
-running over.** Exchange `FreePathFleet` for an `AgvSystem` and `FreePathVehicle`
-for an `AgvVehicle` over a network, and this composition is untouched — that is the
-claim the fleet layer makes, and this file is the demonstration of it.
+`FreePathVehicle(fleet, "Depot", ConstantRV(30.0), ...)` takes a **place name** where a guided
+vehicle takes a `TransporterPlacement`, because a plane has no zones to be placed on.
+`loadCapacity` is how many pallets a cart may hold at once; `stepSize` is how finely the
+vehicle's position is interpolated while it moves, which affects the resolution of animation and
+position queries, not the arrival time.
 
-`FreePathVehicle(fleet, "Depot", ConstantRV(30.0), ...)` takes a **place name**
-where a guided vehicle takes a `TransporterPlacement`, because a plane has no zones
-to be placed on.
-
-- `loadCapacity = cartCapacity` — how many pallets a cart may hold at once. With a
-  capacity of one the consolidating policy has nothing to consolidate and the inner
-  rule decides everything, which is why the capacity-one run is a fair baseline
-  rather than a differently-configured model.
-- `stepSize = 10.0` — how finely the vehicle's position is interpolated while it
-  moves. It affects the resolution of animation and of any position query, not the
-  arrival time.
-
-#### 4. The pallet
+#### 4. The statistics and the pallet
 
 ```kotlin
-    val timeInSystem = Response(this, "${this.name}:TimeInSystem")
-    val delivered = Counter(this, "${this.name}:Delivered")
+    // Named without the model's own name in front, so that every cell of the study reports the
+    // same response and the cells can be paired replication by replication.
+    private val myTimeInSystem = Response(this, TIME_IN_SYSTEM)
+    val timeInSystem: ResponseCIfc
+        get() = myTimeInSystem
 
-    private val timeBetweenArrivals = ExponentialRV(meanTimeBetweenArrivals, streamNum = 1)
+    private val myDelivered = Counter(this, DELIVERED)
+    val delivered: CounterCIfc
+        get() = myDelivered
+
+    private val myTimeBetweenArrivals = RandomVariable(
+        this, ExponentialRV(meanTimeBetweenArrivals, streamNum = 1), name = "TBA"
+    )
+    val timeBetweenArrivalsRV: RandomVariableCIfc
+        get() = myTimeBetweenArrivals
 
     inner class Pallet : Entity() {
         val movement = process(isDefaultProcess = true) {
@@ -3484,15 +3719,15 @@ to be placed on.
             currentLocation = fleet.space.requireLocation("Press")
             // States what it needs and suspends. It never chooses a cart.
             transportByFleet(fleet, destination = "Ship", origin = "Press")
-            timeInSystem.value = time - arrived
-            delivered.increment()
+            myTimeInSystem.value = time - arrived
+            myDelivered.increment()
         }
     }
 
     inner class Source : Entity() {
         val arrivals = process(isDefaultProcess = true) {
             repeat(600) {
-                delay(timeBetweenArrivals)
+                delay(myTimeBetweenArrivals)
                 activate(Pallet().movement)
             }
         }
@@ -3503,71 +3738,137 @@ to be placed on.
     }
 ```
 
-```kotlin
-currentLocation = fleet.space.requireLocation("Press")
-transportByFleet(fleet, destination = "Ship", origin = "Press")
-```
+**The response names carry no model name.** Every cell of the study is a different model, and
+naming the responses identically is what lets `observationsAsMap` line them up for a paired
+comparison in part 6. Case 2 does the same thing for the same reason.
 
-`fleet.space.requireLocation` instead of `network.requireLocation` is the only tell
-in the entire process, and it is the same call through the same seam: **a fleet
-asks its space for a named place, and for the distance between two of them.** A
-plane can answer both, and so can a guide path.
-
-`transportByFleet` is the same call, with the same parameters, that cases 2, 4, 5,
-6, 7 and 10 make over a network.
+`fleet.space.requireLocation("Press")` instead of `network.requireLocation` is the only tell in
+the entire process, and it is the same call through the same seam: **a fleet asks its space for
+a named place, and for the distance between two of them.** A plane can answer both, and so can a
+guide path. `transportByFleet` is the same call, with the same parameters, that cases 2, 4, 5, 6,
+7 and 10 make over a network.
 
 #### 5. The study
 
 ```kotlin
-fun main() {
-    // Two capacities against two batching windows. The window is what collects several tasks so
-    // that there is anything to consolidate; capacity is what lets a cart take them.
-    val cells = listOf(
-        Cell("capacity 1, window 25", run(1, "C1W25", window = 25.0)),
-        Cell("capacity 4, window 25", run(4, "C4W25", window = 25.0)),
-        Cell("capacity 1, window 40", run(1, "C1W40", window = 40.0)),
-        Cell("capacity 4, window 40", run(4, "C4W40", window = 40.0))
-    )
+    companion object {
+        const val TIME_IN_SYSTEM: String = "TimeInSystem"
+        const val DELIVERED: String = "Delivered"
+        const val REPLICATIONS: Int = 40
+        const val HORIZON: Double = 8000.0
+        const val WARM_UP: Double = 1000.0
 
-    println()
-    println("A dispatcher over a plane -- no guide path, nothing that blocks")
-    println("Two carts, pallets from Press to Ship, 10 replications of 8000 after a 1000 warm-up")
-    println()
-    println("  %-24s %10s %10s %10s %10s %8s %9s".format(
-        "", "delivered", "in system", "assigned", "aboard", "blocked", "loads/move"))
-    for (c in cells) {
-        println("  %-24s %10.1f %10.2f %10.2f %10.2f %8.4f %9s".format(
-            c.label, c.r.delivered, c.r.timeInSystem, c.r.waitForAssignment, c.r.timeAboard,
-            c.r.blocked, c.r.loadsPerLoadedMove?.let { "%.3f".format(it) } ?: "--"))
+        /** The four cells of the study: two cart capacities against two batching windows. */
+        fun cells(): List<Triple<String, Int, Double>> = listOf(
+            Triple("Capacity1Window25", 1, 25.0),
+            Triple("Capacity4Window25", 4, 25.0),
+            Triple("Capacity1Window40", 1, 40.0),
+            Triple("Capacity4Window40", 4, 40.0)
+        )
+
+        /**
+         *  One scenario per cell. Load capacity is a property of the vehicles and the batching
+         *  window a property of the policy, so both are fixed when the model is built: this is a
+         *  runner over model instances rather than over control values.
+         */
+        fun buildRunner(): ScenarioRunner {
+            val runner = ScenarioRunner("FreePathFleetYard")
+            for ((label, capacity, window) in cells()) {
+                val m = Model("FreePathYard_$label")
+                FreePathFleetExample(m, capacity, label, batchWindow = window)
+                runner.addScenario(
+                    model = m, name = label, inputs = emptyMap(),
+                    numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+                    lengthOfReplicationWarmUp = WARM_UP
+                )
+            }
+            return runner
+        }
     }
 ```
 
-Four cells: two capacities against two batching windows.
+Four cells: two capacities against two batching windows. The window is what **collects** several
+tasks so that there is anything to consolidate; capacity is what lets a cart **take** them.
+Neither is worth anything without the other, which is why the study crosses them rather than
+sweeping one.
 
-The window is what **collects** several tasks so that there is anything to
-consolidate; capacity is what lets a cart **take** them. Neither is worth anything
-without the other, which is why the study crosses them rather than sweeping one.
+Both are fixed when the model is built — capacity is a property of the vehicles, the window a
+property of the policy — so this is a runner over model instances rather than over control
+values.
 
-#### 6. Reading the table
+**Forty replications, and the number is not arbitrary.** At ten, the window-40 throughput deficit
+came out at about eight loads with a half-width of nine: the point estimate said the fleet had
+fallen behind and the interval could not tell it from noise. That is a reason to run more
+replications, not to believe the point estimate.
+
+#### 6. Reading the result
 
 ```kotlin
+fun main() {
+    val runner = FreePathFleetExample.buildRunner()
+    runner.simulate()
+    // Full half-width summary reports for all four cells go to the KSL output file; the console
+    // gets the comparison.
+    runner.write()
+
     println()
-    println("Read the throughput column first.")
+    println("A dispatcher over a plane -- no guide path, nothing that blocks")
+    println("Two carts, pallets from Press to Ship, ${FreePathFleetExample.REPLICATIONS} replications " +
+        "of ${FreePathFleetExample.HORIZON.toInt()} after a ${FreePathFleetExample.WARM_UP.toInt()} warm-up")
     println()
-    println("  At window 25 the two rows deliver the same load -- %.1f against %.1f -- so the".format(
-        cells[0].r.delivered, cells[1].r.delivered))
-    println("  times beside them are comparable, and carrying up to four cuts time in system by")
-    println("  %.0f%%. At window 40 the capacity-1 fleet delivers %.1f against %.1f: it has fallen".format(
-        100.0 * (1.0 - cells[1].r.timeInSystem / cells[0].r.timeInSystem),
-        cells[2].r.delivered, cells[3].r.delivered))
-    println("  behind, so its time in system is a number about the loads it managed rather than")
-    println("  about the fleet. Comparing it with anything would be comparing two different")
-    println("  questions. **Check throughput parity before believing a time-in-system comparison.**")
+    println("  %-20s %11s %8s %11s %8s %9s %11s".format(
+        "", "delivered", "hw", "in system", "hw", "blocked", "loads/move"))
+    for ((label, _, _) in FreePathFleetExample.cells()) {
+        val run = checkNotNull(runner.scenarioByName(label)?.simulationRun) { "$label did not run" }
+        val stats = run.acrossReplicationStatistics()
+        val d = checkNotNull(stats[FreePathFleetExample.DELIVERED]) { "no delivered response" }
+        val t = checkNotNull(stats[FreePathFleetExample.TIME_IN_SYSTEM]) { "no time in system" }
+        val b = checkNotNull(stats["Cart1:Body:FracTimeBlocked"]) { "no blocked response" }
+        val loads = stats["Cart1:Body:LoadsPerLoadedMove"]
+        println("  %-20s %11.1f %8.1f %11.2f %8.2f %9.4f %11s".format(
+            label, d.average, d.halfWidth, t.average, t.halfWidth, b.average,
+            loads?.let { "%.3f".format(it.average) } ?: "--"))
+    }
+
+    // Within a window, capacity 1 against capacity 4, paired replication by replication.
+    for (window in listOf(25, 40)) {
+        val one = "Capacity1Window$window"
+        val four = "Capacity4Window$window"
+        println()
+        println("Window $window: $one minus $four, paired by replication (95% intervals)")
+        println()
+        println("  %-16s %13s %13s %13s".format("response", "difference", "half-width", "detectable?"))
+        for (response in listOf(FreePathFleetExample.DELIVERED, FreePathFleetExample.TIME_IN_SYSTEM)) {
+            val observations = runner.observationsAsMap(response).filterKeys { it == one || it == four }
+            check(observations.size == 2) {
+                "expected $response for both $one and $four, got ${observations.keys}"
+            }
+            val mca = MultipleComparisonAnalyzer(observations, response)
+            val d = checkNotNull(mca.pairedDifferenceStatistic(one, four)) { "no pair for $response" }
+            val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+            println("  %-16s %13.3f %13.3f %13s".format(response, d.average, d.halfWidth, detectable))
+        }
+    }
+
     println()
-    println("  The window is a cost paid by every load and redeemed only by capacity: widening it")
-    println("  from 25 to 40 makes the capacity-1 fleet much worse and the capacity-4 fleet only")
-    println("  slightly worse, because only the latter can do anything with what the window")
-    println("  collected. Loads per loaded move says how much of the room was actually used.")
+    println("Read the throughput row of each pair first.")
+    println()
+    println("  At window 25 the two capacities deliver indistinguishable loads, so the time-in-system")
+    println("  difference beside it is a comparison of two fleets doing the same work, and carrying")
+    println("  up to four is worth having. At window 40 the capacity-1 fleet delivers detectably")
+    println("  fewer: it has fallen behind, so its time in system is a number about the loads it")
+    println("  managed rather than about the fleet, and comparing the times would be comparing two")
+    println("  different questions.")
+    println()
+    println("  Check throughput parity before believing a time-in-system comparison. The paired")
+    println("  difference is what makes 'indistinguishable' and 'detectably fewer' statements about")
+    println("  the run rather than about the reader's eye.")
+    println()
+    println("  The replication count is part of that. At ten replications the window-40 throughput")
+    println("  deficit was about eight loads with a half-width of nine: the point estimate said the")
+    println("  fleet had fallen behind and the interval could not tell it from noise, which is a")
+    println("  reason to run more replications rather than to believe the point estimate. Forty")
+    println("  resolves it.")
     println()
     println("The blocked column is zero everywhere, and will be in every free-path run.")
     println()
@@ -3576,98 +3877,69 @@ without the other, which is why the study crosses them rather than sweeping one.
     println("  the output rather than being left to be remembered. A guide path fills that column")
     println("  in, and the difference between the two is what a substrate comparison measures.")
     println("  See ksl.examples.general.agv for the same machinery where the aisles push back.")
+    println()
+    println("  Full half-width summary reports for all four cells: ${KSL.outDir}")
 }
 ```
 
-The printed rows are throughput first, deliberately, and the closing paragraphs say
-why. **At window 40 the capacity-one fleet delivers fewer loads than the others**,
-so its time in system is a number about the loads it managed rather than about the
-fleet — and comparing it with the others' times would be comparing a fleet that
-gave up on work against fleets that did not.
+The console table gives each cell with its half-widths; the full reports go to the KSL output
+file.
+
+Then the pairing, within each window: capacity 1 against capacity 4, replication by replication.
+At window 25 the delivered counts are indistinguishable, so the time-in-system difference beside
+them is a comparison of two fleets doing the same work. At window 40 the capacity-1 fleet
+delivers detectably fewer, so its time in system is a number about the loads it managed rather
+than about the fleet.
 
 > **Before comparing times, check that the configurations served the same load.**
 
-#### 7. What a run reports
+That rule is the reason this example exists, and the paired difference is what turns
+"indistinguishable" and "detectably fewer" into statements about the run rather than about the
+reader's eye.
 
-```kotlin
-private class Cell(val label: String, val r: Result)
-
-private class Result(
-    val delivered: Double,
-    val timeInSystem: Double,
-    val waitForAssignment: Double,
-    val timeAboard: Double,
-    val movingEmpty: Double,
-    val blocked: Double,
-    val loadsPerLoadedMove: Double?,
-    val capacityUsed: Double?
-)
-
-private fun run(capacity: Int, label: String, tba: Double = 20.0, window: Double = 20.0, carts: Int = 2): Result {
-    val m = Model("FreePathYard_$label")
-    val shop = FreePathFleetExample(m, capacity, label, tba, window, carts)
-    m.numberOfReplications = 10
-    m.lengthOfReplication = 8000.0
-    m.lengthOfReplicationWarmUp = 1000.0
-    m.simulate()
-
-    fun avg(name: String): Double? =
-        m.response(name)?.acrossReplicationStatistic?.average
-
-    return Result(
-        delivered = m.counter("$label:Delivered")?.acrossReplicationStatistic?.average ?: Double.NaN,
-        timeInSystem = avg("$label:TimeInSystem") ?: Double.NaN,
-        waitForAssignment = shop.fleet.dispatcher.waitForAssignment.acrossReplicationStatistic.average,
-        timeAboard = shop.fleet.timeAboard.acrossReplicationStatistic.average,
-        movingEmpty = shop.carts[0].fracTimeMovingEmpty.acrossReplicationStatistic.average,
-        blocked = shop.carts[0].fracTimeBlocked.acrossReplicationStatistic.average,
-        // Registered on the body, so read by row name rather than off the vehicle.
-        loadsPerLoadedMove = avg("Cart1:Body:LoadsPerLoadedMove"),
-        capacityUsed = avg("Cart1:Body:CapacityUtilization")
-    )
-}
-
-private fun row(label: String, a: Double, b: Double) {
-    println("  %-28s %14.4f %17.4f".format(label, a, b))
-}
-
-private fun row(label: String, a: Double?, b: Double?) {
-    fun f(v: Double?) = if (v == null) "         --" else "%11.4f".format(v)
-    println("  %-28s %17s %17s".format(label, f(a), f(b)))
-}
-```
-
-`Result` carries eight quantities, and the last two are the ones worth knowing
-about:
-
-- `loadsPerLoadedMove` is the fleet's own measure of consolidation: how many loads
-  a vehicle was carrying, on average, on a move that carried anything. It is `null`
-  when the fleet cannot consolidate, which is honest — a capacity-one fleet has no
-  such statistic rather than a value of 1.
-- `capacityUsed` is the utilisation of the vehicles' load capacity.
-
-`blocked` is `fracTimeBlocked`, and on a free path it reads **exactly zero** for
-the whole run. That is not a missing statistic: it is registered, it is reported,
-and it is flat by design. A free path's central assumption is that a vehicle never
-waits for another, and this is that assumption appearing in the same row a
-guide-path run fills in — rather than being left to be remembered.
+**And the blocked column is zero on purpose.** `FracTimeBlocked` is registered on a free-path
+vehicle and reads exactly zero for the whole run. It is flat by design: a free path's central
+assumption is that a vehicle never waits for another, and this is that assumption appearing in
+the same row a guide-path run fills in — rather than being left to be remembered.
 
 ### What it shows
 
-| | delivered | in system | blocked | loads/move |
-|---|---|---|---|---|
-| capacity 1, window 25 | 350.4 | 43.84 | 0.0000 | — |
-| capacity 4, window 25 | 350.3 | 35.80 | 0.0000 | 1.332 |
-| capacity 1, window 40 | 342.9 | **224.82** | 0.0000 | — |
-| capacity 4, window 40 | 350.8 | 43.42 | 0.0000 | 1.581 |
+Forty replications of 8,000 after a 1,000 warm-up:
+
+```
+                         delivered       hw   in system       hw   blocked  loads/move
+  Capacity1Window25          347.7      6.0       43.89     0.76    0.0000          --
+  Capacity4Window25          347.6      5.9       35.70     0.10    0.0000       1.319
+  Capacity1Window40          339.1      3.1      243.53    32.52    0.0000          --
+  Capacity4Window40          347.8      5.9       43.35     0.19    0.0000       1.563
+```
+
+and, within each window, capacity 1 against capacity 4 paired by replication:
+
+```
+Window 25: Capacity1Window25 minus Capacity4Window25
+  response            difference    half-width   detectable?
+  Delivered                0.175         0.469            no
+  TimeInSystem             8.196         0.744           yes
+
+Window 40: Capacity1Window40 minus Capacity4Window40
+  response            difference    half-width   detectable?
+  Delivered               -8.700         4.010           yes
+  TimeInSystem           200.189        32.521           yes
+```
 
 ### What to learn
 
-**Read the throughput column first.** At window 25 the two rows deliver the same
-load, so the times beside them are comparable and carrying up to four cuts time
-in system by 18%. At window 40 the capacity-one fleet delivers 342.9 against
-350.8 — it has fallen behind, so its 224.82 is a number about the loads it
-*managed* rather than about the fleet.
+**Read the throughput row of each pair first.** At window 25 the delivered counts are
+indistinguishable — 0.175 ± 0.469 — so the times beside them are comparable, and carrying
+up to four cuts time in system by 8.20 ± 0.74. At window 40 the capacity-one fleet
+delivers 8.70 ± 4.01 fewer: it has fallen behind, so its 243.53 is a number about the
+loads it *managed* rather than about the fleet.
+
+**The replication count is part of that claim.** At ten replications the window-40
+deficit came out at 7.9 with a half-width of 8.6 — the point estimate said the fleet had
+fallen behind and the interval could not tell it from noise. Forty replications resolve
+it. That is a reason to run more replications, not to believe a point estimate.
 
 > **Before comparing times, check that the configurations served the same load.**
 
@@ -3982,8 +4254,7 @@ the function is setup.
 #### 6. Reporting a number that belongs to a machine
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
+    fun report() {
         val warmUp = run(replicationLength = 20_000.0)
         println("warm-up (JIT): ${"%,.0f".format(warmUp.zoneTraversals)} traversals in ${"%.2f".format(warmUp.wallClockSeconds)} s")
         val result = run()
@@ -4013,6 +4284,23 @@ count, vehicle count, replication length — because **a benchmark figure withou
 configuration is not a figure**. Run it, record what it says next to the hardware it
 said it on, and compare like with like. This is deliberately not a test: a
 wall-clock number has no business failing a build on somebody else's laptop.
+
+#### 7. The entry point
+
+```kotlin
+    fun report() {
+        // ...
+    }
+}
+
+fun main() {
+    GuidedPathThroughputBenchmark.report()
+}
+```
+
+The corpus convention: the study body stays in the object, and a top-level `fun main()`
+runs it. Keeping it that way means the benchmark can be invoked from a test or another
+example without going through a `main`.
 
 ### What to learn
 
@@ -4243,8 +4531,7 @@ off, deadlock detection on, `System.nanoTime()` around `simulate()`.
 #### 5. The comparison
 
 ```kotlin
-    @JvmStatic
-    fun main(args: Array<String>) {
+    fun report() {
         val warmUp = run(replicationLength = 20_000.0)
         println(
             "warm-up (JIT): ${"%,.0f".format(warmUp.zoneTraversals)} traversals in " +
@@ -4316,9 +4603,24 @@ digit-for-digit agreement.
 
 **What does deciding cost?** Events per traversal is 1.007 on both sides, so
 deciding costs **nothing in engine events**: a dispatching pass is not a zone
-traversal. What it costs is about 6% of wall clock, which is the dispatcher's and
-the vehicle agents' coroutines — the price of having an object that can hold an
-opinion.
+traversal. What it costs is wall clock — 30% more on the run above, and machine-dependent
+— which is the dispatcher's and the vehicle agents' coroutines: the price of having an
+object that can hold an opinion.
+
+#### 6. The entry point
+
+```kotlin
+    fun report() {
+        // ...
+    }
+}
+
+fun main() {
+    AgvThroughputBenchmark.report()
+}
+```
+
+The same shape as case 9: the body in the object, a top-level `fun main()` to run it.
 
 ### What it shows
 
@@ -4327,8 +4629,8 @@ opinion.
   zone traversals                 4,379,794          4,379,615
   events scheduled                4,412,310          4,412,312
   events / traversal                  1.007              1.007
-  wall clock (s)                       5.06               4.77
-  traversals / minute            51,964,070         55,041,395
+  wall clock (s)                       8.63               6.63
+  traversals / minute            30,437,160         39,662,497
   tasks completed                    55,564                 --
 ```
 
@@ -4341,9 +4643,9 @@ subsystems are moving the same vehicles over the same aisles. A large gap would
 mean every other comparison between the paradigms was suspect.
 
 **Events per traversal is 1.007 in both.** Deciding costs *nothing* in engine
-events, because a dispatching pass is not a zone traversal. The ~6% in wall
-clock is the dispatcher's and the vehicle agents' coroutines — which is what an
-object that can hold an opinion costs.
+events, because a dispatching pass is not a zone traversal. The wall-clock gap — 30% on
+the run above, and machine-dependent — is the dispatcher's and the vehicle agents'
+coroutines, which is what an object that can hold an opinion costs.
 
 Saturation is expressed differently on the two sides, necessarily. The passive
 benchmark re-dispatches each vehicle the instant it arrives, which it can do
@@ -4372,6 +4674,28 @@ not fail somebody else's build.
 > **Before comparing times, check that the configurations being compared served
 > the same load.** A fleet that gave up on more work will look faster on every
 > per-load statistic you have.
+
+---
+
+**Every comparison here is paired, and none of them was to begin with.** The six studies
+that compare configurations — 1, 2, 4, 6, 7 and 8 — all run their alternatives on common
+random numbers and all report the difference **replication by replication**, with a
+half-width beside it. That is not decoration:
+
+| Case | What the unpaired version of the claim was worth |
+|---|---|
+| 4 | "Five rules within 0.3 loads" — against a per-rule half-width of 7.35 |
+| 8 | "The fleet has fallen behind" — 7.9 loads with an interval of 8.6, at ten replications |
+| 1 | "Throughput is identical" — true, but nothing on the page said how closely |
+| 7 | "Throughput ceilings" — the last four carts do buy 1.6 loads, which is outside the interval |
+
+Case 4's first table was wrong in exactly the way a table of averages invites. The fix is
+the same in every case and it is three lines of code: run the alternatives through a
+`ScenarioRunner` so they share their run parameters and their streams, ask it for
+`observationsAsMap`, and hand that to a `MultipleComparisonAnalyzer`.
+
+**Two cases deliberately report no intervals**, and say so: case 5 is deterministic, and
+cases 9 and 10 measure wall-clock time on one machine.
 
 ---
 

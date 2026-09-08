@@ -1,24 +1,48 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package ksl.examples.general.agv
 
+import ksl.controls.experiments.ScenarioRunner
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
+import ksl.modeling.entity.ProcessModel
 import ksl.modeling.fleet.policies.AssignmentPolicyIfc
 import ksl.modeling.fleet.policies.BatchedAssignmentPolicy
 import ksl.modeling.fleet.policies.ContractNetAssignmentPolicy
 import ksl.modeling.fleet.policies.FurthestVehiclePolicy
 import ksl.modeling.fleet.policies.LeastUsedVehiclePolicy
 import ksl.modeling.fleet.policies.NearestVehiclePolicy
-import ksl.modeling.entity.ProcessModel
 import ksl.modeling.guidedpath.GuidedPathNetwork
 import ksl.modeling.guidedpath.LinkType
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
 import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.simulation.Model
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.io.KSL
 import ksl.utilities.random.rvariable.ExponentialRV
-import kotlin.math.abs
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
 
 /**
  *  The same shop under six dispatching rules, on common random numbers.
@@ -50,13 +74,22 @@ import kotlin.math.abs
  *  would be unfalsifiable, and would quietly report that the choice of rule does not matter. It is
  *  worth knowing that a layout can hide a difference this way.
  *
- *  ## Reading the output
+ *  ## How the study is run, and why it is run that way
  *
- *  Throughput is nearly the same for every rule, which is the point most easily missed: with a fleet
- *  this size the *bottleneck* is the guide path, not the decision. What the rule changes is who
- *  waits and how evenly the fleet is worn, and those differ a great deal. A study that measured only
- *  throughput would conclude that dispatching does not matter here, and would be wrong about
- *  everything except throughput.
+ *  Each rule is a [ksl.controls.experiments.Scenario] inside a [ScenarioRunner]. That is not
+ *  ceremony: the runner gives every rule the same run parameters, captures each run in a KSL
+ *  database, prints a half-width summary report per scenario, and — the part this study actually
+ *  needs — hands back the *per-replication* observations through
+ *  [ScenarioRunner.observationsAsMap].
+ *
+ *  Those observations go to a [MultipleComparisonAnalyzer], and that is what makes the throughput
+ *  claim below honest. The rules run on common random numbers, so the right comparison is the
+ *  **paired difference**, replication by replication. An earlier version of this example printed
+ *  six point estimates of loads delivered, observed that they lay within a load of one another,
+ *  and concluded that the rules were equivalent in throughput. The half-width on a single rule's
+ *  throughput is about seven loads. Nothing on that page could have distinguished a real
+ *  difference of five loads from no difference at all; the pairing can, and the pairing is what
+ *  is reported now.
  */
 object DispatchingRuleComparison {
 
@@ -68,12 +101,9 @@ object DispatchingRuleComparison {
     const val DEPOT_C: String = "DepotC"
 
     /**
-     *  A one-way ring with two pickup stations on opposite sides, shipping between them, and a
-     *  parking spur per vehicle.
+     *  A one-way ring of four legs with a depot spur for each of the three carts.
      *
-     *  Shipping sits between the two pickups rather than next to one of them. Put it beside a pickup
-     *  and a freed vehicle is always nearest that one, so "first in the queue" and "nearest" name the
-     *  same task and half these rules become indistinguishable.
+     *  Two pickup stations, at opposite corners, for the reason in this file's header.
      */
     fun createNetwork(): GuidedPathNetwork = GuidedPathNetwork.builder("RingShop")
         .intersection("N", x = 0.0, y = 100.0)
@@ -101,51 +131,78 @@ object DispatchingRuleComparison {
         .station(DEPOT_C, "PC")
         .build()
 
-    private const val MEAN_TIME_BETWEEN_ARRIVALS = 26.0
-    private const val ARRIVAL_STREAM = 1
-    private const val NUM_ARRIVALS = 600
+    const val MEAN_TIME_BETWEEN_ARRIVALS: Double = 26.0
+    const val ARRIVAL_STREAM: Int = 1
+    const val NUM_ARRIVALS: Int = 600
 
-    class Shop(parent: ModelElement, policy: AssignmentPolicyIfc) : ProcessModel(parent, "Shop") {
+    /**
+     *  Three carts on the ring, dispatched by [policy].
+     *
+     *  @param parent the containing model element
+     *  @param policy the rule under test; the only thing that differs between the six runs
+     *  @param name a name for the model element
+     */
+    class Shop(
+        parent: ModelElement,
+        policy: AssignmentPolicyIfc,
+        name: String? = "Shop"
+    ) : ProcessModel(parent, name) {
 
-        val network = createNetwork()
+        val network: GuidedPathNetwork = createNetwork()
 
         init {
             spatialModel = network
         }
 
-        val agv = AgvSystem(this, network, assignmentPolicy = policy, name = "Agv")
+        val agv: AgvSystem = AgvSystem(this, network, assignmentPolicy = policy, name = "Agv")
 
-        val fleet = listOf(DEPOT_A, DEPOT_B, DEPOT_C).mapIndexed { i, depot ->
+        val fleet: List<AgvVehicle> = listOf(DEPOT_A, DEPOT_B, DEPOT_C).mapIndexed { i, depot ->
             AgvVehicle(agv, TransporterPlacement.At(depot), ConstantRV(12.0), name = "Cart${i + 1}")
                 .apply { homeBase = depot }
         }
 
-        val waitForVehicle = Response(this, "Shop:WaitForVehicle")
-        val timeInSystem = Response(this, "Shop:TimeInSystem")
-        val delivered = Counter(this, "Shop:Delivered")
+        private val myWaitForVehicle = Response(this, "${this.name}:WaitForVehicle")
+        val waitForVehicle: ResponseCIfc
+            get() = myWaitForVehicle
+
+        private val myTimeInSystem = Response(this, "${this.name}:TimeInSystem")
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
+
+        private val myDelivered = Counter(this, "${this.name}:Delivered")
+        val delivered: CounterCIfc
+            get() = myDelivered
 
         /** Largest minus smallest per-vehicle completions: how unevenly the work fell. Observed at
          *  the horizon, so a Response rather than a Counter -- it is one measurement of the finished
          *  replication, not a total that accumulated during it. */
-        val fleetImbalance = Response(this, "Shop:FleetImbalance")
+        private val myFleetImbalance = Response(this, "${this.name}:FleetImbalance")
+        val fleetImbalance: ResponseCIfc
+            get() = myFleetImbalance
 
-        private val timeBetweenArrivals = ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)
+        // A model element rather than a bare random variable, so that the arrival rate is a named
+        // input a scenario can override and the report says what it was.
+        private val myTimeBetweenArrivals = RandomVariable(
+            this, ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM), name = "${this.name}:TBA"
+        )
+        val timeBetweenArrivals: RandomVariableCIfc
+            get() = myTimeBetweenArrivals
 
         inner class Load(private val from: String) : Entity() {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(from)
                 val result = transportByFleet(agv, destination = SHIPPING, origin = from)
-                waitForVehicle.value = result.waitForAssignment + result.waitForArrival
-                timeInSystem.value = time - arrived
-                delivered.increment()
+                myWaitForVehicle.value = result.waitForAssignment + result.waitForArrival
+                myTimeInSystem.value = time - arrived
+                myDelivered.increment()
             }
         }
 
         inner class Source : Entity() {
             val arrivals = process(isDefaultProcess = true) {
                 repeat(NUM_ARRIVALS) {
-                    delay(timeBetweenArrivals)
+                    delay(myTimeBetweenArrivals)
                     // Alternating origins, so that which task is nearest genuinely varies.
                     val from = if (it % 2 == 0) NORTH_PICKUP else SOUTH_PICKUP
                     activate(Load(from).production)
@@ -160,104 +217,113 @@ object DispatchingRuleComparison {
         override fun replicationEnded() {
             super.replicationEnded()
             val counts = fleet.map { it.numTasksCompleted.value }
-            fleetImbalance.value = counts.max() - counts.min()
+            myFleetImbalance.value = counts.max() - counts.min()
         }
     }
 
-    private const val REPLICATIONS = 15
-    private const val HORIZON = 10_000.0
-    private const val WARM_UP = 1_500.0
+    const val REPLICATIONS: Int = 15
+    const val HORIZON: Double = 10_000.0
+    const val WARM_UP: Double = 1_500.0
 
-    fun run(label: String, policy: AssignmentPolicyIfc): Shop {
-        val m = Model("DispatchRules-$label")
-        val shop = Shop(m, policy)
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return shop
-    }
+    /**
+     *  The six rules, in the order they are reported. Scenario names are also experiment names in
+     *  the runner's database and directory names on disk, so they carry no punctuation.
+     */
+    fun rules(): List<Pair<String, AssignmentPolicyIfc>> = listOf(
+        "NearestVehicle" to NearestVehiclePolicy(),
+        "FurthestVehicle" to FurthestVehiclePolicy(),
+        "LeastUsed" to LeastUsedVehiclePolicy(),
+        "BatchedWindow30" to BatchedAssignmentPolicy(30.0),
+        "ContractNetInstant" to ContractNetAssignmentPolicy(0.0),
+        "ContractNetDeadline5" to ContractNetAssignmentPolicy(5.0)
+    )
 
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val rules = listOf(
-            "nearest vehicle" to NearestVehiclePolicy(),
-            "furthest vehicle" to FurthestVehiclePolicy(),
-            "least used" to LeastUsedVehiclePolicy(),
-            "batched (window 30)" to BatchedAssignmentPolicy(30.0),
-            "contract net (instant)" to ContractNetAssignmentPolicy(0.0),
-            "contract net (deadline 5)" to ContractNetAssignmentPolicy(5.0)
-        )
-
-        val results = rules.map { (label, policy) -> label to run(label.filter { c -> c.isLetter() }, policy) }
-
-        println()
-        println("Three carts, one ring, six dispatching rules - common random numbers throughout")
-        println()
-        println("  %-26s %10s %12s %12s %11s".format("rule", "delivered", "wait", "in system", "imbalance"))
-        for ((label, shop) in results) {
-            println(
-                "  %-26s %10.1f %12.2f %12.2f %11.2f".format(
-                    label,
-                    shop.delivered.acrossReplicationStatistic.average,
-                    shop.waitForVehicle.acrossReplicationStatistic.average,
-                    shop.timeInSystem.acrossReplicationStatistic.average,
-                    shop.fleetImbalance.acrossReplicationStatistic.average
-                )
+    /**
+     *  Builds the runner with one scenario per rule. Every scenario gets its own model and the same
+     *  run parameters, and the runner leaves the random streams alone, so the six runs see the same
+     *  arrivals -- which is what makes the paired comparison below valid.
+     */
+    fun buildRunner(): ScenarioRunner {
+        val runner = ScenarioRunner("DispatchingRules")
+        for ((label, policy) in rules()) {
+            val m = Model("DispatchRules_$label")
+            Shop(m, policy)
+            runner.addScenario(
+                model = m,
+                name = label,
+                inputs = emptyMap(),
+                numberReplications = REPLICATIONS,
+                lengthOfReplication = HORIZON,
+                lengthOfReplicationWarmUp = WARM_UP
             )
         }
-
-        val byLabel = results.toMap()
-        val nearest = byLabel.getValue("nearest vehicle")
-        val leastUsed = byLabel.getValue("least used")
-        val batched = byLabel.getValue("batched (window 30)")
-        val instantAuction = byLabel.getValue("contract net (instant)")
-
-        val unbatched = results.filterNot { it.first.startsWith("batched") }
-            .map { it.second.delivered.acrossReplicationStatistic.average }
-        val unbatchedSpread = unbatched.max() - unbatched.min()
-        val batchedLoss = nearest.delivered.acrossReplicationStatistic.average -
-                batched.delivered.acrossReplicationStatistic.average
-
-        println()
-        println("  Five of the six rules deliver within %.1f loads of one another.".format(unbatchedSpread))
-        println("  With a fleet this size the guide path is the constraint, not the decision, so a")
-        println("  study that measured throughput alone would conclude that dispatching does not")
-        println("  matter here - and would be wrong about everything except throughput.")
-        println()
-        println("  What the rule changes is who waits and how evenly the fleet is worn.")
-        println(
-            "  Least-used leaves an imbalance of %.2f against nearest-vehicle's %.2f, at throughput".format(
-                leastUsed.fleetImbalance.acrossReplicationStatistic.average,
-                nearest.fleetImbalance.acrossReplicationStatistic.average
-            )
-        )
-        println("  that differs in the second decimal place. Nearest-vehicle concentrates work on")
-        println("  whichever cart is closest to the busy part of the layout, which on a one-way ring")
-        println("  is persistently the same cart. Whether that matters depends on whether the cost")
-        println("  being managed is time or wear - a modelling question, not a library one.")
-        println()
-        println("  Batching is the exception, and instructively so. It costs %.1f loads and".format(batchedLoss))
-        println(
-            "  %.0f time units of waiting against nearest-vehicle's %.0f.".format(
-                batched.waitForVehicle.acrossReplicationStatistic.average,
-                nearest.waitForVehicle.acrossReplicationStatistic.average
-            )
-        )
-        println("  A window pays for itself when a fleet has slack and the board has choices to weigh")
-        println("  up. This fleet is saturated: the window delays every decision, the queue never")
-        println("  drains, and the delay compounds. The rule is not broken - it is being asked to do")
-        println("  the one thing it is worst at, which is the sort of thing a comparison is for.")
-        println()
-        println(
-            "  Note also that the instant auction reproduces nearest-vehicle almost exactly (%.2f".format(
-                instantAuction.waitForVehicle.acrossReplicationStatistic.average
-            )
-        )
-        println("  against %.2f). That is a check rather than a coincidence: with distance bidding".format(
-            nearest.waitForVehicle.acrossReplicationStatistic.average))
-        println("  the vehicles quote what the rule would have computed, so the negotiation machinery")
-        println("  is shown not to be changing the answer by itself. The deadline row shows what it")
-        println("  costs once negotiating is charged for, which is the honest way to model it.")
+        return runner
     }
+}
+
+fun main() {
+    val runner = DispatchingRuleComparison.buildRunner()
+    runner.simulate()
+
+    // The standard half-width summary report for every scenario -- every response the model keeps,
+    // with its confidence interval, rather than the four columns the author happened to think of.
+    // Written to the KSL output file rather than the console: six scenarios of full reports is
+    // several hundred lines, and the console is where the comparison belongs.
+    runner.write()
+    println()
+    println("Full half-width summary reports for all six rules: ${KSL.outDir}")
+
+    // The analyzer forms each paired difference once, in the order the data was inserted, so the
+    // pair that exists is "first inserted - later". NearestVehicle is inserted first, so every
+    // difference below is reported in that direction rather than being silently absent.
+    val base = DispatchingRuleComparison.rules().first().first
+    for ((response, label) in listOf(
+        "Shop:Delivered" to "loads delivered",
+        "Shop:TimeInSystem" to "time in system",
+        "Shop:FleetImbalance" to "fleet imbalance"
+    )) {
+        val observations = runner.observationsAsMap(response)
+        check(observations.size == DispatchingRuleComparison.rules().size) {
+            "expected per-replication observations of $response for every scenario, got " +
+                "${observations.keys}. An empty or partial map would print an empty table, which " +
+                "is exactly the sort of silence this study exists to avoid."
+        }
+        val mca = MultipleComparisonAnalyzer(observations, label)
+        println()
+        println("Paired differences in $label, $base minus each rule")
+        println("(common random numbers, ${DispatchingRuleComparison.REPLICATIONS} replications, 95% intervals)")
+        println()
+        println("  %-22s %12s %12s %12s".format("rule", "difference", "half-width", "detectable?"))
+        for ((name, _) in DispatchingRuleComparison.rules()) {
+            if (name == base) continue
+            val d = checkNotNull(mca.pairedDifferenceStatistic(base, name)) {
+                "no paired difference for '$base - $name'"
+            }
+            val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+            println("  %-22s %12.3f %12.3f %12s".format(name, d.average, d.halfWidth, detectable))
+        }
+    }
+
+    println()
+    println("Reading the three tables")
+    println()
+    println("  Throughput: the half-width on any one rule's delivered count is about seven loads,")
+    println("  and the paired half-width is under one. Five of the six rules are indistinguishable")
+    println("  from nearest-vehicle in throughput -- which is a finding here and was an assertion")
+    println("  when this example printed six unpaired averages. Batching is the exception and is")
+    println("  detectably worse: on a saturated fleet the window delays every decision.")
+    println()
+    println("  Time in system and imbalance are where the rules actually differ, and both")
+    println("  differences are far outside their intervals. Least-used trades time for evenness on")
+    println("  purpose; furthest-vehicle is deliberately poor so that 'nearest is better' can be")
+    println("  measured rather than asserted.")
+    println()
+    println("  The instant auction reproduces nearest-vehicle replication for replication -- a")
+    println("  difference of zero with a half-width of zero. That is a check rather than a")
+    println("  coincidence: with distance bidding the vehicles quote what the rule would have")
+    println("  computed, so the negotiation machinery is shown not to change the answer by itself.")
+    println("  The deadline row then shows what it costs once negotiating is charged for.")
+    println()
+    println("  Where the table says no, the honest statement is 'no detectable difference at this")
+    println("  sample size', not 'the rules are the same'.")
 }

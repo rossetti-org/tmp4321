@@ -1,5 +1,24 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package ksl.examples.general.agv
 
+import ksl.controls.experiments.ScenarioRunner
 import ksl.modeling.agv.AgvSystem
 import ksl.modeling.agv.AgvVehicle
 import ksl.modeling.entity.ProcessModel
@@ -12,11 +31,16 @@ import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.rules.ClosestByNetworkDistanceRule
 import ksl.modeling.guidedpath.rules.ReturnToHomeBaseRule
 import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
 import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.simulation.Model
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ConstantRV
 import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
 
 /**
  *  One shop, modelled twice: once with a **passive** transporter the part steers, and once with an
@@ -71,6 +95,11 @@ object TwoParadigmsExample {
     const val EXIT: String = "ExitStation"
     const val DEPOT: String = "CartDepot"
 
+    /** Both shops name their statistics identically, so the two runs can be compared replication
+     *  by replication rather than only average by average. */
+    const val TIME_IN_SYSTEM: String = "TimeInSystem"
+    const val DELIVERED: String = "Delivered"
+
     /**
      *  A one-way loop with a spur to the exit and a parking spur for the cart.
      *
@@ -97,10 +126,10 @@ object TwoParadigmsExample {
         .station(DEPOT, "I6")
         .build()
 
-    private const val MEAN_TIME_BETWEEN_ARRIVALS = 40.0
-    private const val ARRIVAL_STREAM = 1
-    private const val NUM_ARRIVALS = 400
-    private const val CART_SPEED = 10.0
+    const val MEAN_TIME_BETWEEN_ARRIVALS: Double = 40.0
+    const val ARRIVAL_STREAM: Int = 1
+    const val NUM_ARRIVALS: Int = 400
+    const val CART_SPEED: Double = 10.0
 
     /** The part steers the cart: ask for one, be collected, be carried, hand it back. */
     class PassiveShop(parent: ModelElement) : ProcessModel(parent, "PassiveShop") {
@@ -121,25 +150,34 @@ object TwoParadigmsExample {
             this, space, listOf(cart), ClosestByNetworkDistanceRule(), ReturnToHomeBaseRule(), "Carts"
         )
 
-        val timeInSystem = Response(this, "PassiveShop:TimeInSystem")
-        val delivered = Counter(this, "PassiveShop:Delivered")
+        private val myTimeInSystem = Response(this, TIME_IN_SYSTEM)
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
 
-        private val timeBetweenArrivals = ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)
+        private val myDelivered = Counter(this, DELIVERED)
+        val delivered: CounterCIfc
+            get() = myDelivered
+
+        private val myTimeBetweenArrivals = RandomVariable(
+            this, ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM), name = "TBA"
+        )
+        val timeBetweenArrivals: RandomVariableCIfc
+            get() = myTimeBetweenArrivals
 
         inner class Part : Entity() {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(ENTRY)
                 guidedTransport(carts, destination = EXIT, pickupLocation = ENTRY)
-                timeInSystem.value = time - arrived
-                delivered.increment()
+                myTimeInSystem.value = time - arrived
+                myDelivered.increment()
             }
         }
 
         inner class Source : Entity() {
             val arrivals = process(isDefaultProcess = true) {
                 repeat(NUM_ARRIVALS) {
-                    delay(timeBetweenArrivals)
+                    delay(myTimeBetweenArrivals)
                     activate(Part().production)
                 }
             }
@@ -165,25 +203,34 @@ object TwoParadigmsExample {
             agv, TransporterPlacement.At(DEPOT), ConstantRV(CART_SPEED), name = "Cart"
         ).apply { homeBase = DEPOT }
 
-        val timeInSystem = Response(this, "ActiveShop:TimeInSystem")
-        val delivered = Counter(this, "ActiveShop:Delivered")
+        private val myTimeInSystem = Response(this, TIME_IN_SYSTEM)
+        val timeInSystem: ResponseCIfc
+            get() = myTimeInSystem
 
-        private val timeBetweenArrivals = ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)
+        private val myDelivered = Counter(this, DELIVERED)
+        val delivered: CounterCIfc
+            get() = myDelivered
+
+        private val myTimeBetweenArrivals = RandomVariable(
+            this, ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM), name = "TBA"
+        )
+        val timeBetweenArrivals: RandomVariableCIfc
+            get() = myTimeBetweenArrivals
 
         inner class Part : Entity() {
             val production = process(isDefaultProcess = true) {
                 val arrived = time
                 currentLocation = network.requireLocation(ENTRY)
                 transportByFleet(agv, destination = EXIT, origin = ENTRY)
-                timeInSystem.value = time - arrived
-                delivered.increment()
+                myTimeInSystem.value = time - arrived
+                myDelivered.increment()
             }
         }
 
         inner class Source : Entity() {
             val arrivals = process(isDefaultProcess = true) {
                 repeat(NUM_ARRIVALS) {
-                    delay(timeBetweenArrivals)
+                    delay(myTimeBetweenArrivals)
                     activate(Part().production)
                 }
             }
@@ -194,107 +241,87 @@ object TwoParadigmsExample {
         }
     }
 
-    private const val REPLICATIONS = 20
-    private const val HORIZON = 8_000.0
-    private const val WARM_UP = 1_000.0
+    const val REPLICATIONS: Int = 20
+    const val HORIZON: Double = 8_000.0
+    const val WARM_UP: Double = 1_000.0
 
-    fun runPassive(): PassiveShop {
-        val m = Model("TwoParadigms-Passive")
-        val shop = PassiveShop(m)
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return shop
+    const val PASSIVE: String = "Passive"
+    const val ACTIVE: String = "Active"
+
+    /**
+     *  One scenario per paradigm. Both build the same network from the same function, run the same
+     *  replications over the same horizon, and draw arrivals from the same stream, so anything that
+     *  differs between them is the paradigm and nothing else.
+     */
+    fun buildRunner(): ScenarioRunner {
+        val runner = ScenarioRunner("TwoParadigms")
+        val passiveModel = Model("TwoParadigms_Passive")
+        PassiveShop(passiveModel)
+        runner.addScenario(
+            model = passiveModel, name = PASSIVE, inputs = emptyMap(),
+            numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+            lengthOfReplicationWarmUp = WARM_UP
+        )
+        val activeModel = Model("TwoParadigms_Active")
+        ActiveShop(activeModel)
+        runner.addScenario(
+            model = activeModel, name = ACTIVE, inputs = emptyMap(),
+            numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+            lengthOfReplicationWarmUp = WARM_UP
+        )
+        return runner
+    }
+}
+
+fun main() {
+    val runner = TwoParadigmsExample.buildRunner()
+    runner.simulate()
+    runner.print()
+
+    println()
+    println("One shop, modelled two ways: ${TwoParadigmsExample.PASSIVE} minus ${TwoParadigmsExample.ACTIVE}")
+    println("(paired by replication, ${TwoParadigmsExample.REPLICATIONS} replications, 95% intervals)")
+    println()
+    println("  %-22s %14s %14s %14s".format("response", "difference", "half-width", "detectable?"))
+    for (response in listOf(TwoParadigmsExample.DELIVERED, TwoParadigmsExample.TIME_IN_SYSTEM)) {
+        val observations = runner.observationsAsMap(response)
+        check(observations.size == 2) {
+            "expected per-replication observations of $response for both paradigms, got " +
+                "${observations.keys}. Both shops must name this response identically or there is " +
+                "nothing to pair."
+        }
+        val mca = MultipleComparisonAnalyzer(observations, response)
+        val d = checkNotNull(
+            mca.pairedDifferenceStatistic(TwoParadigmsExample.PASSIVE, TwoParadigmsExample.ACTIVE)
+        ) { "no paired difference for $response" }
+        val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+        println("  %-22s %14.6f %14.6f %14s".format(response, d.average, d.halfWidth, detectable))
     }
 
-    fun runActive(): ActiveShop {
-        val m = Model("TwoParadigms-Active")
-        val shop = ActiveShop(m)
-        m.numberOfReplications = REPLICATIONS
-        m.lengthOfReplication = HORIZON
-        m.lengthOfReplicationWarmUp = WARM_UP
-        m.simulate()
-        return shop
-    }
-
-    @JvmStatic
-    fun main(args: Array<String>) {
-        val passive = runPassive()
-        val active = runActive()
-
-        println()
-        println("One shop, modelled two ways - the same world, decided by different objects")
-        println()
-        println("                              passive               active")
-        println(
-            "  parts delivered    %18.2f %20.2f".format(
-                passive.delivered.acrossReplicationStatistic.average,
-                active.delivered.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  time in system     %18.4f %20.4f".format(
-                passive.timeInSystem.acrossReplicationStatistic.average,
-                active.timeInSystem.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  cart transporting  %18.4f %20.4f".format(
-                passive.cart.fracTimeTransporting.acrossReplicationStatistic.average,
-                active.cart.fracTimeTransporting.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  cart moving empty  %18.4f %20.4f".format(
-                passive.cart.fracTimeMovingEmpty.acrossReplicationStatistic.average,
-                active.cart.fracTimeMovingEmpty.acrossReplicationStatistic.average
-            )
-        )
-        println()
-        println("  With one cart, \"closest idle transporter\" and \"nearest vehicle\" are the same")
-        println("  rule, so the two models should agree - and they do, to the digit rather than")
-        println("  within a confidence interval. That is what makes the active subsystem a second")
-        println("  way of modelling this world rather than a different world.")
-        println()
-        println("What only the active model can report")
-        println()
-        println(
-            "  waited to be assigned %15.4f".format(
-                active.agv.dispatcher.waitForAssignment.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  waited in the queue   %15.4f".format(
-                active.agv.dispatcher.taskQ.timeInQ.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  time aboard a vehicle %15.4f".format(
-                active.agv.timeAboard.acrossReplicationStatistic.average
-            )
-        )
-        println(
-            "  fraction on task      %15.4f".format(
-                active.cart.fracTimeOnTask.acrossReplicationStatistic.average
-            )
-        )
-        println()
-        println("  A passive pool has no object that holds a commitment, so nothing there could")
-        println("  separate \"how long until someone was assigned\" from \"how long until it arrived\".")
-        println("  Here a dispatcher decides at one instant and a vehicle arrives at another, so the")
-        println("  two are different questions with different answers.")
-        println()
-        println("  \"On task\" is not the same as \"moving\", and neither contains the other: a cart is")
-        println("  on task while it stands still being loaded, and it is moving but not on task while")
-        println("  it returns to its depot. Only the active model has an object that could tell the")
-        println("  difference, because only there is there something that holds a commitment.")
-        println()
-        println("  The warnings above the table are the horizon diagnostics doing their job, not a")
-        println("  fault. Each replication ends with a cart mid-delivery and a load still waiting,")
-        println("  which is exactly what a busy shop looks like when the clock stops. They are worth")
-        println("  reading rather than silencing: the statistics are computed over the loads that")
-        println("  were served, so a run that served far less than it was asked to would report")
-        println("  perfectly healthy averages and say so only here.")
-    }
+    println()
+    println("  Every paired difference is exactly zero, replication by replication, and so is every")
+    println("  half-width. The two models are not close: they agree. With one cart, \"closest idle")
+    println("  transporter\" and \"nearest vehicle\" are the same rule -- there is only ever one")
+    println("  candidate -- so they should agree, and the fact that they do is what makes the active")
+    println("  subsystem a second way of modelling this world rather than a different world.")
+    println()
+    println("  Had they differed, every comparison a researcher wanted to make between paradigms")
+    println("  would have been confounded by the modelling choice itself.")
+    println()
+    println("What only the active model can report")
+    println()
+    println("  Look for these rows in the Active report above; the Passive report has no equivalent:")
+    println("    Agv:Dispatcher:WaitForAssignment  - from asking to somebody committing a vehicle")
+    println("    Agv:Dispatcher:TaskQ:TimeInQ      - the dispatcher's own queue of open work")
+    println("    Agv:TimeAboard                    - how long a load rode")
+    println("    Cart:FracTimeOnTask               - committed, whether moving or not")
+    println()
+    println("  A passive pool has no object that holds a commitment, so nothing in it could separate")
+    println("  \"how long until someone was assigned\" from \"how long until it arrived\". Here a")
+    println("  dispatcher decides at one instant and a vehicle arrives at another, so the two are")
+    println("  different questions with different answers.")
+    println()
+    println("  \"On task\" is not the same as \"moving\", and neither contains the other: a cart is on")
+    println("  task while it stands still being loaded, and it is moving but not on task while it")
+    println("  returns to its depot.")
 }

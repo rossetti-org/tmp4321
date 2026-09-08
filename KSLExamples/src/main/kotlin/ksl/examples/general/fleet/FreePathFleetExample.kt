@@ -1,3 +1,21 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package ksl.examples.general.fleet
 
 import ksl.modeling.entity.ProcessModel
@@ -6,13 +24,20 @@ import ksl.modeling.fleet.FreePathVehicle
 import ksl.modeling.fleet.policies.BatchedAssignmentPolicy
 import ksl.modeling.fleet.policies.ConsolidatingPolicy
 import ksl.modeling.fleet.policies.NearestVehiclePolicy
+import ksl.controls.experiments.ScenarioRunner
 import ksl.modeling.spatial.Euclidean2DPlane
 import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
 import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.simulation.Model
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ConstantRV
+import ksl.utilities.io.KSL
 import ksl.utilities.random.rvariable.ExponentialRV
+import ksl.utilities.statistic.MultipleComparisonAnalyzer
 
 /**
  *  A dispatcher, tours and multi-load consolidation over a **plain spatial model** -- no guide path,
@@ -99,10 +124,21 @@ class FreePathFleetExample(
         ).apply { homeBase = "Depot" }
     }
 
-    val timeInSystem = Response(this, "${this.name}:TimeInSystem")
-    val delivered = Counter(this, "${this.name}:Delivered")
+    // Named without the model's own name in front, so that every cell of the study reports the
+    // same response and the cells can be paired replication by replication.
+    private val myTimeInSystem = Response(this, TIME_IN_SYSTEM)
+    val timeInSystem: ResponseCIfc
+        get() = myTimeInSystem
 
-    private val timeBetweenArrivals = ExponentialRV(meanTimeBetweenArrivals, streamNum = 1)
+    private val myDelivered = Counter(this, DELIVERED)
+    val delivered: CounterCIfc
+        get() = myDelivered
+
+    private val myTimeBetweenArrivals = RandomVariable(
+        this, ExponentialRV(meanTimeBetweenArrivals, streamNum = 1), name = "TBA"
+    )
+    val timeBetweenArrivalsRV: RandomVariableCIfc
+        get() = myTimeBetweenArrivals
 
     inner class Pallet : Entity() {
         val movement = process(isDefaultProcess = true) {
@@ -110,15 +146,15 @@ class FreePathFleetExample(
             currentLocation = fleet.space.requireLocation("Press")
             // States what it needs and suspends. It never chooses a cart.
             transportByFleet(fleet, destination = "Ship", origin = "Press")
-            timeInSystem.value = time - arrived
-            delivered.increment()
+            myTimeInSystem.value = time - arrived
+            myDelivered.increment()
         }
     }
 
     inner class Source : Entity() {
         val arrivals = process(isDefaultProcess = true) {
             repeat(600) {
-                delay(timeBetweenArrivals)
+                delay(myTimeBetweenArrivals)
                 activate(Pallet().movement)
             }
         }
@@ -127,47 +163,108 @@ class FreePathFleetExample(
     override fun initialize() {
         activate(Source().arrivals)
     }
+
+    companion object {
+        const val TIME_IN_SYSTEM: String = "TimeInSystem"
+        const val DELIVERED: String = "Delivered"
+        const val REPLICATIONS: Int = 40
+        const val HORIZON: Double = 8000.0
+        const val WARM_UP: Double = 1000.0
+
+        /** The four cells of the study: two cart capacities against two batching windows. */
+        fun cells(): List<Triple<String, Int, Double>> = listOf(
+            Triple("Capacity1Window25", 1, 25.0),
+            Triple("Capacity4Window25", 4, 25.0),
+            Triple("Capacity1Window40", 1, 40.0),
+            Triple("Capacity4Window40", 4, 40.0)
+        )
+
+        /**
+         *  One scenario per cell. Load capacity is a property of the vehicles and the batching
+         *  window a property of the policy, so both are fixed when the model is built: this is a
+         *  runner over model instances rather than over control values.
+         */
+        fun buildRunner(): ScenarioRunner {
+            val runner = ScenarioRunner("FreePathFleetYard")
+            for ((label, capacity, window) in cells()) {
+                val m = Model("FreePathYard_$label")
+                FreePathFleetExample(m, capacity, label, batchWindow = window)
+                runner.addScenario(
+                    model = m, name = label, inputs = emptyMap(),
+                    numberReplications = REPLICATIONS, lengthOfReplication = HORIZON,
+                    lengthOfReplicationWarmUp = WARM_UP
+                )
+            }
+            return runner
+        }
+    }
 }
 
 fun main() {
-    // Two capacities against two batching windows. The window is what collects several tasks so
-    // that there is anything to consolidate; capacity is what lets a cart take them.
-    val cells = listOf(
-        Cell("capacity 1, window 25", run(1, "C1W25", window = 25.0)),
-        Cell("capacity 4, window 25", run(4, "C4W25", window = 25.0)),
-        Cell("capacity 1, window 40", run(1, "C1W40", window = 40.0)),
-        Cell("capacity 4, window 40", run(4, "C4W40", window = 40.0))
-    )
+    val runner = FreePathFleetExample.buildRunner()
+    runner.simulate()
+    // Full half-width summary reports for all four cells go to the KSL output file; the console
+    // gets the comparison.
+    runner.write()
 
     println()
     println("A dispatcher over a plane -- no guide path, nothing that blocks")
-    println("Two carts, pallets from Press to Ship, 10 replications of 8000 after a 1000 warm-up")
+    println("Two carts, pallets from Press to Ship, ${FreePathFleetExample.REPLICATIONS} replications " +
+        "of ${FreePathFleetExample.HORIZON.toInt()} after a ${FreePathFleetExample.WARM_UP.toInt()} warm-up")
     println()
-    println("  %-24s %10s %10s %10s %10s %8s %9s".format(
-        "", "delivered", "in system", "assigned", "aboard", "blocked", "loads/move"))
-    for (c in cells) {
-        println("  %-24s %10.1f %10.2f %10.2f %10.2f %8.4f %9s".format(
-            c.label, c.r.delivered, c.r.timeInSystem, c.r.waitForAssignment, c.r.timeAboard,
-            c.r.blocked, c.r.loadsPerLoadedMove?.let { "%.3f".format(it) } ?: "--"))
+    println("  %-20s %11s %8s %11s %8s %9s %11s".format(
+        "", "delivered", "hw", "in system", "hw", "blocked", "loads/move"))
+    for ((label, _, _) in FreePathFleetExample.cells()) {
+        val run = checkNotNull(runner.scenarioByName(label)?.simulationRun) { "$label did not run" }
+        val stats = run.acrossReplicationStatistics()
+        val d = checkNotNull(stats[FreePathFleetExample.DELIVERED]) { "no delivered response" }
+        val t = checkNotNull(stats[FreePathFleetExample.TIME_IN_SYSTEM]) { "no time in system" }
+        val b = checkNotNull(stats["Cart1:Body:FracTimeBlocked"]) { "no blocked response" }
+        val loads = stats["Cart1:Body:LoadsPerLoadedMove"]
+        println("  %-20s %11.1f %8.1f %11.2f %8.2f %9.4f %11s".format(
+            label, d.average, d.halfWidth, t.average, t.halfWidth, b.average,
+            loads?.let { "%.3f".format(it.average) } ?: "--"))
+    }
+
+    // Within a window, capacity 1 against capacity 4, paired replication by replication.
+    for (window in listOf(25, 40)) {
+        val one = "Capacity1Window$window"
+        val four = "Capacity4Window$window"
+        println()
+        println("Window $window: $one minus $four, paired by replication (95% intervals)")
+        println()
+        println("  %-16s %13s %13s %13s".format("response", "difference", "half-width", "detectable?"))
+        for (response in listOf(FreePathFleetExample.DELIVERED, FreePathFleetExample.TIME_IN_SYSTEM)) {
+            val observations = runner.observationsAsMap(response).filterKeys { it == one || it == four }
+            check(observations.size == 2) {
+                "expected $response for both $one and $four, got ${observations.keys}"
+            }
+            val mca = MultipleComparisonAnalyzer(observations, response)
+            val d = checkNotNull(mca.pairedDifferenceStatistic(one, four)) { "no pair for $response" }
+            val detectable = if (kotlin.math.abs(d.average) > d.halfWidth) "yes" else "no"
+            println("  %-16s %13.3f %13.3f %13s".format(response, d.average, d.halfWidth, detectable))
+        }
     }
 
     println()
-    println("Read the throughput column first.")
+    println("Read the throughput row of each pair first.")
     println()
-    println("  At window 25 the two rows deliver the same load -- %.1f against %.1f -- so the".format(
-        cells[0].r.delivered, cells[1].r.delivered))
-    println("  times beside them are comparable, and carrying up to four cuts time in system by")
-    println("  %.0f%%. At window 40 the capacity-1 fleet delivers %.1f against %.1f: it has fallen".format(
-        100.0 * (1.0 - cells[1].r.timeInSystem / cells[0].r.timeInSystem),
-        cells[2].r.delivered, cells[3].r.delivered))
-    println("  behind, so its time in system is a number about the loads it managed rather than")
-    println("  about the fleet. Comparing it with anything would be comparing two different")
-    println("  questions. **Check throughput parity before believing a time-in-system comparison.**")
+    println("  At window 25 the two capacities deliver indistinguishable loads, so the time-in-system")
+    println("  difference beside it is a comparison of two fleets doing the same work, and carrying")
+    println("  up to four is worth having. At window 40 the capacity-1 fleet delivers detectably")
+    println("  fewer: it has fallen behind, so its time in system is a number about the loads it")
+    println("  managed rather than about the fleet, and comparing the times would be comparing two")
+    println("  different questions.")
     println()
-    println("  The window is a cost paid by every load and redeemed only by capacity: widening it")
-    println("  from 25 to 40 makes the capacity-1 fleet much worse and the capacity-4 fleet only")
-    println("  slightly worse, because only the latter can do anything with what the window")
-    println("  collected. Loads per loaded move says how much of the room was actually used.")
+    println("  Check throughput parity before believing a time-in-system comparison. The paired")
+    println("  difference is what makes 'indistinguishable' and 'detectably fewer' statements about")
+    println("  the run rather than about the reader's eye.")
+    println()
+    println("  The replication count is part of that. At ten replications the window-40 throughput")
+    println("  deficit was about eight loads with a half-width of nine: the point estimate said the")
+    println("  fleet had fallen behind and the interval could not tell it from noise, which is a")
+    println("  reason to run more replications rather than to believe the point estimate. Forty")
+    println("  resolves it.")
     println()
     println("The blocked column is zero everywhere, and will be in every free-path run.")
     println()
@@ -176,50 +273,6 @@ fun main() {
     println("  the output rather than being left to be remembered. A guide path fills that column")
     println("  in, and the difference between the two is what a substrate comparison measures.")
     println("  See ksl.examples.general.agv for the same machinery where the aisles push back.")
-}
-
-private class Cell(val label: String, val r: Result)
-
-private class Result(
-    val delivered: Double,
-    val timeInSystem: Double,
-    val waitForAssignment: Double,
-    val timeAboard: Double,
-    val movingEmpty: Double,
-    val blocked: Double,
-    val loadsPerLoadedMove: Double?,
-    val capacityUsed: Double?
-)
-
-private fun run(capacity: Int, label: String, tba: Double = 20.0, window: Double = 20.0, carts: Int = 2): Result {
-    val m = Model("FreePathYard_$label")
-    val shop = FreePathFleetExample(m, capacity, label, tba, window, carts)
-    m.numberOfReplications = 10
-    m.lengthOfReplication = 8000.0
-    m.lengthOfReplicationWarmUp = 1000.0
-    m.simulate()
-
-    fun avg(name: String): Double? =
-        m.response(name)?.acrossReplicationStatistic?.average
-
-    return Result(
-        delivered = m.counter("$label:Delivered")?.acrossReplicationStatistic?.average ?: Double.NaN,
-        timeInSystem = avg("$label:TimeInSystem") ?: Double.NaN,
-        waitForAssignment = shop.fleet.dispatcher.waitForAssignment.acrossReplicationStatistic.average,
-        timeAboard = shop.fleet.timeAboard.acrossReplicationStatistic.average,
-        movingEmpty = shop.carts[0].fracTimeMovingEmpty.acrossReplicationStatistic.average,
-        blocked = shop.carts[0].fracTimeBlocked.acrossReplicationStatistic.average,
-        // Registered on the body, so read by row name rather than off the vehicle.
-        loadsPerLoadedMove = avg("Cart1:Body:LoadsPerLoadedMove"),
-        capacityUsed = avg("Cart1:Body:CapacityUtilization")
-    )
-}
-
-private fun row(label: String, a: Double, b: Double) {
-    println("  %-28s %14.4f %17.4f".format(label, a, b))
-}
-
-private fun row(label: String, a: Double?, b: Double?) {
-    fun f(v: Double?) = if (v == null) "         --" else "%11.4f".format(v)
-    println("  %-28s %17s %17s".format(label, f(a), f(b)))
+    println()
+    println("  Full half-width summary reports for all four cells: ${KSL.outDir}")
 }

@@ -281,7 +281,7 @@ tasks.register<JavaExec>("showcaseCapture") {
 tasks.register<JavaExec>("guidedPathBenchmark") {
     group = "verification"
     description = "Run the guided path throughput benchmark and print the reference figures."
-    mainClass.set("ksl.examples.general.guidedpath.GuidedPathThroughputBenchmark")
+    mainClass.set("ksl.examples.general.guidedpath.GuidedPathThroughputBenchmarkKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
@@ -290,7 +290,7 @@ tasks.register<JavaExec>("guidedPathBenchmark") {
 tasks.register<JavaExec>("agvBenchmark") {
     group = "verification"
     description = "Run the AGV throughput benchmark, active against passive, on one layout."
-    mainClass.set("ksl.examples.general.agv.AgvThroughputBenchmark")
+    mainClass.set("ksl.examples.general.agv.AgvThroughputBenchmarkKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
@@ -299,7 +299,7 @@ tasks.register<JavaExec>("agvBenchmark") {
 tasks.register<JavaExec>("simpleAgvExample") {
     group = "application"
     description = "Run the simple AGV guided-path example."
-    mainClass.set("ksl.examples.general.guidedpath.SimpleAGVExample")
+    mainClass.set("ksl.examples.general.guidedpath.SimpleAGVExampleKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
@@ -320,27 +320,27 @@ tasks.register<JavaExec>("twoLaneWarehouseExample") {
 tasks.register<JavaExec>("twoParadigmsExample") {
     group = "examples"
     description = "Run the same shop both ways: a passive pool and an active dispatcher."
-    mainClass.set("ksl.examples.general.agv.TwoParadigmsExample")
+    mainClass.set("ksl.examples.general.agv.TwoParadigmsExampleKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
 tasks.register<JavaExec>("dispatchingRuleComparison") {
     group = "examples"
     description = "Run six dispatching rules on common random numbers."
-    mainClass.set("ksl.examples.general.agv.DispatchingRuleComparison")
+    mainClass.set("ksl.examples.general.agv.DispatchingRuleComparisonKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
 tasks.register<JavaExec>("retaskingExample") {
     group = "examples"
     description = "Run the re-tasking in flight example."
-    mainClass.set("ksl.examples.general.agv.RetaskingInFlightExample")
+    mainClass.set("ksl.examples.general.agv.RetaskingInFlightExampleKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
 
 tasks.register<JavaExec>("multiFloorHospitalExample") {
     group = "examples"
     description = "Run the two-floor hospital study: lifts as one-zone links."
-    mainClass.set("ksl.examples.general.agv.MultiFloorHospitalExample")
+    mainClass.set("ksl.examples.general.agv.MultiFloorHospitalExampleKt")
     classpath = sourceSets["main"].runtimeClasspath
 }

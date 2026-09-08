@@ -1,3 +1,21 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package ksl.examples.general.guidedpath
 
 import ksl.modeling.guidedpath.GuidedPathNetwork
@@ -34,6 +52,13 @@ import ksl.utilities.random.rvariable.ConstantRV
  *  both are diagnostic tools that walk every zone, and leaving them on would measure them rather
  *  than the engine. Deadlock detection is left **on**, because that is the configuration a model
  *  actually runs in, and a benchmark of a configuration nobody uses is not worth having.
+ *
+ *  ## Why this reports no confidence intervals
+ *
+ *  It is a benchmark rather than a study. The quantity of interest is wall-clock time on one
+ *  machine, and a half-width over replications of the same deterministic workload would describe
+ *  the machine's scheduler rather than the model. Record the figure alongside the hardware and
+ *  compare like with like.
  */
 object GuidedPathThroughputBenchmark {
 
@@ -163,8 +188,7 @@ object GuidedPathThroughputBenchmark {
         )
     }
 
-    @JvmStatic
-    fun main(args: Array<String>) {
+    fun report() {
         val warmUp = run(replicationLength = 20_000.0)
         println("warm-up (JIT): ${"%,.0f".format(warmUp.zoneTraversals)} traversals in ${"%.2f".format(warmUp.wallClockSeconds)} s")
         val result = run()
@@ -187,4 +211,8 @@ object GuidedPathThroughputBenchmark {
         println("  OS                 : ${System.getProperty("os.name")} ${System.getProperty("os.arch")}")
         println("  processors         : ${Runtime.getRuntime().availableProcessors()}")
     }
+}
+
+fun main() {
+    GuidedPathThroughputBenchmark.report()
 }

@@ -1,3 +1,21 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
 package ksl.examples.general.agv
 
 import ksl.modeling.agv.AgvSystem
@@ -8,7 +26,11 @@ import ksl.modeling.guidedpath.LinkType
 import ksl.modeling.guidedpath.TransporterPlacement
 import ksl.modeling.guidedpath.exceptions.GuidedPathDeadlockException
 import ksl.modeling.variable.Counter
+import ksl.modeling.variable.CounterCIfc
+import ksl.modeling.variable.RandomVariable
+import ksl.modeling.variable.RandomVariableCIfc
 import ksl.modeling.variable.Response
+import ksl.modeling.variable.ResponseCIfc
 import ksl.simulation.Model
 import ksl.simulation.ModelElement
 import ksl.utilities.random.rvariable.ConstantRV
@@ -68,7 +90,8 @@ import ksl.utilities.random.rvariable.UniformRV
  *
  *  **Study 1 sweeps the fleet on the two-lane grid**, and finds three things:
  *
- *  1. **Throughput plateaus.** Around six carts the completion count stops moving. A free-path
+ *  1. **Throughput plateaus.** Around six carts the completion count stops rising in any way worth
+ *     paying for -- the last four carts buy a gain smaller than the interval around it. A free-path
  *     model would go on rewarding every cart added, for ever, because nothing in it can represent
  *     an aisle. Where the reward stops is the number a fleet-sizing study exists to find.
  *  2. **The carts you add past that are not idle -- they are blocked.** Fleet time blocked roughly
@@ -195,31 +218,56 @@ class TwoLaneWarehouseExample(
         ).apply { homeBase = "P$k" }
     }
 
-    val timeInSystem = Response(this, "${this.name}:TimeInSystem")
-    val delivered = Counter(this, "${this.name}:Delivered")
+    private val myTimeInSystem = Response(this, "${this.name}:TimeInSystem")
+    val timeInSystem: ResponseCIfc
+        get() = myTimeInSystem
 
-    private val timeBetweenArrivals = ExponentialRV(meanTBA, streamNum = 1)
-    private val whichFace = UniformRV(0.0, NUM_AISLES.toDouble(), streamNum = 2)
-    private val pickTime = ConstantRV(2.0)
+    private val myDelivered = Counter(this, "${this.name}:Delivered")
+    val delivered: CounterCIfc
+        get() = myDelivered
+
+    /** The fleet's average blocked fraction, observed once per replication so that it carries a
+     *  confidence interval like any other response. */
+    private val myFleetBlocked = Response(this, "${this.name}:FleetFracBlocked")
+    val fleetBlocked: ResponseCIfc
+        get() = myFleetBlocked
+
+    // Two streams, deliberately separated: sharing one would couple which face a pallet came from
+    // to when it arrived, so changing the fleet size would change the sequence of pick faces too.
+    private val myTimeBetweenArrivals = RandomVariable(
+        this, ExponentialRV(meanTBA, streamNum = 1), name = "${this.name}:TBA"
+    )
+    val timeBetweenArrivalsRV: RandomVariableCIfc
+        get() = myTimeBetweenArrivals
+
+    private val myWhichFace = RandomVariable(
+        this, UniformRV(0.0, NUM_AISLES.toDouble(), streamNum = 2), name = "${this.name}:WhichFace"
+    )
+    val whichFaceRV: RandomVariableCIfc
+        get() = myWhichFace
+
+    private val myPickTime = RandomVariable(this, ConstantRV(2.0), name = "${this.name}:PickTime")
+    val pickTimeRV: RandomVariableCIfc
+        get() = myPickTime
 
     inner class Pallet : Entity() {
         val movement = process(isDefaultProcess = true) {
             val arrived = time
-            val face = pickFace(whichFace.value.toInt().coerceIn(0, NUM_AISLES - 1))
+            val face = pickFace(myWhichFace.value.toInt().coerceIn(0, NUM_AISLES - 1))
             currentLocation = network.requireLocation(face)
             transportByFleet(
                 agv, destination = DOCK, origin = face,
-                loadingDelay = pickTime, unLoadingDelay = pickTime
+                loadingDelay = myPickTime, unLoadingDelay = myPickTime
             )
-            timeInSystem.value = time - arrived
-            delivered.increment()
+            myTimeInSystem.value = time - arrived
+            myDelivered.increment()
         }
     }
 
     inner class Source : Entity() {
         val arrivals = process(isDefaultProcess = true) {
             while (true) {
-                delay(timeBetweenArrivals)
+                delay(myTimeBetweenArrivals)
                 activate(Pallet().movement)
             }
         }
@@ -227,6 +275,12 @@ class TwoLaneWarehouseExample(
 
     override fun initialize() {
         activate(Source().arrivals)
+    }
+
+    override fun replicationEnded() {
+        super.replicationEnded()
+        myFleetBlocked.value =
+            carts.sumOf { it.fracTimeBlocked.withinReplicationStatistic.weightedAverage } / numCarts
     }
 }
 
@@ -237,12 +291,29 @@ private const val MEAN_TBA: Double = 3.0
 
 private class Outcome(
     val delivered: Double,
+    val deliveredHW: Double,
     val timeInSystem: Double,
+    val timeInSystemHW: Double,
     val blocked: Double,
+    val blockedHW: Double,
     val deadlockedAmong: Int = 0
 ) {
     val deadlocked: Boolean get() = deadlockedAmong > 0
+
+    companion object {
+        fun deadlock(participants: Int) =
+            Outcome(Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, Double.NaN, participants)
+    }
 }
+
+/**
+ *  This sweep is run by hand rather than through a [ksl.controls.experiments.ScenarioRunner], and
+ *  the reason is the `catch` below. A design point here can end in a circular wait, which is a
+ *  **result** rather than a failure -- "this layout cannot carry this fleet" is very often the
+ *  finding a study is after. A runner would propagate the exception out of the whole sweep and lose
+ *  the rows on either side of it. The half-widths the runner would have supplied are computed here
+ *  instead, from each response's across-replication statistic.
+ */
 
 private fun runFleet(carts: Int, twoLane: Boolean): Outcome {
     val tag = if (twoLane) "Two" else "One"
@@ -253,17 +324,19 @@ private fun runFleet(carts: Int, twoLane: Boolean): Outcome {
     m.lengthOfReplicationWarmUp = 1000.0
     return try {
         m.simulate()
+        val d = shop.delivered.acrossReplicationStatistic
+        val t = shop.timeInSystem.acrossReplicationStatistic
+        val b = shop.fleetBlocked.acrossReplicationStatistic
         Outcome(
-            delivered = shop.delivered.acrossReplicationStatistic.average,
-            timeInSystem = m.response("W$tag$carts:TimeInSystem")
-                ?.acrossReplicationStatistic?.average ?: Double.NaN,
-            blocked = shop.carts.sumOf { it.fracTimeBlocked.acrossReplicationStatistic.average } / carts
+            delivered = d.average, deliveredHW = d.halfWidth,
+            timeInSystem = t.average, timeInSystemHW = t.halfWidth,
+            blocked = b.average, blockedHW = b.halfWidth
         )
     } catch (e: GuidedPathDeadlockException) {
         // A domain outcome, not a defect: this layout cannot carry this fleet. The report names
         // every participant in the cycle, which is what says whether it closed through a lane or
         // through the junctions.
-        Outcome(Double.NaN, Double.NaN, Double.NaN, deadlockedAmong = e.report.participants.size)
+        Outcome.deadlock(e.report.participants.size)
     }
 }
 
@@ -271,13 +344,17 @@ private fun table(title: String, sizes: List<Int>, results: Map<Int, Outcome>) {
     println()
     println(title)
     println()
-    println("  %-8s %12s %12s %10s".format("carts", "delivered", "in system", "blocked"))
+    println("  %-6s %11s %8s %11s %9s %9s %8s".format(
+        "carts", "delivered", "hw", "in system", "hw", "blocked", "hw"))
     for (n in sizes) {
         val o = results.getValue(n)
         if (o.deadlocked) {
-            println("  %-8d %12s %12s %10s".format(n, "DEADLOCK", "--", "--"))
+            println("  %-6d %11s %8s %11s %9s %9s %8s".format(
+                n, "DEADLOCK", "--", "--", "--", "--", "--"))
         } else {
-            println("  %-8d %12.1f %12.2f %10.4f".format(n, o.delivered, o.timeInSystem, o.blocked))
+            println("  %-6d %11.1f %8.1f %11.2f %9.2f %9.4f %8.4f".format(
+                n, o.delivered, o.deliveredHW, o.timeInSystem, o.timeInSystemHW,
+                o.blocked, o.blockedHW))
         }
     }
 }
@@ -306,12 +383,20 @@ fun main() {
     }
     println()
     if (plateau != null && peak != null) {
-        println("  Throughput reaches its ceiling at %d cart(s) and does not move after it.".format(plateau))
         val big = served.maxOrNull()!!
-        println("  From %d to %d carts, deliveries go %.1f -> %.1f while fleet time blocked goes %.1f%% -> %.1f%%.".format(
-            plateau, big,
-            two.getValue(plateau).delivered, two.getValue(big).delivered,
-            100.0 * two.getValue(plateau).blocked, 100.0 * two.getValue(big).blocked
+        val a = two.getValue(plateau)
+        val b = two.getValue(big)
+        val gain = b.delivered - a.delivered
+        val bound = a.deliveredHW + b.deliveredHW
+        println("  Throughput flattens at %d cart(s).".format(plateau))
+        println("  From %d to %d carts, deliveries go %.1f (+/- %.1f) -> %.1f (+/- %.1f): a gain of %.1f".format(
+            plateau, big, a.delivered, a.deliveredHW, b.delivered, b.deliveredHW, gain
+        ))
+        println("  against intervals summing to %.1f, so it is %s.".format(
+            bound, if (gain > bound) "real but negligible" else "not distinguishable from none"
+        ))
+        println("  Over the same range fleet time blocked goes %.1f%% -> %.1f%%.".format(
+            100.0 * a.blocked, 100.0 * b.blocked
         ))
         println("  The carts bought past the ceiling are not idle. They are in each other's way.")
     }
