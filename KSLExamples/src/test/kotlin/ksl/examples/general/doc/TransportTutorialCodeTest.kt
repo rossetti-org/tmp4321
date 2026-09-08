@@ -49,6 +49,11 @@ import kotlin.test.fail
  *
  *  Skipped rather than failed when the guide is absent, so a source-only checkout with no `docs/`
  *  tree still builds.
+ *
+ *  A second check guards the stronger promise the tutorial makes. Each case says it gives its
+ *  example "in full", and [theFullListingsAreComplete] holds it to that: every executable line of
+ *  every file named that way must appear somewhere on the page. Add a line to an example and
+ *  forget the tutorial, and the build says which line.
  */
 class TransportTutorialCodeTest {
 
@@ -179,6 +184,78 @@ class TransportTutorialCodeTest {
                     "250 quoted lines; got ${found.size} excerpts, ${cases.size} cases, " +
                     "$quotedLines lines. If the tutorial was restructured, update this test — " +
                     "otherwise the check above passes vacuously.",
+            )
+        }
+    }
+
+    /** Files the tutorial claims to reproduce completely, from its own "`X.kt` in full" phrasing. */
+    private fun claimedInFull(): List<String> =
+        Regex("""`(\w+\.kt)`\s+in full""")
+            .findAll(Files.readString(guide))
+            .map { it.groupValues[1] }
+            .distinct()
+            .toList()
+
+    /** Lines of a Kotlin source that a reader needs: not blank, not comment, not import or package. */
+    private fun executableLines(body: List<String>): List<String> {
+        val out = mutableListOf<String>()
+        var inBlockComment = false
+        for (raw in body) {
+            val t = raw.trim()
+            if (t.startsWith("/*")) inBlockComment = true
+            if (inBlockComment) {
+                if (t.contains("*/")) inBlockComment = false
+                continue
+            }
+            if (t.isEmpty() || t.startsWith("//") || t.startsWith("*")) continue
+            if (t.startsWith("import ") || t.startsWith("package ")) continue
+            out.add(t)
+        }
+        return out
+    }
+
+    @Test
+    @DisplayName("every example the tutorial gives \"in full\" really is there in full")
+    fun theFullListingsAreComplete() {
+        assumeTrue(Files.isRegularFile(guide), "guide not present in this checkout")
+        val shown = excerpts().flatMap { e -> e.lines }.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        val sources = sourcesByName()
+        val claimed = claimedInFull()
+        val failures = mutableListOf<String>()
+        var checked = 0
+        for (name in claimed) {
+            val bodies = sources[name]
+            if (bodies == null) {
+                failures.add("the tutorial says it gives $name in full, but no such file is under $sourceRoot")
+                continue
+            }
+            // Ambiguous names: satisfied by whichever copy the page actually reproduces.
+            val best = bodies.minByOrNull { b -> executableLines(b).count { it !in shown } }!!
+            val code = executableLines(best)
+            checked += code.size
+            val missing = code.filter { it !in shown }
+            if (missing.isNotEmpty()) {
+                failures.add(
+                    "$name is given \"in full\" but ${missing.size} of its ${code.size} " +
+                        "executable lines are not on the page:\n" +
+                        missing.take(20).joinToString("\n") { "      $it" } +
+                        if (missing.size > 20) "\n      ... and ${missing.size - 20} more" else ""
+                )
+            }
+        }
+        if (claimed.size < 8 || checked < 1_000) {
+            fail(
+                "expected at least 8 examples claimed \"in full\" totalling 1,000 executable lines; " +
+                    "got ${claimed.size} files and $checked lines. If the tutorial was restructured, " +
+                    "update this test — otherwise the check below passes vacuously.",
+            )
+        }
+        if (failures.isNotEmpty()) {
+            fail(
+                "the tutorial promises these examples in full and does not deliver them:\n" +
+                    failures.joinToString("\n") { "  $it" } +
+                    "\nAdd the missing lines to docs/guides/ksl-transport-tutorial.md, or stop " +
+                    "saying \"in full\" for that example.",
             )
         }
     }
