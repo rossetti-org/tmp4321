@@ -1,8 +1,10 @@
 # Vehicles in KSL — a tutorial through the examples
 
-*Ten worked cases.* Each one states a problem, describes the model, shows what
-it produced, and says what that is evidence **for**. Every figure on this page
-came from running the example named beside it; none is recalled or estimated.
+*Ten worked cases.* Each one states a **problem**, describes the **model** with a
+figure of the layout, walks through the **code** that expresses it, shows what it
+**produced**, and says what that is evidence **for**. Every figure on this page
+came from running the example named beside it; none is recalled or estimated, and
+every line of code is quoted from the file it names.
 
 If you have not met the four transport subsystems, read
 [`ksl-transport`](ksl-transport.md) first — it is one page and it is the map
@@ -30,6 +32,15 @@ The examples are ordered so that each one needs only what came before it.
 **A note on the output.** Several examples print warnings above their tables —
 horizon diagnostics, and in two cases deadlock reports logged at ERROR. Those
 are the audit doing its job, not a fault. Read the tables last.
+
+**Reading the code.** Each case has a **The code** section that quotes the example
+itself — not a simplification of it — and explains what each construct is doing in
+terms of that case's problem. The excerpts are verbatim, elided with `...` where a
+detail is beside the point, and a test
+(`KSLExamples/src/test/kotlin/.../TransportTutorialCodeTest.kt`) checks that every
+quoted line is still in the file the case names. **Read them with the file open**:
+the sections quote what is load-bearing and leave the rest, and the rest is often
+worth having.
 
 **Reading the figures.** Every case that models a network has a figure of it,
 drawn from the code that builds it. The figures are **topological**: an arrow is
@@ -96,6 +107,131 @@ cart. Four properties of that description are load-bearing:
   two six-foot carts cannot close to less than six; the home spurs are six feet
   and get a zone size of their own. Zone size belongs to a *link* precisely so
   that this is expressible.
+
+### The code
+
+*All of it in `SimpleAGVExample.kt`.*
+
+**Zone size belongs to a link, and this example is why.** The two constants at the
+top of the file are not decoration:
+
+```kotlin
+const val LOOP_ZONE_LENGTH: Double = 12.0
+const val HOME_SPUR_ZONE_LENGTH: Double = 6.0
+```
+
+and they are spent one per link, in the builder:
+
+```kotlin
+.link("Link1", "I1", "I2", length = 48.0, zoneLength = LOOP_ZONE_LENGTH, beginDirection = 0.0)
+.link(
+    "Spur", "I4", "I5", length = 36.0, zoneLength = LOOP_ZONE_LENGTH,
+    type = LinkType.SPUR, beginDirection = 270.0
+)
+.link(
+    "Link5", "I2", "I6", length = 6.0, zoneLength = HOME_SPUR_ZONE_LENGTH,
+    type = LinkType.SPUR, beginDirection = 0.0
+)
+```
+
+The loop is cut at twelve feet so that two six-foot carts cannot close to less
+than six while moving. A home spur is six feet **altogether** — one cart, and half
+a loop zone. A network-wide zone size would have to make one of those two wrong,
+which is the argument for `zoneLength` sitting where it does. `LinkType.SPUR` is
+the other load-bearing argument: it makes a link a dead end entered and left from
+the same junction, which is what lets a cart wait at the mouth rather than
+following another in.
+
+**Three declarations put a shop on a guide path.**
+
+```kotlin
+val network: GuidedPathNetwork = createNetwork()
+
+init {
+    // The parts travel on the guide path, so it is their spatial model too.
+    spatialModel = network
+}
+
+val system = GuidedPathTransportSystem(this, network, name = "AgvSystem")
+```
+
+The middle one is the one that is easy to leave out. Assigning `spatialModel` is
+what makes `currentLocation` mean *a junction on this network*, and it is why the
+part further down can name a station and be understood. The network is the
+geometry; `GuidedPathTransportSystem` is the thing that runs vehicles over it.
+
+**The whole experiment is one constructor argument.** Each cart is placed on its
+own spur and told to go back to it:
+
+```kotlin
+val cart1 = GuidedTransporter(
+    system, TransporterPlacement.At(AGV1_HOME), ConstantRV(10.0), 1, EndOfZoneControl(), "Cart1"
+).apply { homeBase = AGV1_HOME }
+```
+
+and the pool is where the two runs part company:
+
+```kotlin
+val carts = GuidedTransporterPoolWithQ(
+    this, system, listOf(cart1, cart2),
+    ClosestByNetworkDistanceRule(),
+    if (sendCartsHome) ReturnToHomeBaseRule() else ParkInPlaceRule(),
+    "Carts"
+)
+```
+
+A pool takes **two** rules, and they answer different questions.
+`ClosestByNetworkDistanceRule` decides which cart comes when one is wanted. The
+*idle disposition* rule decides where a cart goes when nobody wants it — and only
+that one changes between the runs, by way of a single `if` in a single argument
+position. `homeBase` is set on both carts either way, so even the declarations are
+identical; what differs is whether anything ever reads them.
+
+**The part is where the passive paradigm becomes visible.**
+
+```kotlin
+inner class Part : Entity() {
+    val delivery = process(isDefaultProcess = true) {
+        val arrived = time
+        currentLocation = network.requireLocation(ENTRY_STATION)
+        guidedTransport(
+            carts,
+            destination = EXIT_STATION,
+            pickupLocation = ENTRY_STATION,
+            loadingDelay = ConstantRV(0.5),
+            unLoadingDelay = ConstantRV(0.5)
+        )
+        timeInSystem.value = time - arrived
+        completed.increment()
+    }
+}
+```
+
+The part names the pool it wants a cart from — that is what "passive" means here.
+One suspending call covers the entire journey: a cart is chosen, drives to
+`ENTRY_STATION`, is loaded for half a minute, carries the part round the loop and
+down the exit spur, and is unloaded, and only then does the next line run.
+`currentLocation` has to be set first because a transporter is summoned to a
+*named junction*: the part is collected from the station it says it is standing
+at, not from wherever it happens to be.
+
+**And nothing else differs between the two runs.**
+
+```kotlin
+fun run(sendCartsHome: Boolean): AgvShop {
+    val m = Model(if (sendCartsHome) "SimpleAGVExample" else "SimpleAGVExampleParked")
+    val shop = AgvShop(m, sendCartsHome = sendCartsHome)
+    m.numberOfReplications = 10
+    m.lengthOfReplication = 8_000.0
+    m.lengthOfReplicationWarmUp = 1_000.0
+    m.simulate()
+    return shop
+}
+```
+
+Same replications, same horizon, same warm-up, same arrival stream. A study that
+moved any of those alongside the parking rule would produce a difference it could
+not attribute to anything.
 
 ### What it shows
 
@@ -168,6 +304,95 @@ paradigm the choice of *which* cart is made inside the part's own process, at
 the instant it happens to ask, over whatever is free then. There is nowhere else
 it could be made, because no other object is running.
 
+### The code
+
+*Both shops are in `TwoParadigmsExample.kt`, one after the other, and the file is
+worth opening side by side with this page.*
+
+**They share the layout by construction.** Each class begins the same way, and
+calls the same function:
+
+```kotlin
+val network = createNetwork()
+
+init {
+    spatialModel = network
+}
+```
+
+Not a copied builder, not two networks that ought to match — one function, called
+twice. If the layouts could drift apart, the comparison would be measuring the
+drift.
+
+**Four declarations differ.** Passive:
+
+```kotlin
+val space = GuidedPathTransportSystem(this, network, name = "Space")
+
+val cart = GuidedTransporter(
+    space, TransporterPlacement.At(DEPOT), ConstantRV(CART_SPEED), name = "Cart"
+).apply { homeBase = DEPOT }
+
+val carts = GuidedTransporterPoolWithQ(
+    this, space, listOf(cart), ClosestByNetworkDistanceRule(), ReturnToHomeBaseRule(), "Carts"
+)
+```
+
+Active:
+
+```kotlin
+val agv = AgvSystem(this, network, name = "Agv")
+
+val cart = AgvVehicle(
+    agv, TransporterPlacement.At(DEPOT), ConstantRV(CART_SPEED), name = "Cart"
+).apply { homeBase = DEPOT }
+```
+
+The active side is *shorter*, which is the first surprise. There is no pool,
+because an `AgvSystem` **is** the fleet and the dispatcher: the vehicles register
+themselves with it, and the assignment policy is a constructor argument with a
+default rather than a separate object the modeller assembles. The placement, the
+speed, the home base and the network are word for word the same on both sides.
+
+**And one line inside the process differs.** Passive:
+
+```kotlin
+guidedTransport(carts, destination = EXIT, pickupLocation = ENTRY)
+```
+
+Active:
+
+```kotlin
+transportByFleet(agv, destination = EXIT, origin = ENTRY)
+```
+
+Read the receivers. The passive call names `carts` — a **pool**, a container of
+candidates, which the part is choosing from at this instant. The active call names
+`agv` — a **system**, which will decide on the part's behalf, possibly later,
+possibly after weighing work the part cannot see. The parameter renamed from
+`pickupLocation` to `origin` is the same fact said from the other end: the part is
+no longer arranging its own collection, it is stating where its load is.
+
+Everything around those lines is identical, down to the arrival stream:
+
+```kotlin
+inner class Source : Entity() {
+    val arrivals = process(isDefaultProcess = true) {
+        repeat(NUM_ARRIVALS) {
+            delay(timeBetweenArrivals)
+            activate(Part().production)
+        }
+    }
+}
+```
+
+with `ExponentialRV(MEAN_TIME_BETWEEN_ARRIVALS, ARRIVAL_STREAM)` on both sides.
+**Naming the stream is what makes the agreement below meaningful.** Two runs that
+drew from different streams could agree to three digits and disagree in the
+fourth, and nobody could say whether that was the paradigm or the sampling. Here
+the two models see the same arrivals at the same instants, so a difference of any
+size would be a difference of substance.
+
 ### What it shows
 
 With one cart, "closest idle transporter" and "nearest vehicle" are the same
@@ -235,6 +460,93 @@ The leg lengths are taken from the free-path model's own distances along the
 cycle, so the two models agree about how far apart things are and disagree only
 about what a worker must do to get between them.
 
+### The code
+
+*The guide-path model is `TestAndRepairShopWithGuidedTransporters.kt`; its twin is
+chapter 8's `TestAndRepairShopWithMovableResources.kt`. Reading the two processes
+against each other is the exercise.*
+
+**The space is a constructor parameter, so the same shop can be run over another
+one.**
+
+```kotlin
+class TestAndRepairShopWithGuidedTransporters @JvmOverloads constructor(
+    parent: ModelElement,
+    numTransporters: Int = 3,
+    timeBtwArrivals: Double = 20.0,
+    name: String? = null,
+    aisleNetwork: GuidedPathNetwork? = null,
+```
+
+```kotlin
+val network: GuidedPathNetwork = aisleNetwork ?: createNetwork(numTransporters)
+```
+
+A study that wanted to ask what a different aisle plan is worth supplies one here
+and changes nothing else. The parameters beside it — `transporterVelocity`,
+`transporterHomes`, `transporterPhysicalLength`, `zoneControlRule`,
+`idleDispositionRule` — are the same idea: everything a comparison might want to
+vary is an argument with a default, so a sweep is a call rather than an edit.
+
+**The work is untouched; the movement is not.** Here is the guided part's process:
+
+```kotlin
+var at = DIAGNOSTIC
+var carried = 0.0
+currentLocation = network.requireLocation(DIAGNOSTIC)
+```
+
+```kotlin
+for (tp in plan) {
+    val leg = guidedTransport(
+        transportWorkers, destination = tp.testStation, pickupLocation = at
+    )
+    carried += leg.approachTime + leg.rideTime
+    at = tp.testStation
+    use(tp.testMachine, delayDuration = tp.processTime)
+}
+```
+
+and here is the same loop in the free-path twin:
+
+```kotlin
+transportWith(transportWorkers, toLoc = tp.testStation)
+use(tp.testMachine, delayDuration = tp.processTime)
+```
+
+**The `var at` is the whole difference, and it is not incidental bookkeeping.** On
+a distance model a worker walks to wherever the part *is*, so the part never has
+to say. On a guide path a transporter is summoned to a **named junction**, so the
+process must track which station the part is standing at and hand it over as
+`pickupLocation`. That single obligation is the API surfacing the physical fact
+the case is about: on an aisle, where you are is a claim about a place, not a
+coordinate that can be read off.
+
+**A leg reports its parts.** `guidedTransport` returns a result rather than a unit:
+
+```kotlin
+carried += lastLeg.approachTime + lastLeg.rideTime
+```
+
+`approachTime` is the empty run to fetch the part; `rideTime` is the loaded run.
+Summing them and no more is deliberate — the wait *for* a worker is queueing,
+belongs to the transport pool's own queue statistic, and would double-count if it
+were folded into transfer time.
+
+**The transporters are a pool, not named individuals.**
+
+```kotlin
+val transportWorkers = GuidedTransporterPoolWithQ(
+    this, transportSystem, carts,
+    ClosestByNetworkDistanceRule(), idleDispositionRule, "TransportWorkerPool"
+)
+```
+
+which is exactly how the free-path twin asks for them too. Both models seize *a*
+worker from a group; only the space in which that worker travels has changed. That
+is the property that makes the table below a comparison rather than two unrelated
+runs.
+
 ### What it shows
 
 Run on a comparable haul as the fleet grows (the table in
@@ -298,6 +610,90 @@ Two pickup points, deliberately: on a single-origin layout every task costs a
 given vehicle the same, so rules that rank *tasks* differently cannot be told
 apart — the comparison would be unfalsifiable and would quietly report that the
 choice does not matter.
+
+### The code
+
+*All in `DispatchingRuleComparison.kt`.*
+
+**The rule is a constructor argument, which is what makes the study a loop rather
+than six files.**
+
+```kotlin
+class Shop(parent: ModelElement, policy: AssignmentPolicyIfc) : ProcessModel(parent, "Shop") {
+```
+
+```kotlin
+val agv = AgvSystem(this, network, assignmentPolicy = policy, name = "Agv")
+```
+
+```kotlin
+val rules = listOf(
+    "nearest vehicle" to NearestVehiclePolicy(),
+    "furthest vehicle" to FurthestVehiclePolicy(),
+    "least used" to LeastUsedVehiclePolicy(),
+    "batched (window 30)" to BatchedAssignmentPolicy(30.0),
+    "contract net (instant)" to ContractNetAssignmentPolicy(0.0),
+    "contract net (deadline 5)" to ContractNetAssignmentPolicy(5.0)
+)
+```
+
+Six rules, one model class, one substitution point. `AssignmentPolicyIfc` is the
+seam: a policy is asked which vehicle should take which task and answers however it
+likes, including by taking simulated time over it — which is what
+`BatchedAssignmentPolicy(30.0)` and `ContractNetAssignmentPolicy(5.0)` do, and what
+no rule evaluated inside an asking entity could.
+
+**Two pickup points, and the reason is in the source.**
+
+```kotlin
+inner class Source : Entity() {
+    val arrivals = process(isDefaultProcess = true) {
+        repeat(NUM_ARRIVALS) {
+            delay(timeBetweenArrivals)
+            // Alternating origins, so that which task is nearest genuinely varies.
+            val from = if (it % 2 == 0) NORTH_PICKUP else SOUTH_PICKUP
+            activate(Load(from).production)
+        }
+    }
+}
+```
+
+On a single-origin layout every waiting task costs a given vehicle the same, so
+rules that rank *tasks* differently cannot be told apart and the comparison
+quietly reports that the choice does not matter. Alternating the origin is what
+gives the rules something to disagree about.
+
+**Each load reports the wait split the way the active paradigm can.**
+
+```kotlin
+val result = transportByFleet(agv, destination = SHIPPING, origin = from)
+waitForVehicle.value = result.waitForAssignment + result.waitForArrival
+```
+
+Two clocks, not one: how long until somebody decided, and how long until the
+vehicle arrived. The batched row in the table is almost entirely the first of
+these, and a model that reported only their sum would show the cost without
+showing where it came from.
+
+**Imbalance is measured at the horizon, and its type says so.**
+
+```kotlin
+val fleetImbalance = Response(this, "Shop:FleetImbalance")
+```
+
+```kotlin
+override fun replicationEnded() {
+    super.replicationEnded()
+    val counts = fleet.map { it.numTasksCompleted.value }
+    fleetImbalance.value = counts.max() - counts.min()
+}
+```
+
+Largest minus smallest per-vehicle completions: how unevenly the work fell. It is
+a `Response` rather than a `Counter` because it is **one observation of a finished
+replication**, not a quantity that accumulated during it — a distinction worth
+getting right, since a `Counter` here would report something with no meaning at
+all.
 
 ### What it shows
 
@@ -375,6 +771,83 @@ saves 200.
 Three runs: no re-tasking; re-tasking with the near job at t = 2; and
 re-tasking with the near job at t = 15, by which point the swap would *cost*
 200.
+
+### The code
+
+*All in `RetaskingInFlightExample.kt`, and it is the shortest of the ten.*
+
+**Three runs, two policies, one number moved.**
+
+```kotlin
+report(
+    "Without re-tasking: the cart commits at t=0 and finishes what it started.",
+    run(NearestVehiclePolicy(), nearArrivesAt = 2.0)
+)
+report(
+    "With re-tasking, near job at t=2 (worth 200 units): the cart is turned round.",
+    run(ReassigningPolicy(improvementThreshold = 20.0), nearArrivesAt = 2.0)
+)
+report(
+    "With re-tasking, near job at t=15 (would cost 200): the rule declines the swap.",
+    run(ReassigningPolicy(improvementThreshold = 20.0), nearArrivesAt = 15.0)
+)
+```
+
+The first run establishes that the layout does what the arithmetic says without any
+re-tasking in it. The second is the capability. The third is the same policy with
+the near job arriving thirteen units later, and it is the one that makes the second
+a finding: a policy that always swapped would produce run two's numbers and run
+three's would be wrong.
+
+**The arrival time is a constructor parameter, and the scenario is set up in
+`initialize`.**
+
+```kotlin
+override fun initialize() {
+    delivered.clear()
+    activate(Load("far", FAR_PICKUP).production)
+    activate(Load("near", NEAR_PICKUP).production, timeUntilActivation = nearArrivesAt)
+}
+```
+
+Two loads, no arrival process, no randomness anywhere: the cart's speed is
+`ConstantRV(10.0)`, the legs are 100 each, and
+
+```kotlin
+m.numberOfReplications = 1
+m.lengthOfReplication = 2_000.0
+```
+
+**One replication is the right number here**, and that is a statement about what is
+being demonstrated. The claim is not "re-tasking is better on average"; it is "at
+t = 2 the swap saves exactly 200 and the rule takes it, and at t = 15 it costs
+exactly 200 and the rule refuses". A confidence interval would obscure an
+arithmetic fact rather than support it.
+
+**What a transport returns is kept, not discarded.**
+
+```kotlin
+val delivered = linkedMapOf<String, FleetTransportResult>()
+```
+
+```kotlin
+delivered[label] = transportByFleet(agv, destination = SHIPPING, origin = from)
+```
+
+so the report can print, per load, `r.totalTime`, `r.waitForAssignment +
+r.waitForArrival` and `r.numReassignments`. That last field is the point of the
+whole example: the load that was put back keeps the wait it had already
+accumulated, because its task never left the queue, and the fact that it was passed
+over is **reported** rather than absorbed. Re-queueing it would have reset its clock
+and made the load that had waited longest look as though it had just arrived —
+corrupting both the statistic and any age-based rule reading it.
+
+The revocation count is read off the dispatcher, which is an object that exists in
+this paradigm and not in the other:
+
+```kotlin
+shop.agv.dispatcher.numAssignmentsRevoked.value
+```
 
 ### What it shows
 
@@ -457,6 +930,95 @@ each contains exactly one zone.*
 
 A one-way circuit climbs one shaft and descends the other, so **every delivery
 cycle rides each shaft exactly once**. Three studies run on it.
+
+### The code
+
+*All in `MultiFloorHospitalExample.kt`.*
+
+**The lift is a link, and one line makes it a lift.**
+
+```kotlin
+// The lift: one zone, so exactly one porter may be inside it at a time.
+.link("ShaftUp", "G3", "F1", length = shaftLength, zoneLength = shaftLength, beginDirection = 90.0)
+```
+
+`zoneLength = shaftLength` — the zone is the whole link, so the link contains
+exactly one zone, so it admits exactly one vehicle. The exclusion is not
+implemented; it is the general rule applied to a link of a particular shape.
+
+**The circuit is held constant so that the studies are comparable.**
+
+```kotlin
+val corridor = (CIRCUIT - 2.0 * shaftLength - 120.0) / 2.0
+require(corridor > 0.0) { "the shafts leave no room for corridors" }
+```
+
+This is the arithmetic that makes the two fleet tables readable against each other.
+Shorten the shafts and the corridors lengthen to absorb it, so a single porter
+travels the same 400 whichever lift it has and delivers at the same rate in both
+tables. Every difference further down the tables is therefore about how many
+porters the shaft will pass, and about nothing else. The `require` is there because
+a study that swept `shaftLength` past 140 would otherwise build a network with
+negative corridors and report something.
+
+**The population is closed, which is what makes cycle time mean something.**
+
+```kotlin
+inner class Order : Entity() {
+    val delivery: KSLProcess = process(isDefaultProcess = true) {
+        val placed = time
+        currentLocation = network.requireLocation(PHARMACY)
+        delay(preparation)
+        transportByFleet(agv, destination = WARD, origin = PHARMACY)
+        cycleTime.value = time - placed
+        delivered.increment()
+        // The shelf is never the constraint: the next order is ready the moment this one
+        // is delivered, which is what holds the outstanding work constant.
+        activate(Order().delivery)
+    }
+}
+```
+
+```kotlin
+override fun initialize() {
+    repeat(ordersInCirculation) { activate(Order().delivery) }
+}
+```
+
+```kotlin
+fun ordersFor(numPorters: Int): Int = numPorters + 2
+```
+
+An order that completes activates its own successor, so the number outstanding
+never changes for the whole run. That is why Little's law can be checked against
+the table — orders outstanding = throughput × cycle time — and why cycle time here
+is a number about the hospital rather than about how long the run was. `+ 2` is
+enough that a porter never waits for work and no more, so the fleet is the thing
+being measured.
+
+**The watcher, and a mistake worth inheriting.**
+
+```kotlin
+var t = 0.5
+while (t < horizon) {
+    schedule(::sampleShaft, t)
+    t += 1.0
+}
+```
+
+```kotlin
+val shaft = network.link("ShaftUp")!!.zones
+// `isHeld`, not `isOccupied` -- see the note in this file's header.
+val inside = shaft.count { it.isHeld }
+```
+
+Two details, both learned the hard way. Sampling is on the **half-tick** because
+with a constant velocity and equal zone lengths every zone transition here lands on
+a whole number, and an observer scheduled at those same instants sees whichever
+side of them event priority happens to put it on — which once reported an unused
+lift in a model that was plainly using one. And `isHeld` rather than `isOccupied`
+because the zone is claimed from the moment it is **reserved**, not from the moment
+a porter is inside it, and it is the reservation that does the excluding.
 
 ### What it shows
 
@@ -542,6 +1104,86 @@ rather than a manoeuvre.
 
 **Demand is set above what the building can serve on purpose**, so that the
 layout rather than the arrival stream is what limits the answer.
+
+### The code
+
+*All in `TwoLaneWarehouseExample.kt`.*
+
+**One function is the entire experimental factor.**
+
+```kotlin
+fun span(from: String, to: String, length: Double) {
+    if (twoLane) {
+        b.link("$from-$to", from, to, length = length, zoneLength = ZONE)
+        b.link("$to-$from", to, from, length = length, zoneLength = ZONE)
+    } else {
+        b.link("$from~$to", from, to, length = length, zoneLength = ZONE,
+            type = LinkType.BIDIRECTIONAL)
+    }
+}
+```
+
+That is the answer to "is it one network or two?", written out: a two-way span is
+**two calls to `link` on one builder**, so both lanes end at junctions the other
+lane also touches. The single-lane arm of the study is the same span expressed as
+one `LinkType.BIDIRECTIONAL` link, and the naming convention marks which is which:
+`B0-T0` and `T0-B0` against `B0~T0`.
+
+**The building is then written once and reads the same either way.**
+
+```kotlin
+for (i in 0 until NUM_AISLES) span("B$i", "T$i", AISLE_LENGTH)          // the pick aisles
+for (i in 0 until NUM_AISLES - 1) {
+    span("B$i", "B${i + 1}", AISLE_SPACING)                              // bottom cross-aisle
+    span("T$i", "T${i + 1}", AISLE_SPACING)                              // top cross-aisle
+}
+```
+
+Two loops and the building is laid out. Because `span` hides the lane question,
+the layout code contains no `if` at all — which is what lets the two studies claim
+to be the same building rather than two buildings that resemble each other.
+
+**A spur per cart, sized by the fleet.**
+
+```kotlin
+for (k in 0 until numCarts) {
+    b.intersection("K$k", x = (NUM_AISLES + k) * AISLE_SPACING, y = 0.0)
+    b.intersection("P$k", x = (NUM_AISLES + k) * AISLE_SPACING, y = -SPUR)
+    b.link("K$k-P$k", "K$k", "P$k", length = SPUR, zoneLength = SPUR, type = LinkType.SPUR)
+}
+```
+
+The network is built *for* a fleet size, because a shared parking area would stage
+one vehicle and leave the rest standing on the approach — available in the fleet's
+eyes and stuck in the building's. Case 1's lesson, applied before it could bite.
+
+**Demand is above capacity on purpose.**
+
+```kotlin
+/** Demand deliberately above what the building can serve, so that the layout is the constraint. */
+private const val MEAN_TBA: Double = 3.0
+```
+
+The comment is load-bearing. With demand *below* capacity the throughput column
+flattens at the arrival rate, and a reader concludes the aisles bind when nothing
+of the sort has been shown — the trap this tutorial's closing section names in
+three of these ten cases.
+
+**A deadlock is a result, and is recorded as one.**
+
+```kotlin
+} catch (e: GuidedPathDeadlockException) {
+    // A domain outcome, not a defect: this layout cannot carry this fleet. The report names
+    // every participant in the cycle, which is what says whether it closed through a lane or
+    // through the junctions.
+    Outcome(Double.NaN, Double.NaN, Double.NaN, deadlockedAmong = e.report.participants.size)
+}
+```
+
+The sweep catches the exception, marks that design point infeasible, and carries
+on. Note what is *not* done: detection is not switched off. A run with detection
+disabled would still deadlock — it would simply stop saying so, and the row would
+read as a slow configuration rather than an impossible one.
 
 ### What it shows
 
@@ -638,6 +1280,94 @@ on aisles that push back.
 
 Two cart capacities against two batching windows.
 
+### The code
+
+*All in `FreePathFleetExample.kt`.*
+
+**The substrate is two declarations and a list of named points.**
+
+```kotlin
+private val plane = Euclidean2DPlane()
+
+// A fleet is written in named places; the spatial model supplies the geometry between them.
+private val places = listOf(
+    plane.Point(0.0, 0.0, "Depot"),
+    plane.Point(300.0, 0.0, "Press"),
+    plane.Point(300.0, 200.0, "Paint"),
+    plane.Point(0.0, 200.0, "Ship")
+)
+```
+
+```kotlin
+init {
+    spatialModel = plane
+}
+```
+
+There is no network to build, no zones to size and no link directions to get right
+— which is the free path's actual advantage, and it is an advantage in *modelling
+effort*, not in fidelity. What you give up is written into the results table below
+as a column of exact zeroes.
+
+**The fleet layer is written exactly as it would be over a guide path.**
+
+```kotlin
+val fleet = FreePathFleet(
+    this, plane, places,
+    assignmentPolicy = BatchedAssignmentPolicy(window = batchWindow, inner = ConsolidatingPolicy(NearestVehiclePolicy())),
+    name = "Yard"
+)
+
+val carts = List(numCarts) { i ->
+    FreePathVehicle(
+        fleet, "Depot", ConstantRV(30.0), name = "Cart${i + 1}",
+        loadCapacity = cartCapacity, stepSize = 10.0
+    ).apply { homeBase = "Depot" }
+}
+```
+
+Read the policy from the inside out: `NearestVehiclePolicy` is the rule,
+`ConsolidatingPolicy` wraps it to fill a cart that still has room, and
+`BatchedAssignmentPolicy` wraps *that* to hold decisions open for a window so there
+is something to consolidate. All three are ordinary fleet-layer policies and none
+of them knows what it is running over. Swap the two constructor calls above for an
+`AgvSystem` and an `AgvVehicle` over a network and this composition is untouched.
+
+**Two knobs, and the second is what makes the first a finding.** `loadCapacity` is
+what lets a cart take several pallets; `batchWindow` is what collects several tasks
+for it to take. With `loadCapacity = 1` the consolidating policy has nothing to
+consolidate and the inner rule decides everything — which is why the capacity-one
+row is a fair baseline rather than a differently-configured model — and the window
+becomes pure delay. The study runs both against both:
+
+```kotlin
+val cells = listOf(
+    Cell("capacity 1, window 25", run(1, "C1W25", window = 25.0)),
+    Cell("capacity 4, window 25", run(4, "C4W25", window = 25.0)),
+    Cell("capacity 1, window 40", run(1, "C1W40", window = 40.0)),
+    Cell("capacity 4, window 40", run(4, "C4W40", window = 40.0))
+)
+```
+
+**And the load's process is the same line it would be anywhere.**
+
+```kotlin
+inner class Pallet : Entity() {
+    val movement = process(isDefaultProcess = true) {
+        val arrived = time
+        currentLocation = fleet.space.requireLocation("Press")
+        // States what it needs and suspends. It never chooses a cart.
+        transportByFleet(fleet, destination = "Ship", origin = "Press")
+        timeInSystem.value = time - arrived
+        delivered.increment()
+    }
+}
+```
+
+`fleet.space.requireLocation` rather than `network.requireLocation` is the only
+tell, and it is the same call through the same seam: a fleet asks its space for a
+named place and for the distance between two of them, and a plane can answer both.
+
 ### What it shows
 
 | | delivered | in system | blocked | loads/move |
@@ -713,6 +1443,88 @@ belongs to the machine it ran on and has no business failing a build on somebody
 else's laptop. Run it, record the figure alongside the hardware, compare like
 with like.
 
+### The code
+
+*All in `GuidedPathThroughputBenchmark.kt`.*
+
+**The torus is two modulos.**
+
+```kotlin
+b = b.link(
+    "E${r}_$c", nodeName(r, c), nodeName(r, (c + 1) % COLUMNS),
+    length = length, zoneLength = ZONE_LENGTH, beginDirection = 0.0
+)
+b = b.link(
+    "S${r}_$c", nodeName(r, c), nodeName((r + 1) % ROWS, c),
+    length = length, zoneLength = ZONE_LENGTH, beginDirection = 270.0
+)
+```
+
+`% COLUMNS` and `% ROWS` are the wrap-around links in Figure 9, and they are the
+reason the layout needs no special cases: every intersection has exactly two
+out-links and every intersection is reachable from every other, with nothing ever
+running against the traffic. The workload is `ROWS × COLUMNS × 2` links of
+`ZONES_PER_LINK` zones each, so the size of what is being measured is set by
+`ROWS`, `COLUMNS`, `ZONES_PER_LINK` and `NUM_VEHICLES` — four constants at the top
+of the file, and nothing else.
+
+**The fleet is spread so that it does not begin in a queue.**
+
+```kotlin
+val r = i / COLUMNS
+val c = i % COLUMNS
+GuidedTransporter(
+    system, TransporterPlacement.OnZone("E${r}_$c.Zone1"),
+    ConstantRV(VELOCITY), 1, EndOfZoneControl(), "V$i"
+)
+```
+
+`TransporterPlacement.OnZone` names a zone rather than a station — twenty vehicles,
+one at the head of each of the first twenty links, so no two share a zone at time
+zero. A benchmark that started its fleet in a heap would spend its first seconds
+measuring congestion recovery.
+
+**Saturation is a listener, and it is the mechanism that makes the number mean
+"engine".**
+
+```kotlin
+init {
+    for (v in vehicles) {
+        v.attachArrivalListener { dispatch(v) }
+    }
+}
+```
+
+```kotlin
+private fun dispatch(vehicle: GuidedTransporter) {
+    // Keep trying until the vehicle is actually sent somewhere: a destination it already
+    // stands on is refused, and a vehicle left undispatched would quietly stop and make the
+    // benchmark measure a smaller fleet than it claims.
+    repeat(8) {
+        val target = network.intersections[stream.randInt(0, network.intersections.size - 1)]
+        if (vehicle.sendTo(target.name)) return
+    }
+}
+```
+
+That listener is the whole of the saturation: an arrival produces the next
+destination, so a vehicle's journey ends and the next one begins in the same
+instant. The retry loop beneath it is not defensive padding: `sendTo` refuses a destination the vehicle already stands on, and a single
+silent refusal would park that vehicle for the rest of the run — the benchmark
+would then report the throughput of a nineteen-vehicle fleet under a
+twenty-vehicle heading.
+
+**What transfers between machines is a ratio, not seconds.** The run reads
+wall-clock time alongside `zoneTraversals` and `eventsScheduled`, and reports
+
+```kotlin
+val eventsPerTraversal: Double
+    get() = if (zoneTraversals > 0.0) eventsScheduled / zoneTraversals else Double.NaN
+```
+
+which is the figure that actually transfers between machines. Seconds do not; a
+ratio of events to traversals does.
+
 ### What to learn
 
 **One zone traversal is one scheduled event**, so traversals per second is very
@@ -747,6 +1559,76 @@ it cost?
 **Figure 9 again, unaltered.** The same layout, zone count, fleet size,
 velocity and saturation as case 9 — this file **imports** that benchmark's
 layout rather than restating it, so the two cannot drift apart.
+
+### The code
+
+*All in `AgvThroughputBenchmark.kt`, which is deliberately thin.*
+
+**The layout is imported, not restated.**
+
+```kotlin
+fun createNetwork(networkName: String = "BenchmarkTorus"): GuidedPathNetwork =
+    GuidedPathThroughputBenchmark.createNetwork(networkName)
+```
+
+```kotlin
+val r = i / GuidedPathThroughputBenchmark.COLUMNS
+val c = i % GuidedPathThroughputBenchmark.COLUMNS
+AgvVehicle(
+    agv, TransporterPlacement.OnZone("E${r}_$c.Zone1"),
+    ConstantRV(GuidedPathThroughputBenchmark.VELOCITY), 1, EndOfZoneControl(), "V$i"
+).apply { dispositionPolicy = ParkInPlaceDisposition() }
+```
+
+The network, the zone count, the fleet size, the velocity and the starting
+placements are all read from the passive benchmark rather than copied, so the two
+cannot drift apart. If they could, the traversal-count agreement below would be a
+coincidence rather than a check.
+
+**Saturation has to be expressed from the other end, and that is the interesting
+part.** The passive benchmark commands each vehicle again the instant it arrives,
+because a transporter is a thing you command. Here nobody commands a vehicle — work
+exists because a load asked for it — so the *load* side saturates:
+
+```kotlin
+/** Loads in circulation. More than vehicles, so the board is never empty. */
+const val NUM_LOADS: Int = 40
+```
+
+```kotlin
+private inner class Load : Entity() {
+    val circulating = process(isDefaultProcess = true) {
+        currentLocation = network.requireLocation(somewhere())
+        while (true) {
+            val there = somewhere()
+            if (there != currentLocation.name) {
+                transportByFleet(agv, destination = there, origin = currentLocation.name)
+            } else {
+                // Asking to be carried where it already stands would be refused, and a load
+                // that stopped asking would quietly shrink the population this claims to run.
+                delay(0.0)
+            }
+        }
+    }
+}
+```
+
+Forty loads against twenty vehicles, each asking again the moment it arrives, so no
+vehicle is ever idle for want of a task — the same condition the passive benchmark
+creates, reached from the opposite side. The `delay(0.0)` guard is the same class of
+care as the passive benchmark's retry loop: a load that stopped asking would silently
+reduce the population the run claims to be measuring.
+
+**`ParkInPlaceDisposition` is a choice about what is being measured.** With the board
+never empty, a vehicle is re-assigned the moment it declares itself available, so no
+disposition rule ever actually runs. Choosing one that sent vehicles home would put a
+repositioning journey into the measurement that a saturated fleet never performs —
+and the passive benchmark, which parks in place because a pool has nothing else to do
+here, would then be running a different workload.
+
+The invariant harness is off for the same reason it is off in case 9 — it walks every
+zone, and leaving it on would benchmark the harness. Deadlock detection is left **on**,
+because that is the configuration a model actually runs in.
 
 ### What it shows
 

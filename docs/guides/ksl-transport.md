@@ -172,8 +172,8 @@ agent layer's own verbs for the moment; see [`ksl-agent`](ksl-agent.md).
 
 - [`ksl-transport-tutorial`](ksl-transport-tutorial.md) — the same material by
   worked example: ten cases, each with its problem, a figure of the network it
-  models, what it measured and what that is evidence for. **The place to go
-  after this page.**
+  models, a walk through its code, what it measured and what that is evidence
+  for. **The place to go after this page.**
 - [`ksl-spatial`](ksl-spatial.md) — the substrate: locations, distances,
   spatial models, `MovableResource`, and the movement seam.
 - [`ksl-guidedpath`](ksl-guidedpath.md) — zones, links, blocking,
