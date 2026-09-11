@@ -83,24 +83,32 @@ sealed class Zone {
     var state: ZoneState = ZoneState.FREE
         internal set
 
-    /** The transporter holding the zone, or null when it is free. */
-    var holder: GuidedTransporter? = null
+    /**
+     * Whatever holds the zone, or null when it is free.
+     *
+     * Typed to [ZoneHolderIfc] rather than to [GuidedTransporter] because exclusive occupation of
+     * space is not a vehicle's privilege: a closed aisle or a pedestrian crossing denies a zone to
+     * traffic in exactly the same way, and the engine has no reason to care which it is. Only the
+     * parts that genuinely reason about vehicles -- a transporter's own run of covered zones, and
+     * the wait-for graph's outgoing edges -- ask what kind of holder this is.
+     */
+    var holder: ZoneHolderIfc? = null
         internal set
 
-    /** True when no transporter holds the zone. */
+    /** True when nothing holds the zone. */
     val isFree: Boolean
         get() = state == ZoneState.FREE
 
-    /** True when some transporter has claimed or is covering the zone. */
+    /** True when something has claimed or is covering the zone. */
     val isHeld: Boolean
         get() = state != ZoneState.FREE
 
-    /** True when a transporter's body covers the zone, as opposed to merely having reserved it. */
+    /** True when a holder covers the zone, as opposed to merely having reserved it. */
     val isOccupied: Boolean
         get() = state == ZoneState.OCCUPIED
 
     /**
-     * Reserves the zone for a transporter about to travel into it.
+     * Reserves the zone for a holder about to take it.
      *
      * Reserving before entering is what stops two transporters both starting into the same free
      * zone and arriving together. The claim fails, without side effect, when someone else already
@@ -108,22 +116,21 @@ sealed class Zone {
      *
      * @return true when the zone was free and is now claimed
      */
-    internal fun claim(transporter: GuidedTransporter): Boolean {
-        check(holder !== transporter) {
-            "Zone ($name) is already held by transporter (${transporter.name}), which cannot claim " +
-                    "it a second time."
+    internal fun claim(claimant: ZoneHolderIfc): Boolean {
+        check(holder !== claimant) {
+            "Zone ($name) is already held by (${claimant.name}), which cannot claim it a second time."
         }
         if (state != ZoneState.FREE) return false
         state = ZoneState.CLAIMED
-        holder = transporter
+        holder = claimant
         return true
     }
 
-    /** Records that the claiming transporter's body now covers the zone. */
-    internal fun occupy(transporter: GuidedTransporter) {
-        check(state == ZoneState.CLAIMED && holder === transporter) {
-            "Zone ($name) cannot be occupied by transporter (${transporter.name}): it is $state " +
-                    "held by ${holder?.name ?: "no one"}. A zone must be claimed before it is entered."
+    /** Records that the claimant now covers the zone rather than merely having reserved it. */
+    internal fun occupy(claimant: ZoneHolderIfc) {
+        check(state == ZoneState.CLAIMED && holder === claimant) {
+            "Zone ($name) cannot be occupied by (${claimant.name}): it is $state held by " +
+                    "${holder?.name ?: "no one"}. A zone must be claimed before it is entered."
         }
         state = ZoneState.OCCUPIED
     }
@@ -181,11 +188,11 @@ sealed class Zone {
      * @return the transporter to wake, or null when none was waiting
      */
     internal fun release(
-        transporter: GuidedTransporter,
+        claimant: ZoneHolderIfc,
         rule: ZoneContentionRuleIfc? = null
     ): GuidedTransporter? {
-        check(holder === transporter) {
-            "Zone ($name) cannot be released by transporter (${transporter.name}): it is held by " +
+        check(holder === claimant) {
+            "Zone ($name) cannot be released by (${claimant.name}): it is held by " +
                     "${holder?.name ?: "no one"}."
         }
         state = ZoneState.FREE
@@ -206,10 +213,10 @@ sealed class Zone {
      * superseded before the transporter reaches the zone it was heading into. Without this the
      * abandoned claim would hold the zone against everyone for the rest of the replication.
      */
-    internal fun abandonClaim(transporter: GuidedTransporter) {
-        check(state == ZoneState.CLAIMED && holder === transporter) {
-            "Zone ($name) has no claim by transporter (${transporter.name}) to abandon: it is " +
-                    "$state held by ${holder?.name ?: "no one"}."
+    internal fun abandonClaim(claimant: ZoneHolderIfc) {
+        check(state == ZoneState.CLAIMED && holder === claimant) {
+            "Zone ($name) has no claim by (${claimant.name}) to abandon: it is $state held by " +
+                    "${holder?.name ?: "no one"}."
         }
         state = ZoneState.FREE
         holder = null

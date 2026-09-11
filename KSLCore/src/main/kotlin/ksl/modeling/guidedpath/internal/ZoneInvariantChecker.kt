@@ -165,7 +165,8 @@ internal class ZoneInvariantChecker(
             }
         }
         for (zone in mySystem.network.zones) {
-            if (zone.holder != null && zone.holder in zone.waiters) {
+            val holder = zone.holder
+            if (holder is GuidedTransporter && holder in zone.waiters) {
                 violate("zone (${zone.name}) lists its own holder among those waiting for it")
             }
             if (zone.waiters.size != zone.waiters.distinct().size) {
@@ -191,6 +192,11 @@ internal class ZoneInvariantChecker(
                 violate("zone (${zone.name}) is ${zone.state} but names no holder")
                 continue
             }
+            // Only a vehicle is asked to agree. The two-sided bookkeeping below is a statement
+            // about a transporter's own run of zones, and a holder that merely occupies space --
+            // a closed aisle, a crossing -- keeps no such run to disagree with. Its claim is
+            // one-sided by construction, so there is nothing here to check.
+            if (holder !is GuidedTransporter) continue
             if (zone.state == ZoneState.CLAIMED && holder.claimedZone !== zone) {
                 violate(
                     "zone (${zone.name}) is claimed by (${holder.name}), but that transporter is " +

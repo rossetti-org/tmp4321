@@ -69,6 +69,11 @@ internal class DeadlockDetector(private val system: GuidedPathSpace) {
             }
         }
         val holder = transporter.awaitedZone?.holder ?: return emptyList()
+        // A holder that is not a vehicle is a terminal node. It never queues for space, so it has
+        // no outgoing edge and cannot close a cycle: whatever waits behind it is obstructed rather
+        // than deadlocked, which is a different condition with a different remedy. Reporting it as
+        // an obstructor would be the one mistake this walk exists to avoid.
+        if (holder !is GuidedTransporter) return emptyList()
         return if (holder === transporter) emptyList() else listOf(holder)
     }
 

@@ -210,7 +210,7 @@ class GuidedTransporter @JvmOverloads constructor(
     name: String? = null,
     val physicalLength: Double? = null,
     val loadCapacity: Int = 1
-) : Resource(system, name, 1), ksl.modeling.spatial.VehicleMovementIfc {
+) : Resource(system, name, 1), ksl.modeling.spatial.VehicleMovementIfc, ZoneHolderIfc {
 
     init {
         if (physicalLength != null) {
@@ -431,8 +431,14 @@ class GuidedTransporter @JvmOverloads constructor(
      */
     internal var reservedSpur: Link? = null
 
-    /** The zone the transporter is waiting for, or null when it is not waiting. */
-    var awaitedZone: Zone? = null
+    /**
+     * The zone the transporter is waiting for, or null when it is not waiting.
+     *
+     * This is the one thing [ZoneHolderIfc] asks of a holder beyond its name, because it is the
+     * outgoing edge of the wait-for graph. A transporter is the holder that actually has one to
+     * report; a holder that only occupies space answers null and so terminates the walk.
+     */
+    override var awaitedZone: Zone? = null
         internal set
 
     /**
