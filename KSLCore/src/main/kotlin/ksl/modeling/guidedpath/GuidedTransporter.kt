@@ -336,11 +336,14 @@ class GuidedTransporter @JvmOverloads constructor(
             // and only moves when the state does. A journey needs the elapsed blocked time between
             // two instants, which is a different quantity.
             if (field == TransporterState.BLOCKED && value != TransporterState.BLOCKED) {
-                // A replication can end with a transporter still blocked, and the reset that starts
-                // the next one clears the start instant while the state is still BLOCKED. Without
-                // this guard that transition accumulates `time - NaN`, and the NaN then travels
-                // into the first transport result of the new replication and fails the run --
-                // several thousand simulated minutes away from the reset that caused it.
+                // Accumulate only against a start instant that was actually recorded. The reset
+                // in `placeAtInitialPosition` is what makes this hold -- it sets the state before
+                // clearing the clocks, so a transporter still blocked when a replication ended
+                // leaves that state through this setter while its start instant is still good.
+                // Reversing those two lines is what once made this accumulate `time - NaN`, with
+                // the NaN travelling into the next replication's first transport result and
+                // failing the run thousands of simulated minutes from its cause.
+                // `BlockedTransporterTransitionTest` is what holds the ordering in place now.
                 if (!blockedSince.isNaN()) {
                     myCumulativeBlockedTime += time - blockedSince
                 }
@@ -570,19 +573,6 @@ class GuidedTransporter @JvmOverloads constructor(
     internal val cumulativeBlockedTime: Double
         get() = if (blockedSince.isNaN()) myCumulativeBlockedTime
         else myCumulativeBlockedTime + (time - blockedSince)
-
-    /**
-     * Whether the blocked-time clock is running, which must be exactly while the transporter is
-     * blocked.
-     *
-     * Exposed for the closing audit rather than for modelling. The two can come apart -- a
-     * replication ending with a transporter blocked leaves the state `BLOCKED` while the reset
-     * clears the start instant -- and when they do, the blocked time is quietly wrong from then on
-     * rather than loudly wrong at the point of the mistake. The guard in [transporterState]'s
-     * setter is what stops that; this is what proves the guard is still there.
-     */
-    internal val isBlockedClockRunning: Boolean
-        get() = !blockedSince.isNaN()
 
     // ---- odometers ------------------------------------------------------------------------------
     //
