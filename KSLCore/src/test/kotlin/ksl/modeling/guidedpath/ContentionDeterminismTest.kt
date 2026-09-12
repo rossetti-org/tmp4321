@@ -169,7 +169,7 @@ class ContentionDeterminismTest {
         val m = Model("BadRule")
         val stranger = arrayOfNulls<GuidedTransporter>(1)
         val j = Jam(m, false) {
-            ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc { _, _ -> stranger[0] }
+            ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc { _, _ -> stranger[0]!! }
         }
         stranger[0] = j.carts.last()
         j.system.checkInvariants = true

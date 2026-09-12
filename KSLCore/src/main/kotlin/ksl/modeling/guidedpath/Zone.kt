@@ -199,7 +199,6 @@ sealed class Zone {
         holder = null
         if (myWaiters.isEmpty() || rule == null) return null
         val chosen = rule.selectWaiter(this, myWaiters)
-            ?: return null
         check(chosen in myWaiters) {
             "Zone contention rule ($rule) chose transporter (${chosen.name}), which is not waiting " +
                     "for zone ($name). A rule must choose from the transporters it is given."

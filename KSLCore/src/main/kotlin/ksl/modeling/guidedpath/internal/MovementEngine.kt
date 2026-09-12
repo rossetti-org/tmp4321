@@ -368,7 +368,11 @@ internal class MovementEngine(
     private fun wakeOneWaiterOf(link: Link) {
         if (link.numWaiting == 0) return
         val chosen = mySystem.zoneContentionRule.selectWaiter(link.zones.first(), link.waiters)
-            ?: return
+        check(chosen in link.waiters) {
+            "Zone contention rule (${mySystem.zoneContentionRule}) chose transporter " +
+                    "(${chosen.name}), which is not waiting for link (${link.name}). A rule must " +
+                    "choose from the transporters it is given."
+        }
         link.removeWaiter(chosen)
         mySystem.scheduleClaimRetry(chosen)
     }

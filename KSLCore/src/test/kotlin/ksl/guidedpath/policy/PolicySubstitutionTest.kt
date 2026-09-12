@@ -98,9 +98,9 @@ class PolicySubstitutionTest {
 
     /** Gives a contested zone to whoever has waited longest, by taking the head of the list. */
     private class RecordingContentionRule : ZoneContentionRuleIfc {
-        override fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter? {
-            val chosen = waiting.firstOrNull()
-            if (chosen != null) Calls.contentionChoices.add("${zone.name}:${chosen.name}")
+        override fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter {
+            val chosen = waiting.first()
+            Calls.contentionChoices.add("${zone.name}:${chosen.name}")
             return chosen
         }
     }

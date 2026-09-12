@@ -33,15 +33,22 @@ import ksl.modeling.guidedpath.Zone
  *
  * A rule must choose from the transporters it is given, and must be a pure function of them. One
  * that needs randomness must draw it from a stream the model controls.
+ *
+ * **Choosing is not optional.** A waiting transporter has nothing scheduled, so it moves again only
+ * when something hands it the zone. Declining to choose would therefore not leave the zone free and
+ * everyone waiting until next time -- there is no next time, because nothing holds the zone and so
+ * nothing will ever release it again. Everyone waiting would wait for the rest of the replication,
+ * and the run would simply stop advancing with nothing to say why. The return type says so: a rule
+ * is asked only when there is at least one transporter to choose from, and it must name one.
  */
 fun interface ZoneContentionRuleIfc {
 
     /**
-     * @param zone the zone that has just come free
-     * @param waiting the transporters waiting for it, in the order they began waiting
-     * @return the one to wake, or null to leave the zone free and everyone waiting
+     * @param zone the zone or link that has just come free
+     * @param waiting the transporters waiting for it, in the order they began waiting. Never empty
+     * @return the one to wake, which must be one of [waiting]
      */
-    fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter?
+    fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter
 }
 
 /**
@@ -51,8 +58,8 @@ fun interface ZoneContentionRuleIfc {
  * anyone, and it is easy to explain when a modeler asks why one transporter went before another.
  */
 class FIFOZoneContentionRule : ZoneContentionRuleIfc {
-    override fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter? =
-        waiting.firstOrNull()
+    override fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter =
+        waiting.first()
 
     override fun toString(): String = "FIFOZoneContentionRule"
 }
@@ -67,9 +74,9 @@ class FIFOZoneContentionRule : ZoneContentionRuleIfc {
  * and is why it is not the default.
  */
 class LoadedFirstZoneContentionRule : ZoneContentionRuleIfc {
-    override fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter? =
+    override fun selectWaiter(zone: Zone, waiting: List<GuidedTransporter>): GuidedTransporter =
         waiting.firstOrNull { it.stateBeforeBlocking == TransporterState.MOVING_LOADED }
-            ?: waiting.firstOrNull()
+            ?: waiting.first()
 
     override fun toString(): String = "LoadedFirstZoneContentionRule"
 }
