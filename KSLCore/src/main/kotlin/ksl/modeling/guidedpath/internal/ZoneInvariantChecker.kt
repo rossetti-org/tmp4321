@@ -224,6 +224,24 @@ internal class ZoneInvariantChecker(
                             "have the zone"
                 )
             }
+            // A set is taken together or not at all, asserted rather than trusted, and asserted
+            // from the other end: a zone still closing means the grant has not happened, so *no*
+            // zone of that closure may be held by the holder it is closing for. Holding part of a
+            // region while the rest drains is what the all-or-nothing grant exists to prevent,
+            // because a vehicle inside the region could then wait for a zone the occupier holds
+            // while the occupier waits for the zone the vehicle is standing in -- a deadlock with
+            // no edge in the wait-for graph, and so one the detector cannot see.
+            val closing = zone.closure
+            if (closing != null) {
+                val partlyHeld = closing.zones.filter { it.holder === closing.holder }
+                if (partlyHeld.isNotEmpty()) {
+                    violate(
+                        "zone (${zone.name}) is still closing for (${closing.holder.name}), which " +
+                                "already holds ${partlyHeld.joinToString { it.name }} of the same " +
+                                "closure -- so a region is part held and part draining"
+                    )
+                }
+            }
             if (zone.state == ZoneState.FREE) {
                 if (holder != null) {
                     violate("zone (${zone.name}) is free but is held by (${holder.name})")

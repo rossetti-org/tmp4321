@@ -135,6 +135,14 @@ sealed class Zone {
         get() = numPresent > 0
 
     /**
+     * The closure that has reserved this zone, or null when it is open to whoever gets there first.
+     *
+     * Internal because what a closure permits is the space's business. [closingFor] is the readable
+     * half of it.
+     */
+    internal var closure: ZoneClosureIfc? = null
+
+    /**
      * Whom this zone is closing for, or null when it is open to whoever gets there first.
      *
      * A zone is *closing* between the moment something asks for it and the moment it can be given:
@@ -150,32 +158,32 @@ sealed class Zone {
      * Null in every model that does not close a zone, which is why the hot path pays a single null
      * test for it.
      */
-    var closingFor: ZoneHolderIfc? = null
-        internal set
+    val closingFor: ZoneHolderIfc?
+        get() = closure?.holder
 
     /** True when nothing holds this zone and nothing is present in it, whoever it is closing for. */
     internal val isDrained: Boolean
         get() = state == ZoneState.FREE && numPresent == 0
 
     /**
-     * Reserves the zone for a holder that has asked for it, so that it drains rather than being
-     * handed to the next vehicle along.
+     * Reserves the zone for a closure, so that it drains rather than being handed to the next
+     * vehicle along.
      */
-    internal fun closeFor(claimant: ZoneHolderIfc) {
-        check(closingFor == null) {
-            "Zone ($name) is already closing for (${closingFor?.name}), so (${claimant.name}) " +
-                    "cannot reserve it as well. One at a time."
+    internal fun closeFor(closing: ZoneClosureIfc) {
+        check(closure == null) {
+            "Zone ($name) is already closing for (${closingFor?.name}), so " +
+                    "(${closing.holder.name}) cannot reserve it as well. One at a time."
         }
-        closingFor = claimant
+        closure = closing
     }
 
     /** Gives up a reservation without ever having taken the zone. */
-    internal fun abandonReservation(claimant: ZoneHolderIfc) {
-        check(closingFor === claimant) {
-            "Zone ($name) is not closing for (${claimant.name}): it is closing for " +
+    internal fun abandonReservation(closing: ZoneClosureIfc) {
+        check(closure === closing) {
+            "Zone ($name) is not closing for (${closing.holder.name}): it is closing for " +
                     "(${closingFor?.name ?: "no one"})."
         }
-        closingFor = null
+        closure = null
     }
 
     /**
@@ -207,13 +215,19 @@ sealed class Zone {
         }
         if (state != ZoneState.FREE) return false
         if (numPresent > 0) return false
-        // Whoever the zone is closing for is the one holder the reservation does not exclude: this
-        // is how a granted reservation is taken up. The null test is what the hot path pays.
-        val reserved = closingFor
-        if (reserved != null && reserved !== claimant) return false
+        // A closure decides for itself who may still take the zone. The holder it is promised to
+        // may, which is how a granted reservation is taken up -- and so may a vehicle that is
+        // already inside the region being closed, which is what lets it get out. The null test is
+        // all the hot path pays; the question is only asked of a zone that is actually closing.
+        val closing = closure
+        if (closing != null && !closing.admits(claimant)) return false
         state = ZoneState.CLAIMED
         holder = claimant
-        closingFor = null
+        // A closure ends when the holder it was promised to takes the zone, and not when somebody
+        // it let out passes through: the promise must survive traffic leaving the region.
+        if (closing != null && claimant === closing.holder) {
+            closure = null
+        }
         return true
     }
 
@@ -232,7 +246,7 @@ sealed class Zone {
      */
     internal fun admit(): Boolean {
         if (state != ZoneState.FREE) return false
-        if (closingFor != null) return false
+        if (closure != null) return false
         numPresent++
         return true
     }
@@ -359,7 +373,7 @@ sealed class Zone {
         // comes first, and it must: handing the zone to a waiting vehicle instead is how a request
         // to close a busy aisle would never be satisfied at all. The reservation stands until the
         // holder takes it, so no vehicle can get in between.
-        closingFor?.let { return it }
+        closure?.let { return it.holder }
         if (myWaiters.isEmpty() || rule == null) return null
         val chosen = rule.selectWaiter(this, myWaiters)
         check(chosen in myWaiters) {
@@ -389,7 +403,7 @@ sealed class Zone {
         state = ZoneState.FREE
         holder = null
         numPresent = 0
-        closingFor = null
+        closure = null
         myWaiters.clear()
     }
 

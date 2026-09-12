@@ -18,6 +18,40 @@
 package ksl.modeling.guidedpath
 
 /**
+ * A reservation over one or more zones, which the zones consult to decide who may still pass.
+ *
+ * The zone asks rather than decides, and the reason is the hazard a set closure has and a single
+ * zone does not. Closing a *set* can trap a vehicle inside it: the vehicle's route needs a zone the
+ * closure has reserved, and the zone the vehicle is standing in is one the closure is waiting to
+ * drain. Neither can move. It is not a circular wait the detector can see, either -- an occupier
+ * has no [ZoneHolderIfc.awaitedZone], so there is no edge to close a cycle with -- so the run would
+ * simply stop advancing with nothing to say why.
+ *
+ * The fix is the one a real closure uses: **stop letting traffic in, and let the traffic already
+ * inside get out.** A closing zone admits the holder it was promised to, which is how the grant is
+ * taken up, and it admits a vehicle that is already holding some other zone of the same closure,
+ * which is how that vehicle leaves. The drain then terminates for any set, because every vehicle
+ * inside can always continue -- the zones beyond the region are not reserved, and once a vehicle is
+ * fully out it holds nothing in the set and so cannot get back in.
+ *
+ * A vehicle whose route *ends* inside the region is the one case that still hangs, and it is a
+ * modelling error rather than a mechanism defect: it is the same trap as sending a vehicle to a
+ * junction another vehicle is parked on. The end-of-replication report names the zone and its
+ * holder.
+ */
+internal interface ZoneClosureIfc {
+
+    /** Who the reserved space is for. */
+    val holder: ZoneHolderIfc
+
+    /** Every zone this closure has reserved. */
+    val zones: List<Zone>
+
+    /** True when this claimant may take a zone the closure has reserved. */
+    fun admits(claimant: ZoneHolderIfc): Boolean
+}
+
+/**
  * A request for guide-path space: what was asked for, before it has been given.
  *
  * The middle term of a trio that mirrors the resource layer exactly, which is the analogy this
@@ -34,17 +68,42 @@ package ksl.modeling.guidedpath
  * Requests are made by asking a [ZoneOccupier], never by construction: the space has to stay in
  * charge of its own exclusivity, which is the invariant the whole subsystem rests on.
  *
+ * **A set is taken all at once or not at all.** Taking the zones one by one as they drain is what
+ * creates the trap described on [ZoneClosureIfc]; waiting until every zone has drained and then
+ * claiming them together keeps the occupier holding nothing while it waits, which keeps it a sink
+ * in the wait-for graph and makes a deadlock impossible rather than undetectable. The cost is that
+ * a closure over a busy region begins later, and that delay is reported rather than hidden --
+ * [ZoneOccupier.fracTimeWaitingForSpace] is exactly it.
+ *
  * @param occupier who asked
- * @param zone what was asked for
+ * @param zones what was asked for, one or more
  * @param requestedAt when it was asked for
  */
 class ZoneRequest internal constructor(
     val occupier: ZoneOccupier,
-    val zone: Zone,
+    override val zones: List<Zone>,
     val requestedAt: Double
-) {
+) : ZoneClosureIfc {
 
-    /** The grant, once the zone has drained and been taken, or null while it is still draining. */
+    override val holder: ZoneHolderIfc
+        get() = occupier
+
+    /**
+     * The holder it is promised to may take a reserved zone, and so may a vehicle that is already
+     * inside the region -- see [ZoneClosureIfc] for why the second is what makes a drain terminate.
+     */
+    override fun admits(claimant: ZoneHolderIfc): Boolean =
+        claimant === occupier || zones.any { it.holder === claimant }
+
+    /** The single zone asked for, when exactly one was. */
+    val zone: Zone
+        get() = zones.single()
+
+    /** True when every zone asked for has drained and could now be taken together. */
+    internal val isDrained: Boolean
+        get() = zones.all { it.isDrained }
+
+    /** The grant, once the zones have drained and been taken, or null while any is still draining. */
     var allocation: ZoneAllocation? = null
         internal set
 
@@ -61,7 +120,8 @@ class ZoneRequest internal constructor(
         get() = !isGranted && !isAbandoned
 
     override fun toString(): String = buildString {
-        append("ZoneRequest(${occupier.name} -> ${zone.name}, asked at $requestedAt")
+        append("ZoneRequest(${occupier.name} -> ${zones.joinToString { it.name }}, ")
+        append("asked at $requestedAt")
         append(
             when {
                 isGranted -> ", granted at ${allocation!!.engagedAt}"
@@ -85,15 +145,19 @@ class ZoneRequest internal constructor(
  * zones and almost none will ever be held by anything but a vehicle -- so the numbers belong to the
  * few holders, and this is the object that records the interval each hold covers.
  *
- * @param occupier who holds the zone
- * @param zone what is held
+ * @param occupier who holds the space
+ * @param zones what is held, one or more, taken together and given back together
  * @param engagedAt when the hold began
  */
 class ZoneAllocation internal constructor(
     val occupier: ZoneOccupier,
-    val zone: Zone,
+    val zones: List<Zone>,
     val engagedAt: Double
 ) {
+
+    /** The single zone held, when exactly one is. */
+    val zone: Zone
+        get() = zones.single()
 
     /** When the hold ended, or NaN while it is still held. */
     var releasedAt: Double = Double.NaN
@@ -112,6 +176,6 @@ class ZoneAllocation internal constructor(
         if (isReleased) releasedAt - engagedAt else now - engagedAt
 
     override fun toString(): String =
-        "ZoneAllocation(${occupier.name} holds ${zone.name} from $engagedAt" +
+        "ZoneAllocation(${occupier.name} holds ${zones.joinToString { it.name }} from $engagedAt" +
                 (if (isReleased) " until $releasedAt" else ", still held") + ")"
 }

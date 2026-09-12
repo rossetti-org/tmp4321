@@ -1,0 +1,250 @@
+/*
+ *     The KSL provides a discrete-event simulation library for the Kotlin programming language.
+ *     Copyright (C) 2026  Manuel D. Rossetti, rossetti@uark.edu
+ *
+ *     This program is free software: you can redistribute it and/or modify
+ *     it under the terms of the GNU General Public License as published by
+ *     the Free Software Foundation, either version 3 of the License, or
+ *     (at your option) any later version.
+ *
+ *     This program is distributed in the hope that it will be useful,
+ *     but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *     GNU General Public License for more details.
+ *
+ *     You should have received a copy of the GNU General Public License
+ *     along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+package ksl.modeling.guidedpath
+
+import ksl.simulation.KSLEvent
+import ksl.simulation.Model
+import ksl.simulation.ModelElement
+import ksl.utilities.random.rvariable.ConstantRV
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+/**
+ *  A whole region of guide path is closed, and the two rules that make that safe.
+ *
+ *  Step four of the general-occupancy design: extent chosen per occurrence, and the atomicity rule.
+ *  Closing a *set* has a hazard closing one zone does not, and the two rules exist for it:
+ *
+ *  - **the set is taken together or not at all**, so the occupier holds nothing while it waits and
+ *    stays a sink in the wait-for graph;
+ *  - **traffic already inside the region is let out**, so the drain terminates however busy the
+ *    region is.
+ *
+ *  Without the first, an occupier holding part of a region can wait on a vehicle that is waiting on
+ *  the part it holds. Without the second, a vehicle inside the region can never leave it. Neither
+ *  is a circular wait the detector can see, because an occupier has no `awaitedZone` and so no
+ *  outgoing edge — the run would simply stop advancing with nothing to say why. That is what makes
+ *  these rules rather than preferences.
+ *
+ *  Geometry throughout: twelve-foot zones at twelve feet a minute, so a zone is one minute, and
+ *  junctions are dimensionless.
+ */
+class ZoneClosureTest {
+
+    /** Two links in a line, so a vehicle can be sent right through a closed region and out. */
+    private class Corridor(parent: ModelElement) : ModelElement(parent, "Corridor") {
+        val network: GuidedPathNetwork = GuidedPathNetwork.builder("Corridor")
+            .link("L1", "A", "B", length = 48.0, zoneLength = 12.0)
+            .link("L2", "B", "C", length = 24.0, zoneLength = 12.0)
+            .build()
+        val system = GuidedPathTransportSystem(this, network, name = "Sys")
+        val cart = GuidedTransporter(
+            system, TransporterPlacement.At("A"), ConstantRV(12.0), 1, name = "Cart"
+        )
+        val crew = ZoneOccupier(system, "Crew")
+
+        /** The whole of the first aisle: four zones, chosen by name at run time. */
+        val aisle: List<Zone> get() = network.link("L1")!!.zones
+
+        val arrived = mutableListOf<Double>()
+
+        init {
+            cart.attachArrivalListener { arrived.add(time) }
+        }
+    }
+
+    private fun model(): Pair<Model, Corridor> {
+        val m = Model("ZoneClosure")
+        val c = Corridor(m)
+        c.system.checkInvariants = true
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 60.0
+        return m to c
+    }
+
+    // ---- extent, chosen at run time ------------------------------------------------------------
+
+    @Test
+    fun `a whole link closes as one, and reopens as one`() {
+        val (m, c) = model()
+        object : ModelElement(c, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> c.crew.holdZonesFor(c.aisle, 5.0) }, 0.0)
+            }
+        }
+        m.simulate()
+
+        assertEquals(4, c.aisle.size, "the extent came from the link, not from a literal")
+        assertFalse(c.crew.isHoldingSpace, "the closure ended on its own after five minutes")
+        for (zone in c.aisle) {
+            assertTrue(zone.isAvailable, "zone (${zone.name}) was left closed")
+            assertEquals(null, zone.closingFor)
+        }
+        // Four zones closed for five minutes of a sixty-minute run.
+        assertEquals(
+            4 * 5.0 / 60.0,
+            c.system.numZonesClosed.withinReplicationStatistic.weightedAverage, 1e-9,
+            "every zone of the set must count towards the space closed"
+        )
+    }
+
+    @Test
+    fun `an empty set, a repeated zone, and a foreign zone are all refused`() {
+        val (_, c) = model()
+        assertFailsWith<IllegalArgumentException> { c.crew.requestZones(emptyList()) }
+        val z = c.aisle.first()
+        assertFailsWith<IllegalArgumentException> { c.crew.requestZones(listOf(z, z)) }
+
+        // A zone of a different guide path is not this one's to close.
+        val other = GuidedPathNetwork.builder("Elsewhere")
+            .link("X", "P", "Q", length = 12.0, zoneLength = 12.0)
+            .build()
+        assertFailsWith<IllegalArgumentException> { c.crew.requestZones(other.zones.take(1)) }
+    }
+
+    // ---- rule one: all or nothing --------------------------------------------------------------
+
+    @Test
+    fun `a set with one busy zone is not taken at all until every zone has drained`() {
+        // The cart is crossing the aisle when the closure is asked for, so three zones are free and
+        // one is not. Holding the three would be a region part held and part draining, which is the
+        // state the atomicity rule exists to make impossible; the invariant checker asserts it and
+        // would fire here if the grant were progressive.
+        val (m, c) = model()
+        val grantedAt = mutableListOf<Double>()
+        c.crew.attachEngagementListener { _, a -> grantedAt.add(a.engagedAt) }
+        object : ModelElement(c, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> c.cart.sendTo("C") }, 0.0)
+                // At 2.5 the cart has claimed L1.Zone3 and is travelling into it.
+                schedule({ _: KSLEvent<Nothing> -> c.crew.requestZones(c.aisle) }, 2.5)
+            }
+        }
+        m.simulate()
+
+        // At 2.5 the cart covers Zone2 and has claimed Zone3. It reaches Zone3 at 3.0, giving up
+        // Zone2; reaches Zone4 at 4.0, giving up Zone3; and reaches B -- dimensionless, so the same
+        // instant -- giving up Zone4 at 4.0. So the last zone of the set drains at 4.0 and the
+        // whole set is taken then, not when the first three became free.
+        assertEquals(listOf(4.0), grantedAt, "the set must be taken when the LAST zone drains")
+        assertEquals(1.5, c.crew.timeToEngage.withinReplicationStatistic.weightedAverage, 1e-9)
+        for (zone in c.aisle) {
+            assertTrue(zone.hasHolder, "zone (${zone.name}) should be held once the set was taken")
+        }
+    }
+
+    @Test
+    fun `the cart is not held up by a closure it is already inside`() {
+        // Rule two, and the reason the drain terminates. The cart is inside the aisle when the whole
+        // aisle is closed: if the closure refused it the zones ahead, it could never leave, the zone
+        // it stands in would never drain, and the closure would never be granted. Nothing in the
+        // wait-for graph would show it -- the occupier has no outgoing edge -- so the run would just
+        // stop advancing.
+        val (m, c) = model()
+        object : ModelElement(c, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> c.cart.sendTo("C") }, 0.0)
+                schedule({ _: KSLEvent<Nothing> -> c.crew.requestZones(c.aisle) }, 2.5)
+            }
+        }
+        m.simulate()
+
+        // Six link zones at a minute each; the junctions B and C are dimensionless and cost nothing.
+        assertEquals(listOf(6.0), c.arrived, "the cart must have driven out of the closing region")
+        assertEquals(0.0, c.cart.numTimesBlocked.value, 0.0, "and must not have waited once")
+        assertTrue(c.crew.isHoldingSpace, "and the closure got its region afterwards")
+    }
+
+    @Test
+    fun `a vehicle outside the region is kept out of it`() {
+        // The other half of rule two: letting the ones inside out must not let new ones in, or the
+        // aisle never closes. The cart starts behind the region and is sent through it.
+        val (m, c) = model()
+        object : ModelElement(c, "Driver") {
+            override fun initialize() {
+                // Closed first, while the cart is still on the junction A and holds no aisle zone.
+                schedule({ _: KSLEvent<Nothing> -> c.crew.holdZonesFor(c.aisle, 10.0) }, 0.0)
+                schedule({ _: KSLEvent<Nothing> -> c.cart.sendTo("C") }, 1.0)
+            }
+        }
+        m.simulate()
+
+        assertEquals(1.0, c.cart.numTimesBlocked.value, 0.0, "the cart must have been refused entry")
+        // Refused at 1.0, the closure ends at 10.0, then six link zones.
+        assertEquals(listOf(16.0), c.arrived)
+    }
+
+    // ---- giving a set back ---------------------------------------------------------------------
+
+    @Test
+    fun `giving up a set still draining reopens every zone of it`() {
+        // Asked for at 2.5 while the cart is inside the aisle, so the set is still draining, and
+        // given up at 3.0 before it ever finishes. Every zone must reopen -- a reservation left
+        // behind on even one of them would close that zone to traffic for the rest of the run,
+        // with nothing holding it and nothing ever coming to release it.
+        val (m, c) = model()
+        object : ModelElement(c, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> c.cart.sendTo("C") }, 0.0)
+                schedule({ _: KSLEvent<Nothing> -> c.crew.requestZones(c.aisle) }, 2.5)
+                schedule({ _: KSLEvent<Nothing> -> c.crew.releaseZone() }, 3.0)
+            }
+        }
+        m.simulate()
+
+        for (zone in c.aisle) {
+            assertEquals(null, zone.closingFor, "zone (${zone.name}) was left closing")
+            assertTrue(zone.isAvailable, "zone (${zone.name}) was left held")
+        }
+        assertEquals(0.0, c.crew.numEngagements.value, 0.0, "the closure never took effect")
+        assertFalse(c.crew.isHoldingSpace)
+        assertEquals(listOf(6.0), c.arrived, "and the cart was never held up by any of it")
+    }
+
+    @Test
+    fun `a set is cleared between replications`() {
+        val m = Model("ZoneClosureReplicated")
+        val c = Corridor(m)
+        c.system.checkInvariants = true
+        object : ModelElement(c, "Driver") {
+            override fun initialize() {
+                c.arrived.clear()
+                schedule({ _: KSLEvent<Nothing> -> c.crew.holdZonesFor(c.aisle, 5.0) }, 1.0)
+            }
+        }
+        m.numberOfReplications = 3
+        m.lengthOfReplication = 60.0
+        m.simulate()
+
+        assertFalse(c.crew.isHoldingSpace)
+        for (zone in c.aisle) {
+            assertEquals(null, zone.closingFor)
+        }
+        val engagements = c.crew.numEngagements.acrossReplicationStatistic
+        assertEquals(3.0, engagements.count, 0.0)
+        assertEquals(1.0, engagements.average, 1e-12)
+        assertEquals(
+            0.0, engagements.variance, 1e-12,
+            "a deterministic model must close identically every replication; any spread means a " +
+                    "reservation was carried over"
+        )
+    }
+}

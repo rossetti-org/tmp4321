@@ -1093,19 +1093,30 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * in it leaves in its own time, and the grant follows through the same handover that wakes a
      * waiting vehicle -- which is the point of routing both through one place.
      */
-    internal fun requestZoneFor(occupier: ZoneOccupier, zone: Zone): ZoneRequest {
-        require(zone in network.zones) {
-            "Zone (${zone.name}) is not on guide path (${this.name})."
+    internal fun requestZonesFor(occupier: ZoneOccupier, zones: List<Zone>): ZoneRequest {
+        require(zones.isNotEmpty()) {
+            "Occupier (${occupier.name}) asked for no zones at all."
+        }
+        require(zones.distinct().size == zones.size) {
+            "Occupier (${occupier.name}) asked for the same zone twice: " +
+                    zones.joinToString { it.name }
+        }
+        for (zone in zones) {
+            require(zone in network.zones) {
+                "Zone (${zone.name}) is not on guide path (${this.name})."
+            }
         }
         auditFinishedInstant()
-        val request = ZoneRequest(occupier, zone, time)
+        val request = ZoneRequest(occupier, zones, time)
         myOccupierRequests[occupier] = request
         occupier.recordRequest(request)
-        zone.closeFor(occupier)
+        for (zone in zones) {
+            zone.closeFor(request)
+        }
         // Nothing to drain: the grant is this instant, and takes the ordinary path rather than a
         // shortcut, so that an immediate grant and a grant after a drain are the same code.
-        if (zone.isDrained) {
-            grantZoneTo(occupier)
+        if (request.isDrained) {
+            grantZonesTo(occupier)
         }
         return request
     }
@@ -1118,20 +1129,24 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * the clock could be observed. Nothing can get in between, because the reservation stands until
      * this runs.
      */
-    private fun grantZoneTo(occupier: ZoneOccupier) {
+    private fun grantZonesTo(occupier: ZoneOccupier) {
         val request = myOccupierRequests[occupier] ?: return
-        val zone = request.zone
-        // The reservation may have been given up between the offer and this event.
-        if (zone.closingFor !== occupier) return
-        check(zone.claim(occupier)) {
-            "Zone (${zone.name}) was offered to (${occupier.name}) and then refused its claim, " +
-                    "which cannot happen: the reservation excludes everyone else."
+        // The reservation may have been given up between the offer and this event, and on a set the
+        // offer arrives as each zone drains, so most of those offers are premature: the grant is
+        // all or nothing and waits for the last one.
+        if (request.zones.any { it.closure !== request }) return
+        if (!request.isDrained) return
+        for (zone in request.zones) {
+            check(zone.claim(occupier)) {
+                "Zone (${zone.name}) was offered to (${occupier.name}) and then refused its " +
+                        "claim, which cannot happen: the reservation admits the holder it is for."
+            }
         }
         myOccupierRequests.remove(occupier)
-        val allocation = ZoneAllocation(occupier, zone, time)
+        val allocation = ZoneAllocation(occupier, request.zones, time)
         myOccupierAllocations[occupier] = allocation
         request.allocation = allocation
-        myClosedZoneCount++
+        myClosedZoneCount += request.zones.size
         myNumZonesClosed.value = myClosedZoneCount.toDouble()
         occupier.recordEngagement(allocation)
     }
@@ -1146,25 +1161,33 @@ open class GuidedPathSpace @JvmOverloads constructor(
         auditFinishedInstant()
         myOccupierRequests.remove(occupier)?.let { request ->
             // Asked for, still draining, and no longer wanted: the aisle was going to be closed
-            // and now is not. The zone reopens without ever having been held.
-            request.zone.abandonReservation(occupier)
+            // and now is not. The zones reopen without ever having been held.
             request.isAbandoned = true
             occupier.recordRelease()
-            handOver(request.zone.reopen(zoneContentionRule))
+            for (zone in request.zones) {
+                zone.abandonReservation(request)
+            }
+            // Offered only after every reservation is gone, so that a vehicle woken for one zone
+            // does not find the next one still closed and go straight back to waiting.
+            for (zone in request.zones) {
+                handOver(zone.reopen(zoneContentionRule))
+            }
             return
         }
         val allocation = myOccupierAllocations.remove(occupier) ?: return
         allocation.releasedAt = time
-        myClosedZoneCount--
+        myClosedZoneCount -= allocation.zones.size
         myNumZonesClosed.value = myClosedZoneCount.toDouble()
         occupier.recordRelease()
-        handOver(allocation.zone.release(occupier, zoneContentionRule))
+        for (zone in allocation.zones) {
+            handOver(zone.release(occupier, zoneContentionRule))
+        }
     }
 
     private inner class ZoneGrantAction : EventActionIfc<ZoneOccupier> {
         override fun action(event: KSLEvent<ZoneOccupier>) {
             auditFinishedInstant()
-            grantZoneTo(event.message!!)
+            grantZonesTo(event.message!!)
         }
     }
 

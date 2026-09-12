@@ -97,9 +97,12 @@ fun interface ZoneEngagementListenerIfc {
  * traffic from that instant, and the hold begins when whatever was already there has left.
  * [ZoneEngagementListenerIfc] and the [onEngaged] override are the two ways to be told which.
  *
- * **One zone at a time**, and that is a deliberate limit of this step rather than an oversight: a
- * second request while one is outstanding is refused. Sets of zones, and the question of whether
- * they must be taken atomically, are a separate piece of work with a rule of their own.
+ * A whole aisle rather than one zone is [requestZones] or [holdZonesFor], which take the set
+ * **together or not at all** -- the rule is on [requestZones], and the reason it is a rule is that
+ * the alternative deadlocks invisibly.
+ *
+ * **One request at a time**: a second while one is outstanding is refused. An occupier is the
+ * identity of a closure, so two overlapping closures are two occupiers.
  *
  * ## Statistics
  *
@@ -192,7 +195,30 @@ open class ZoneOccupier(
      * @param zone the zone to take, which must be on this occupier's guide path
      * @return the request, whose [ZoneRequest.isGranted] says whether the hold began at once
      */
-    fun requestZone(zone: Zone): ZoneRequest = ask(zone, Double.NaN)
+    fun requestZone(zone: Zone): ZoneRequest = ask(listOf(zone), Double.NaN)
+
+    /**
+     * Asks for a set of zones, which all close to new traffic at once and are held **together**.
+     *
+     * All or nothing, and that is the rule rather than a convenience. Taking the zones one by one
+     * as they drain would let the occupier hold part of a region while waiting for the rest, and a
+     * vehicle inside the region could then be waiting for a zone the occupier holds while the
+     * occupier waits for the zone the vehicle is standing in. That is a deadlock, and an invisible
+     * one: an occupier has no [awaitedZone], so the wait-for graph has no edge to close a cycle
+     * with and the detector would never report it. Holding nothing until every zone has drained
+     * keeps the occupier a sink, which makes the deadlock impossible rather than undetectable.
+     *
+     * Traffic already inside the region is let out rather than trapped -- see `ZoneClosureIfc` --
+     * which is what makes the drain terminate however busy the region is. The cost is that a
+     * closure over busy space begins later, and [fracTimeWaitingForSpace] is that delay, measured.
+     *
+     * The extent is chosen per occurrence, at run time, and the sources cost nothing: a link's
+     * zones by name, a junction's zone, a zone at a station, or a sample drawn from the network.
+     *
+     * @param zones the zones to take, all on this occupier's guide path, distinct, at least one
+     * @return the request, whose [ZoneRequest.isGranted] says whether the hold began at once
+     */
+    fun requestZones(zones: List<Zone>): ZoneRequest = ask(zones, Double.NaN)
 
     /**
      * Takes a zone for a stated duration, and gives it back without being asked again.
@@ -214,7 +240,24 @@ open class ZoneOccupier(
             "Occupier ($name) was asked to hold zone (${zone.name}) for $duration, which is not a " +
                     "duration. To take a zone until told otherwise, use requestZone."
         }
-        return ask(zone, duration)
+        return ask(listOf(zone), duration)
+    }
+
+    /**
+     * Takes a set of zones together for a stated duration, and gives them back without being asked.
+     *
+     * [requestZones] for the all-or-nothing rule, [holdZoneFor] for why the duration runs from the
+     * instant the hold begins rather than from the request.
+     *
+     * @param zones the zones to take, all on this occupier's guide path, distinct, at least one
+     * @param duration how long to hold them once the hold begins, strictly positive
+     */
+    fun holdZonesFor(zones: List<Zone>, duration: Double): ZoneRequest {
+        require(duration > 0.0) {
+            "Occupier ($name) was asked to hold ${zones.size} zone(s) for $duration, which is not " +
+                    "a duration. To take space until told otherwise, use requestZones."
+        }
+        return ask(zones, duration)
     }
 
     /**
@@ -226,13 +269,13 @@ open class ZoneOccupier(
      * call with a duration still recorded, which the next plain [requestZone] would then have
      * inherited and released itself out of.
      */
-    private fun ask(zone: Zone, duration: Double): ZoneRequest {
+    private fun ask(zones: List<Zone>, duration: Double): ZoneRequest {
         check(myRequest == null && myAllocation == null) {
             "Occupier ($name) already ${if (isHoldingSpace) "holds" else "has asked for"} space. " +
-                    "One zone at a time: give it back before asking for another."
+                    "One request at a time: give it back before asking for more."
         }
         myHoldDuration = duration
-        return space.requestZoneFor(this, zone)
+        return space.requestZonesFor(this, zones)
     }
 
     /**
@@ -289,7 +332,7 @@ open class ZoneOccupier(
         val duration = myHoldDuration
         if (duration.isFinite()) {
             myHoldDuration = Double.NaN
-            schedule(myReleaseAction, duration, allocation, name = "$name:releaseZone")
+            schedule(myReleaseAction, duration, allocation, name = "$name:releaseSpace")
         }
         onEngaged(allocation)
         // Copied, so that a listener may detach itself, or attach another, while being told.
