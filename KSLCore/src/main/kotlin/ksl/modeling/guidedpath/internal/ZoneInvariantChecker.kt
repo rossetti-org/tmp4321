@@ -153,11 +153,13 @@ internal class ZoneInvariantChecker(
             // exists to find: nothing is in the way, so nothing will ever come through
             // `becameAvailable` to offer it the zone. Being held or populated are both fine --
             // whatever is in the way will offer the zone when it goes.
-            if (link == null && zone.holder == null && zone.numPresent == 0) {
+            if (link == null && zone.holder == null && zone.numPresent == 0 &&
+                zone.closingFor == null
+            ) {
                 violate(
                     "transporter (${t.name}) is blocked waiting for zone (${zone.name}), which is " +
-                            "available -- nothing holds it and nothing is in it, so nothing will " +
-                            "ever wake the transporter"
+                            "available -- nothing holds it, nothing is in it and nothing has been " +
+                            "promised it, so nothing will ever wake the transporter"
                 )
             }
         }
@@ -206,6 +208,20 @@ internal class ZoneInvariantChecker(
                 violate(
                     "zone (${zone.name}) is held by (${holder.name}) and also has " +
                             "${zone.numPresent} occupant(s) present"
+                )
+            }
+            // A zone closing for one holder while another still holds it is the *normal* state of
+            // a drain, and the whole point of draining rather than evicting -- so there is nothing
+            // to assert about that. What must not happen is a zone closing for the very holder that
+            // has already taken it: the claim that takes a promised zone clears the promise in the
+            // same breath, so a zone still promised to its own holder means that did not happen,
+            // and the promise would go on excluding everyone for the rest of the replication.
+            val promisedTo = zone.closingFor
+            if (promisedTo != null && promisedTo === holder) {
+                violate(
+                    "zone (${zone.name}) is held by (${promisedTo.name}) and is still closing for " +
+                            "it, so the reservation was never cleared and nothing else can ever " +
+                            "have the zone"
                 )
             }
             if (zone.state == ZoneState.FREE) {

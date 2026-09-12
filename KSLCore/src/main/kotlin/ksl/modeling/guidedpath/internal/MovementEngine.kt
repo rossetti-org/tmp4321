@@ -559,12 +559,12 @@ internal class MovementEngine(
      * required once the transporter is clear of it.
      */
     private fun releaseZone(transporter: GuidedTransporter, zone: Zone) {
-        val woken = zone.release(transporter, mySystem.zoneContentionRule)
+        val offeredTo = zone.release(transporter, mySystem.zoneContentionRule)
         releaseLinkHoldsIfClearOf(transporter, zone)
         releaseSpurIfClear(transporter)
-        if (woken != null) {
-            mySystem.scheduleClaimRetry(woken)
-        }
+        // Whoever it went to, and it need not be a vehicle: a zone that was closing for an occupier
+        // has just finished draining. The space tells the two apart.
+        mySystem.handOver(offeredTo)
     }
 
     /**

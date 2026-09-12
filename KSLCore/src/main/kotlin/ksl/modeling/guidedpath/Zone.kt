@@ -135,12 +135,69 @@ sealed class Zone {
         get() = numPresent > 0
 
     /**
+     * Whom this zone is closing for, or null when it is open to whoever gets there first.
+     *
+     * A zone is *closing* between the moment something asks for it and the moment it can be given:
+     * no new claim and no new admission succeeds, while whatever is already there finishes and
+     * leaves. Draining rather than evicting is the whole of the discipline -- "the aisle is closed
+     * now, vehicles must leave" is evacuation, which needs somewhere for them to go and a policy
+     * for choosing it, and is a different problem.
+     *
+     * Reserving *for a named holder* rather than setting a flag is what makes the drain terminate.
+     * A closed zone that merely refused everyone would be given to whichever waiting vehicle asked
+     * next, and on a busy aisle the request would never be satisfied at all.
+     *
+     * Null in every model that does not close a zone, which is why the hot path pays a single null
+     * test for it.
+     */
+    var closingFor: ZoneHolderIfc? = null
+        internal set
+
+    /** True when nothing holds this zone and nothing is present in it, whoever it is closing for. */
+    internal val isDrained: Boolean
+        get() = state == ZoneState.FREE && numPresent == 0
+
+    /**
+     * Reserves the zone for a holder that has asked for it, so that it drains rather than being
+     * handed to the next vehicle along.
+     */
+    internal fun closeFor(claimant: ZoneHolderIfc) {
+        check(closingFor == null) {
+            "Zone ($name) is already closing for (${closingFor?.name}), so (${claimant.name}) " +
+                    "cannot reserve it as well. One at a time."
+        }
+        closingFor = claimant
+    }
+
+    /** Gives up a reservation without ever having taken the zone. */
+    internal fun abandonReservation(claimant: ZoneHolderIfc) {
+        check(closingFor === claimant) {
+            "Zone ($name) is not closing for (${claimant.name}): it is closing for " +
+                    "(${closingFor?.name ?: "no one"})."
+        }
+        closingFor = null
+    }
+
+    /**
+     * Offers a zone that has stopped closing to whoever was waiting for it.
+     *
+     * The third way a zone becomes available, and it needs the same funnel as the other two. A
+     * closure given up before it took effect leaves a zone that is free, empty and wanted -- and
+     * every vehicle refused while it was closing is still waiting with nothing scheduled, so
+     * reopening without offering it would strand them exactly as a lost release would.
+     *
+     * @return whom to hand the zone to, or null when nobody wanted it
+     */
+    internal fun reopen(rule: ZoneContentionRuleIfc? = null): ZoneHolderIfc? = becameAvailable(rule)
+
+    /**
      * Reserves the zone for a holder about to take it.
      *
      * Reserving before entering is what stops two transporters both starting into the same free
      * zone and arriving together. The claim fails, without side effect, when someone else already
-     * holds the zone **or anything at all is present in it** -- the second being what stops a
-     * vehicle driving into a crossing somebody is walking over.
+     * holds the zone, when **anything at all is present in it** -- which is what stops a vehicle
+     * driving into a crossing somebody is walking over -- or when the zone is **closing for
+     * somebody else**.
      *
      * @return true when the zone was available and is now claimed
      */
@@ -150,13 +207,18 @@ sealed class Zone {
         }
         if (state != ZoneState.FREE) return false
         if (numPresent > 0) return false
+        // Whoever the zone is closing for is the one holder the reservation does not exclude: this
+        // is how a granted reservation is taken up. The null test is what the hot path pays.
+        val reserved = closingFor
+        if (reserved != null && reserved !== claimant) return false
         state = ZoneState.CLAIMED
         holder = claimant
+        closingFor = null
         return true
     }
 
     /**
-     * Admits one occupant, which succeeds only when nothing holds the zone.
+     * Admits one occupant, which succeeds only when nothing holds the zone and it is not closing.
      *
      * The mirror of [claim]'s second condition, and between them they are the whole exclusion
      * mechanism: a vehicle cannot claim a zone with occupants, and an occupant cannot enter a zone
@@ -166,10 +228,11 @@ sealed class Zone {
      * property of space, so it belongs to whatever admission policy governs the population; the
      * zone reports the number and takes no view on it.
      *
-     * @return true when the zone had no holder and the occupant is now present
+     * @return true when the zone was open and the occupant is now present
      */
     internal fun admit(): Boolean {
         if (state != ZoneState.FREE) return false
+        if (closingFor != null) return false
         numPresent++
         return true
     }
@@ -238,7 +301,7 @@ sealed class Zone {
     internal fun release(
         claimant: ZoneHolderIfc,
         rule: ZoneContentionRuleIfc? = null
-    ): GuidedTransporter? {
+    ): ZoneHolderIfc? {
         check(holder === claimant) {
             "Zone ($name) cannot be released by (${claimant.name}): it is held by " +
                     "${holder?.name ?: "no one"}."
@@ -257,9 +320,9 @@ sealed class Zone {
      * replication.
      *
      * @param rule chooses among the waiting transporters
-     * @return the transporter to wake, or null when the zone is not yet available or none waited
+     * @return whom to hand the zone to, or null when it is not yet available and nobody wanted it
      */
-    internal fun depart(rule: ZoneContentionRuleIfc? = null): GuidedTransporter? {
+    internal fun depart(rule: ZoneContentionRuleIfc? = null): ZoneHolderIfc? {
         check(numPresent > 0) {
             "Zone ($name) has no occupant to release."
         }
@@ -272,21 +335,31 @@ sealed class Zone {
      *
      * **The single place a zone stops being unavailable**, and that is the point of it rather than
      * tidiness. There are two ways it can happen -- a holder releasing, and the last occupant
-     * leaving -- and a waiting transporter has nothing scheduled, so a path that freed the zone
-     * without offering it would leave everyone waiting on it stuck for the rest of the replication,
-     * with the run simply ceasing to advance and nothing to say why. Routing both through one
-     * function is what makes "free the zone without offering it" not separately expressible, which
-     * is a better guarantee than any amount of checking afterwards.
+     * leaving -- and neither a waiting transporter nor a waiting request has anything scheduled, so
+     * a path that freed the zone without offering it would leave everyone waiting on it stuck for
+     * the rest of the replication, with the run simply ceasing to advance and nothing to say why.
+     * Routing both through one function is what makes "free the zone without offering it" not
+     * separately expressible, which is a better guarantee than any amount of checking afterwards.
+     *
+     * Who it can be offered to is why this answers a [ZoneHolderIfc] and not a transporter: a zone
+     * that has been promised goes to whoever it was promised to, and the caller tells the two apart
+     * because waking a vehicle and granting a request are different things to schedule.
      *
      * The chosen waiter is handed the zone by being *woken*, not by being given the claim: the zone
      * genuinely becomes available in between. That matters because it is the only arrangement in
      * which the state is sound at every moment the clock could be observed -- a direct hand-off
      * would leave a window where the zone belonged to two transporters at once.
      */
-    private fun becameAvailable(rule: ZoneContentionRuleIfc?): GuidedTransporter? {
-        // Still not claimable: an occupant remains, or a holder does. Nobody is woken, and nobody
-        // needs to be, because whatever is still in the way will come through here when it leaves.
+    private fun becameAvailable(rule: ZoneContentionRuleIfc?): ZoneHolderIfc? {
+        // Still not claimable: an occupant remains, or a holder does. Nobody is offered the zone,
+        // and nobody needs to be, because whatever is still in the way will come through here when
+        // it leaves.
         if (state != ZoneState.FREE || numPresent > 0) return null
+        // A zone that is closing has been promised, and the drain has just finished. The promise
+        // comes first, and it must: handing the zone to a waiting vehicle instead is how a request
+        // to close a busy aisle would never be satisfied at all. The reservation stands until the
+        // holder takes it, so no vehicle can get in between.
+        closingFor?.let { return it }
         if (myWaiters.isEmpty() || rule == null) return null
         val chosen = rule.selectWaiter(this, myWaiters)
         check(chosen in myWaiters) {
@@ -316,6 +389,7 @@ sealed class Zone {
         state = ZoneState.FREE
         holder = null
         numPresent = 0
+        closingFor = null
         myWaiters.clear()
     }
 

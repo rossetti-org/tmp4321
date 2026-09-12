@@ -868,9 +868,28 @@ open class GuidedPathSpace @JvmOverloads constructor(
         var blocked = 0
         var idle = 0
         var covered = 0
+        var byVehicle = 0
+        var byOccupier = 0
+        var byPopulation = 0
         for (t in myTransporters) {
             when {
-                t.transporterState == TransporterState.BLOCKED -> blocked++
+                t.transporterState == TransporterState.BLOCKED -> {
+                    blocked++
+                    // Which of the three things now in a vehicle's way is in this one's. Bucketed
+                    // here because this loop is running anyway and each transporter already records
+                    // what it awaits; a transporter held up by a link is held up by the vehicles on
+                    // it, so it counts as the first.
+                    val zone = t.awaitedZone
+                    when {
+                        t.awaitedLink != null -> byVehicle++
+                        zone == null -> Unit
+                        zone.holder is GuidedTransporter -> byVehicle++
+                        zone.holder != null -> byOccupier++
+                        zone.numPresent > 0 -> byPopulation++
+                        else -> byOccupier++   // promised to an occupier, still draining
+                    }
+                }
+
                 t.isMoving -> moving++
                 else -> idle++
             }
@@ -879,6 +898,9 @@ open class GuidedPathSpace @JvmOverloads constructor(
         myNumMoving.value = moving.toDouble()
         myNumBlocked.value = blocked.toDouble()
         myNumIdle.value = idle.toDouble()
+        myNumBlockedByVehicle.value = byVehicle.toDouble()
+        myNumBlockedByOccupier.value = byOccupier.toDouble()
+        myNumBlockedByPopulation.value = byPopulation.toDouble()
         myZoneUtilization.value = covered.toDouble() / network.zones.size
         if (collectZoneStatistics || collectLinkStatistics) {
             refreshZoneDetail()
@@ -976,10 +998,185 @@ open class GuidedPathSpace @JvmOverloads constructor(
             "Zone (${zone.name}) is not on guide path (${this.name})."
         }
         auditFinishedInstant()
-        val woken = zone.depart(zoneContentionRule)
-        if (woken != null) {
-            scheduleClaimRetry(woken)
+        handOver(zone.depart(zoneContentionRule))
+    }
+
+    /**
+     * Tells whoever a zone has just been offered to that they may take it.
+     *
+     * The one place the two kinds of handover are told apart, and the reason `Zone` answers a
+     * [ZoneHolderIfc] rather than a transporter. A woken vehicle retries a claim it was refused; a
+     * granted request takes a zone that has finished draining. Both are scheduled rather than done
+     * here, so that their order against everything else at that instant is explicit.
+     */
+    internal fun handOver(offeredTo: ZoneHolderIfc?) {
+        when (offeredTo) {
+            null -> Unit
+            is GuidedTransporter -> scheduleClaimRetry(offeredTo)
+            is ZoneOccupier -> scheduleZoneGrant(offeredTo)
+            // A third kind of holder would land here, and should not land here silently: the zone
+            // has been offered to something nothing knows how to notify, so whatever was promised
+            // it would wait for ever.
+            else -> throw IllegalStateException(
+                "Zone offered to (${offeredTo.name}), which is neither a transporter nor an " +
+                        "occupier, so there is no way to tell it that it may take the zone."
+            )
         }
+    }
+
+    // ---- general occupancy: a holder that is not a vehicle -------------------------------------
+    //
+    // The space owns these rather than the occupier, and for the same reason the resource layer
+    // owns allocations rather than entities: exclusivity can only be guaranteed if nothing outside
+    // can mint a claim on the space. An occupier asks; the space decides, records and schedules.
+
+    private val myOccupierRequests = mutableMapOf<ZoneOccupier, ZoneRequest>()
+    private val myOccupierAllocations = mutableMapOf<ZoneOccupier, ZoneAllocation>()
+
+    private val myNumBlockedByVehicle =
+        TWResponse(this, name = "${this.name}:NumBlockedByVehicle")
+    private val myNumBlockedByOccupier =
+        TWResponse(this, name = "${this.name}:NumBlockedByOccupier")
+    private val myNumBlockedByPopulation =
+        TWResponse(this, name = "${this.name}:NumBlockedByPopulation")
+
+    /**
+     * Vehicle blocked time, decomposed by what was in the way: another vehicle, an occupier, or a
+     * population.
+     *
+     * **This split is what makes the whole construct validatable.** A model with no spills, no
+     * closures and no picking interference must still match observed throughput, so that time is
+     * fitted into inflated task times or a depressed velocity -- the model then matches the
+     * aggregate and is wrong about the mechanism, and will give bad advice about any change that
+     * alters the obstruction rate, which is the change a study is usually commissioned to evaluate.
+     * Three separately observable quantities turn one fitted fudge into a testable claim.
+     *
+     * Time-weighted counts, so each one's time-average is the mean number of vehicles held up by
+     * that cause, and the three sum to [numTransportersBlocked]. On the space rather than on the
+     * transporters, because three responses per vehicle would multiply the response count of every
+     * fleet to report what three responses per guide path report just as well.
+     */
+    val numBlockedByVehicle: TWResponseCIfc
+        get() = myNumBlockedByVehicle
+
+    /** Vehicles held up by an occupier: see [numBlockedByVehicle]. */
+    val numBlockedByOccupier: TWResponseCIfc
+        get() = myNumBlockedByOccupier
+
+    /** Vehicles held up by a zone's population: see [numBlockedByVehicle]. */
+    val numBlockedByPopulation: TWResponseCIfc
+        get() = myNumBlockedByPopulation
+
+    private var myClosedZoneCount = 0
+    private val myNumZonesClosed = TWResponse(this, name = "${this.name}:NumZonesClosed")
+
+    /**
+     * How many zones are held by something other than a vehicle.
+     *
+     * The statistic that makes the whole construct validatable, and the reason it is here rather
+     * than on the zones: there are thousands of zones and a handful of occupiers, so this is one
+     * response for the space instead of one per zone. Its time-average is the mean amount of guide
+     * path closed to traffic over the run, which is exactly the quantity a model without spills or
+     * closures has to hide inside inflated task times.
+     *
+     * Separate from [zoneUtilization], which counts vehicle bodies. Three different things can now
+     * make a zone unavailable -- a vehicle, an occupier, a population -- and collapsing them into
+     * one number would lose the decomposition that this work exists to expose.
+     */
+    val numZonesClosed: TWResponseCIfc
+        get() = myNumZonesClosed
+
+    /**
+     * Closes a zone for an occupier, and grants it at once when there was nothing to drain.
+     *
+     * The zone refuses every new claim and every new admission from this instant. What was already
+     * in it leaves in its own time, and the grant follows through the same handover that wakes a
+     * waiting vehicle -- which is the point of routing both through one place.
+     */
+    internal fun requestZoneFor(occupier: ZoneOccupier, zone: Zone): ZoneRequest {
+        require(zone in network.zones) {
+            "Zone (${zone.name}) is not on guide path (${this.name})."
+        }
+        auditFinishedInstant()
+        val request = ZoneRequest(occupier, zone, time)
+        myOccupierRequests[occupier] = request
+        occupier.recordRequest(request)
+        zone.closeFor(occupier)
+        // Nothing to drain: the grant is this instant, and takes the ordinary path rather than a
+        // shortcut, so that an immediate grant and a grant after a drain are the same code.
+        if (zone.isDrained) {
+            grantZoneTo(occupier)
+        }
+        return request
+    }
+
+    /**
+     * Takes a zone that has finished draining, on behalf of the occupier it was closing for.
+     *
+     * Separated from the offer by a scheduled event exactly as a woken vehicle's claim is: the zone
+     * is not handed over inside the release that freed it, so the state is sound at every instant
+     * the clock could be observed. Nothing can get in between, because the reservation stands until
+     * this runs.
+     */
+    private fun grantZoneTo(occupier: ZoneOccupier) {
+        val request = myOccupierRequests[occupier] ?: return
+        val zone = request.zone
+        // The reservation may have been given up between the offer and this event.
+        if (zone.closingFor !== occupier) return
+        check(zone.claim(occupier)) {
+            "Zone (${zone.name}) was offered to (${occupier.name}) and then refused its claim, " +
+                    "which cannot happen: the reservation excludes everyone else."
+        }
+        myOccupierRequests.remove(occupier)
+        val allocation = ZoneAllocation(occupier, zone, time)
+        myOccupierAllocations[occupier] = allocation
+        request.allocation = allocation
+        myClosedZoneCount++
+        myNumZonesClosed.value = myClosedZoneCount.toDouble()
+        occupier.recordEngagement(allocation)
+    }
+
+    /**
+     * Gives back whatever an occupier holds, or gives up what it asked for and never got.
+     *
+     * Harmless when it holds and wants nothing, which is what lets a process release
+     * unconditionally rather than asking first.
+     */
+    internal fun releaseZoneFrom(occupier: ZoneOccupier) {
+        auditFinishedInstant()
+        myOccupierRequests.remove(occupier)?.let { request ->
+            // Asked for, still draining, and no longer wanted: the aisle was going to be closed
+            // and now is not. The zone reopens without ever having been held.
+            request.zone.abandonReservation(occupier)
+            request.isAbandoned = true
+            occupier.recordRelease()
+            handOver(request.zone.reopen(zoneContentionRule))
+            return
+        }
+        val allocation = myOccupierAllocations.remove(occupier) ?: return
+        allocation.releasedAt = time
+        myClosedZoneCount--
+        myNumZonesClosed.value = myClosedZoneCount.toDouble()
+        occupier.recordRelease()
+        handOver(allocation.zone.release(occupier, zoneContentionRule))
+    }
+
+    private inner class ZoneGrantAction : EventActionIfc<ZoneOccupier> {
+        override fun action(event: KSLEvent<ZoneOccupier>) {
+            auditFinishedInstant()
+            grantZoneTo(event.message!!)
+        }
+    }
+
+    private val myZoneGrantAction = ZoneGrantAction()
+
+    /** Schedules an occupier's taking of a zone that has finished draining. */
+    private fun scheduleZoneGrant(occupier: ZoneOccupier) {
+        myNumEventsScheduled.increment()
+        schedule(
+            myZoneGrantAction, 0.0, occupier, ProcessModel.ZONE_CLAIM_PRIORITY,
+            "${occupier.name}:takeZone"
+        )
     }
 
     /** Schedules a transporter's arrival in the zone it is travelling into. */
@@ -1023,6 +1220,11 @@ open class GuidedPathSpace @JvmOverloads constructor(
         // Nothing is owed from the previous replication: its last instant was audited by
         // checkClosing, and the state it left is about to be thrown away.
         myUnauditedInstant = Double.NaN
+        // The space's own belief about what occupiers hold, which is a separate copy from the
+        // zones' and would otherwise describe the previous replication for the whole of the next.
+        myOccupierRequests.clear()
+        myOccupierAllocations.clear()
+        myClosedZoneCount = 0
         for (zone in network.zones) {
             zone.resetZone()
         }

@@ -260,7 +260,13 @@ class ResponseCardinalityTest {
             ":ZoneUtilization", ":NumDeadlocksDetected", ":NumObstructionsDetected",
             ":TransportTime", ":ApproachTime", ":RideTime", ":TransportBlockedTime",
             ":ZonesTraversedPerTransport", ":RouteLengthPerTransport",
-            ":NumZoneTraversals", ":NumEventsScheduled", ":EventsPerZoneTraversal"
+            ":NumZoneTraversals", ":NumEventsScheduled", ":EventsPerZoneTraversal",
+            // The decomposition of blocked time, which is what makes general occupancy
+            // validatable: a model with no closures has to hide that time in inflated task times,
+            // and these three are what turn one fitted fudge into separately observable
+            // quantities. Aggregates, so they are on by default with the rest.
+            ":NumZonesClosed", ":NumBlockedByVehicle", ":NumBlockedByOccupier",
+            ":NumBlockedByPopulation"
         )) {
             assertTrue(
                 names.any { it.endsWith(suffix) },
