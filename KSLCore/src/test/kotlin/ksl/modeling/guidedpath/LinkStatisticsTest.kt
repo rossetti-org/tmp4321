@@ -100,7 +100,7 @@ class LinkStatisticsTest {
         val expectedZonesCovered = 3.6 / 100.0
         assertEquals(
             expectedZonesCovered,
-            s.system.linkOccupancy.getValue(link).withinReplicationStatistic.weightedAverage,
+            s.system.linkCoverage.getValue(link).withinReplicationStatistic.weightedAverage,
             1e-9
         )
         assertEquals(
@@ -122,12 +122,12 @@ class LinkStatisticsTest {
         // to the end of the run, having parked there.
         assertEquals(
             1.2 / 100.0,
-            s.system.intersectionOccupancy.getValue(a).withinReplicationStatistic.weightedAverage,
+            s.system.intersectionCoverage.getValue(a).withinReplicationStatistic.weightedAverage,
             1e-9
         )
         assertEquals(
             (100.0 - 4.8) / 100.0,
-            s.system.intersectionOccupancy.getValue(b).withinReplicationStatistic.weightedAverage,
+            s.system.intersectionCoverage.getValue(b).withinReplicationStatistic.weightedAverage,
             1e-9,
             "an idle transporter goes on occupying the junction it stopped on, which is exactly " +
                     "why this statistic is worth having"
@@ -140,10 +140,10 @@ class LinkStatisticsTest {
         val s = run(collectZones = true, replicationLength = 100.0)
         val link = s.network.link("Path")!!
         val perZoneTotal = link.zones.sumOf {
-            s.system.zoneOccupancy.getValue(it).withinReplicationStatistic.weightedAverage
+            s.system.zoneCoverage.getValue(it).withinReplicationStatistic.weightedAverage
         }
         assertEquals(
-            s.system.linkOccupancy.getValue(link).withinReplicationStatistic.weightedAverage,
+            s.system.linkCoverage.getValue(link).withinReplicationStatistic.weightedAverage,
             perZoneTotal,
             1e-9,
             "the two tiers must agree, or a modeller drilling from one to the other finds them " +
@@ -158,12 +158,12 @@ class LinkStatisticsTest {
         // registered them under one name and the model refused to build -- a defect nobody would
         // have met until they switched on both flags, at which point nothing would run at all.
         val s = run(collectLinks = true, collectZones = true)
-        assertEquals(s.network.intersections.size, s.system.intersectionOccupancy.size)
-        assertEquals(s.network.zones.size, s.system.zoneOccupancy.size)
+        assertEquals(s.network.intersections.size, s.system.intersectionCoverage.size)
+        assertEquals(s.network.zones.size, s.system.zoneCoverage.size)
         val a = s.network.requireLocation("A")
         assertEquals(
-            s.system.intersectionOccupancy.getValue(a).withinReplicationStatistic.weightedAverage,
-            s.system.zoneOccupancy.getValue(a.zone).withinReplicationStatistic.weightedAverage,
+            s.system.intersectionCoverage.getValue(a).withinReplicationStatistic.weightedAverage,
+            s.system.zoneCoverage.getValue(a.zone).withinReplicationStatistic.weightedAverage,
             1e-9,
             "the two tiers measure the same junction and must agree about it"
         )
@@ -173,10 +173,10 @@ class LinkStatisticsTest {
     @DisplayName("Nothing is collected, and nothing is registered, when the flags are off")
     fun withTheFlagsOffThereIsNothingToRead() {
         val s = run(collectLinks = false, collectZones = false)
-        assertTrue(s.system.linkOccupancy.isEmpty())
+        assertTrue(s.system.linkCoverage.isEmpty())
         assertTrue(s.system.linkUtilization.isEmpty())
-        assertTrue(s.system.intersectionOccupancy.isEmpty())
-        assertTrue(s.system.zoneOccupancy.isEmpty())
+        assertTrue(s.system.intersectionCoverage.isEmpty())
+        assertTrue(s.system.zoneCoverage.isEmpty())
     }
 
     @Test

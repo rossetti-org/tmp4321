@@ -77,7 +77,7 @@ internal class ZoneInvariantChecker(
         try {
             checkZonesAgreeWithTransporters()
             checkTransportersCoverContiguousRuns()
-            checkOccupancyIsConserved()
+            checkCoverageIsConserved()
             checkWaitingIsConsistent()
         } finally {
             myAuditedTime = Double.NaN
@@ -205,11 +205,11 @@ internal class ZoneInvariantChecker(
                             "claiming (${holder.claimedZone?.name ?: "nothing"})"
                 )
             }
-            if (zone.state == ZoneState.OCCUPIED && zone !in holder.occupiedZones) {
+            if (zone.state == ZoneState.COVERED && zone !in holder.coveredZones) {
                 violate(
-                    "zone (${zone.name}) is occupied by (${holder.name}), but that transporter " +
+                    "zone (${zone.name}) is covered by (${holder.name}), but that transporter " +
                             "does not count it among the zones it covers: " +
-                            holder.occupiedZones.joinToString { it.name }
+                            holder.coveredZones.joinToString { it.name }
                 )
             }
         }
@@ -221,7 +221,7 @@ internal class ZoneInvariantChecker(
      */
     private fun checkTransportersCoverContiguousRuns() {
         for (t in mySystem.transporters) {
-            val zones = t.occupiedZones
+            val zones = t.coveredZones
             // Held, not covered: a transporter one zone long that has given up the zone behind at
             // the moment travel began is briefly between zones, covering none and holding only the
             // one it is entering. It still denies exactly one zone to everyone else, which is what
@@ -243,10 +243,10 @@ internal class ZoneInvariantChecker(
                                 "covers, but that zone is held by (${zone.holder?.name ?: "no one"})"
                     )
                 }
-                if (zone.state != ZoneState.OCCUPIED) {
+                if (zone.state != ZoneState.COVERED) {
                     violate(
                         "transporter (${t.name}) covers zone (${zone.name}), which is " +
-                                "${zone.state} rather than occupied"
+                                "${zone.state} rather than covered"
                     )
                 }
             }
@@ -277,13 +277,13 @@ internal class ZoneInvariantChecker(
         }
     }
 
-    /** The zones believed occupied and the zones transporters believe they cover are the same set. */
-    private fun checkOccupancyIsConserved() {
-        val byZones = mySystem.network.zones.count { it.state == ZoneState.OCCUPIED }
-        val byTransporters = mySystem.transporters.sumOf { it.occupiedZones.size }
+    /** The zones believed covered and the zones transporters believe they cover are the same set. */
+    private fun checkCoverageIsConserved() {
+        val byZones = mySystem.network.zones.count { it.state == ZoneState.COVERED }
+        val byTransporters = mySystem.transporters.sumOf { it.coveredZones.size }
         if (byZones != byTransporters) {
             violate(
-                "$byZones zones report being occupied, but transporters between them claim to " +
+                "$byZones zones report being covered, but transporters between them claim to " +
                         "cover $byTransporters"
             )
         }

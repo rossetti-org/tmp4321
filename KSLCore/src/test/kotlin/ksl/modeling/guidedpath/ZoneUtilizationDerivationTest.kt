@@ -36,7 +36,7 @@ import kotlin.test.assertTrue
  *  and cost about three quarters of the whole run. It now gets it by summing what the transporters
  *  say they cover, a loop over the fleet that was running anyway.
  *
- *  The two are the same number, and `checkOccupancyIsConserved` exists to assert exactly that --
+ *  The two are the same number, and `checkCoverageIsConserved` exists to assert exactly that --
  *  but only at the end of an instant, and `refreshFleetCounts` is called *within* events. So the
  *  substitution rests on the two agreeing at every moment either is observed, which is a stronger
  *  claim than the audit makes and needs its own test.
@@ -99,7 +99,7 @@ class ZoneUtilizationDerivationTest {
 
         // The same fraction, derived from a genuine walk: each per-zone series is the fraction of
         // time that zone was covered, so their mean is the fraction of the network covered.
-        val perZone = c.system.zoneOccupancy.values
+        val perZone = c.system.zoneCoverage.values
             .sumOf { it.withinReplicationStatistic.weightedAverage } / c.network.zones.size
 
         assertEquals(

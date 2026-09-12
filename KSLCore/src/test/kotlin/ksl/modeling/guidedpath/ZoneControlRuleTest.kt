@@ -80,7 +80,7 @@ class ZoneControlRuleTest {
             for (t in probeTimes) {
                 schedule({ _: KSLEvent<Nothing> ->
                     probes[t] = network.zones.associate { it.name to it.state }
-                    coverage[t] = cart.occupiedZones.size to (cart.claimedZone != null)
+                    coverage[t] = cart.coveredZones.size to (cart.claimedZone != null)
                 }, t)
             }
         }
@@ -112,15 +112,15 @@ class ZoneControlRuleTest {
     fun `under end control the zone behind is still held while the transporter crosses`() {
         val s = run(EndOfZoneControl(), listOf(0.5, 1.1))
         // The cart left A at time zero and reaches L1.Zone1 at 1.2. Until then A stays held.
-        assertEquals(ZoneState.OCCUPIED, s.probes[0.5]!!["A"])
-        assertEquals(ZoneState.OCCUPIED, s.probes[1.1]!!["A"])
+        assertEquals(ZoneState.COVERED, s.probes[0.5]!!["A"])
+        assertEquals(ZoneState.COVERED, s.probes[1.1]!!["A"])
     }
 
     @Test
     fun `under end control the zone behind is given up on arrival in the next`() {
         val s = run(EndOfZoneControl(), listOf(1.3))
         assertEquals(ZoneState.FREE, s.probes[1.3]!!["A"])
-        assertEquals(ZoneState.OCCUPIED, s.probes[1.3]!!["L1.Zone1"])
+        assertEquals(ZoneState.COVERED, s.probes[1.3]!!["L1.Zone1"])
     }
 
     // ---- release at the start of the zone ahead -----------------------------------------------
@@ -148,7 +148,7 @@ class ZoneControlRuleTest {
     fun `under distance control the zone behind is held until that distance is covered`() {
         // Six feet into a twelve foot zone at ten feet a minute is 0.6 minutes.
         val s = run(DistanceIntoZoneControl(6.0), listOf(0.3, 0.9))
-        assertEquals(ZoneState.OCCUPIED, s.probes[0.3]!!["A"])
+        assertEquals(ZoneState.COVERED, s.probes[0.3]!!["A"])
         assertEquals(ZoneState.FREE, s.probes[0.9]!!["A"])
     }
 
@@ -157,7 +157,7 @@ class ZoneControlRuleTest {
         val early = run(DistanceIntoZoneControl(3.0), listOf(0.45))
         val late = run(DistanceIntoZoneControl(9.0), listOf(0.45))
         assertEquals(ZoneState.FREE, early.probes[0.45]!!["A"])
-        assertEquals(ZoneState.OCCUPIED, late.probes[0.45]!!["A"])
+        assertEquals(ZoneState.COVERED, late.probes[0.45]!!["A"])
     }
 
     @Test
@@ -207,10 +207,10 @@ class ZoneControlRuleTest {
             lengthInZones = 3, placement = TransporterPlacement.OnZone("L1.Zone3")
         )
         for (t in listOf(1.3, 3.7, 6.1)) {
-            val occupied = s.probes[t]!!.values.count { it == ZoneState.OCCUPIED }
+            val occupied = s.probes[t]!!.values.count { it == ZoneState.COVERED }
             assertTrue(occupied <= 3, "at $t the cart covered $occupied zones")
         }
-        assertEquals(3, s.cart.occupiedZones.size)
+        assertEquals(3, s.cart.coveredZones.size)
     }
 
     @Test
@@ -275,7 +275,7 @@ class ZoneControlRuleTest {
         // control, being sent to a staging area and re-tasked on the way.
         val s = run(StartOfZoneControl(), listOf(0.6), redirectAt = 0.6, redirectTo = "B")
         assertEquals(
-            0, s.probes[0.6]!!.values.count { it == ZoneState.OCCUPIED },
+            0, s.probes[0.6]!!.values.count { it == ZoneState.COVERED },
             "at 0.6 minutes the cart should cover no zone, which is what makes this the case of interest"
         )
         // The redirection takes effect at the next zone boundary, so the cart finishes the zone it
@@ -289,9 +289,9 @@ class ZoneControlRuleTest {
         // transporter it would stand on more of the path than it covers for the rest of the run.
         for (rule in listOf(EndOfZoneControl(), StartOfZoneControl(), DistanceIntoZoneControl(6.0))) {
             val s = run(rule, emptyList())
-            assertEquals(1, s.cart.occupiedZones.size, "after $rule")
+            assertEquals(1, s.cart.coveredZones.size, "after $rule")
             assertEquals(null, s.cart.claimedZone, "after $rule")
-            assertEquals(1, s.network.zones.count { it.isHeld }, "after $rule")
+            assertEquals(1, s.network.zones.count { it.hasHolder }, "after $rule")
         }
     }
 }

@@ -126,9 +126,9 @@ class ResponseCardinalityTest {
         // intersections. Nothing else: an opt-in that quietly brought other things with it would be
         // as surprising as no opt-in at all.
         assertEquals(15, added.size, "unexpected additions: $added")
-        assertEquals(5, added.count { it.endsWith(":NumZonesOccupied") })
+        assertEquals(5, added.count { it.endsWith(":NumZonesCovered") })
         assertEquals(5, added.count { it.endsWith(":Utilization") })
-        assertEquals(5, added.count { it.endsWith(":IntersectionOccupied") })
+        assertEquals(5, added.count { it.endsWith(":IntersectionCovered") })
     }
 
     @Test
@@ -139,7 +139,7 @@ class ResponseCardinalityTest {
         val added = on - off
         // Twenty link zones and five intersection zones.
         assertEquals(25, added.size, "unexpected additions: $added")
-        assertTrue(added.all { it.endsWith(":ZoneOccupied") }, "$added")
+        assertTrue(added.all { it.endsWith(":ZoneCovered") }, "$added")
     }
 
     @Test
@@ -155,7 +155,7 @@ class ResponseCardinalityTest {
         ring.system.collectLinkStatistics = true
         val after = (m.responses.map { it.name } + m.counters.map { it.name }).toSet()
         assertEquals(15, (after - before).size, "unexpected additions: ${after - before}")
-        assertEquals(5, ring.system.linkOccupancy.size)
+        assertEquals(5, ring.system.linkCoverage.size)
     }
 
     @Test
@@ -174,10 +174,10 @@ class ResponseCardinalityTest {
             withDetail.size > without.size,
             "the report must actually shrink: ${withDetail.size} then ${without.size}"
         )
-        assertTrue(ring.system.linkOccupancy.isEmpty())
-        assertTrue(ring.system.zoneOccupancy.isEmpty())
+        assertTrue(ring.system.linkCoverage.isEmpty())
+        assertTrue(ring.system.zoneCoverage.isEmpty())
         assertTrue(
-            without.none { it.endsWith(":NumZonesOccupied") || it.endsWith(":ZoneOccupied") },
+            without.none { it.endsWith(":NumZonesCovered") || it.endsWith(":ZoneCovered") },
             "no trace of the removed tiers may remain: $without"
         )
         // And what is left is exactly what a system built without the detail would have had.
@@ -218,7 +218,7 @@ class ResponseCardinalityTest {
         val link = ring.network.link("L0")!!
         assertEquals(
             1.0,
-            ring.system.intersectionOccupancy.getValue(ring.network.requireLocation("I0"))
+            ring.system.intersectionCoverage.getValue(ring.network.requireLocation("I0"))
                 .withinReplicationStatistic.weightedAverage,
             1e-9,
             "the parked cart covers I0 for the whole run, and the re-registered response must " +

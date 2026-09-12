@@ -122,17 +122,17 @@ class MultiFloorTest {
 
         @Suppress("UNUSED_PARAMETER")
         private fun sampleLift(event: KSLEvent<Nothing>) {
-            // `isHeld`, not `isOccupied`, and the difference is the whole point of this sample.
+            // `hasHolder`, not `isCovered`, and the difference is the whole point of this sample.
             //
             // A transporter reserves the zone ahead before entering it -- that reservation is what
             // stops two vehicles starting into the same free zone -- and only marks it OCCUPIED
             // once its body comes to rest covering it. The last zone of a link is therefore never
             // OCCUPIED: arriving at its far end means arriving at the junction beyond, so it goes
             // straight from CLAIMED back to FREE. On a single-zone lift that is the only zone there
-            // is, so `isOccupied` reports an empty lift throughout a run that plainly uses one,
-            // while `isHeld` reports the truth. Exclusion is on the reservation, and so is this.
+            // is, so `isCovered` reports an empty lift throughout a run that plainly uses one,
+            // while `hasHolder` reports the truth. Exclusion is on the reservation, and so is this.
             val lift = network.link("LiftUp")!!.zones.first()
-            liftOccupancy.add(if (lift.isHeld) 1 else 0)
+            liftOccupancy.add(if (lift.hasHolder) 1 else 0)
             lift.holder?.let { liftHolders.add(it.name) }
         }
 

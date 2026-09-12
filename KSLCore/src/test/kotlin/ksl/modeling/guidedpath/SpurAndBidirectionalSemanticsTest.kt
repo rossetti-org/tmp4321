@@ -162,7 +162,7 @@ class SpurAndBidirectionalSemanticsTest {
         assertEquals("S", long.frontZone?.name)
         assertEquals(
             listOf("I2", "Spur.Zone1", "Spur.Zone2", "S"),
-            long.occupiedZones.map { it.name }
+            long.coveredZones.map { it.name }
         )
         // Holding the mouth means nothing can pass through the junction at all.
         assertSame(long, y.network.intersection("I2")!!.zone.holder)

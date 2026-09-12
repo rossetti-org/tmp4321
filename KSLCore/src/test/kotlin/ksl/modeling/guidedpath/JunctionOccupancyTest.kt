@@ -114,7 +114,7 @@ class JunctionOccupancyTest {
 
         // The junction J has length 0, so crossing it takes no time. The time it is *held* is a
         // different quantity, and this is it: the fraction of the run J was occupied, times the run.
-        val occupied = m.response("Fleet:Space:J:ZoneOccupied")!!
+        val occupied = m.response("Fleet:Space:J:ZoneCovered")!!
             .withinReplicationStatistic.weightedAverage * horizon
 
         // Predicted from the layout, not fitted: the outgoing link J-B has zones of 50 and the cart

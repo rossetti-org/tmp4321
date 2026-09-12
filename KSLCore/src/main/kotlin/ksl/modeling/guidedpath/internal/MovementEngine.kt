@@ -459,7 +459,7 @@ internal class MovementEngine(
      * another could enter against it.
      */
     fun acquirePlacementHolds(transporter: GuidedTransporter) {
-        val links = transporter.occupiedZones.filterIsInstance<LinkZone>().map { it.link }.distinct()
+        val links = transporter.coveredZones.filterIsInstance<LinkZone>().map { it.link }.distinct()
         for (link in links) {
             link.acquireDirection(transporter.travellingForward)
         }
@@ -470,7 +470,7 @@ internal class MovementEngine(
         // First, so that nothing reached from here reads an odometer that still has this traversal
         // in progress and counts part of it twice.
         transporter.endTraversal()
-        zone.occupy(transporter)
+        zone.cover(transporter)
         transporter.claimedZone = null
         transporter.addFrontZone(zone)
         mySystem.countZoneTraversal()
@@ -602,7 +602,7 @@ internal class MovementEngine(
      */
     private fun directionAfterEntering(transporter: GuidedTransporter, entered: Zone): Boolean {
         if (entered !is LinkZone) return transporter.travellingForward
-        val previous = transporter.occupiedZones.let {
+        val previous = transporter.coveredZones.let {
             if (it.size >= 2) it[it.size - 2] else null
         } ?: return transporter.travellingForward
         if (previous is LinkZone && previous.link === entered.link) {

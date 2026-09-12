@@ -92,7 +92,7 @@ class WorkBeatsDispositionTest {
 
         @Suppress("UNUSED_PARAMETER")
         private fun sample(event: KSLEvent<Nothing>) {
-            // The staging point is the far home spur. `isHeld` rather than `isOccupied`: a spur's
+            // The staging point is the far home spur. `hasHolder` rather than `isCovered`: a spur's
             // single zone is the last zone of its link and is therefore reserved but never occupied.
             val spur = network.link("Link6")!!.zones.first()
             if (spur.holder === cart.transporter && agv.dispatcher.taskQ.size > 0) {

@@ -324,9 +324,9 @@ a line being written to make it do so. There is no lift class, no floor concept,
 anywhere in the engine — the exclusion is the zone rule you already have. Give the shaft its own
 `velocityFactor` if a lift is slower than the corridors.
 
-One thing to know before trusting a two-floor model: ask a shaft zone `isHeld`, **not**
-`isOccupied`. A link's last zone is never occupied, because arriving at its far end means
-arriving at the junction beyond, so `isOccupied` reports an idle single-zone lift and `isHeld`
+One thing to know before trusting a two-floor model: ask a shaft zone `hasHolder`, **not**
+`isCovered`. A link's last zone is never covered, because arriving at its far end means
+arriving at the junction beyond, so `isCovered` reports an idle single-zone lift and `hasHolder`
 reports the truth.
 
 For the picture, give each floor its own height. An intersection carries `z` as well as `x`

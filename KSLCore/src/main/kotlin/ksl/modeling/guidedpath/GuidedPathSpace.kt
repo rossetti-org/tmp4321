@@ -368,13 +368,13 @@ open class GuidedPathSpace @JvmOverloads constructor(
     // updated, which matters -- a response left registered but never written would appear in every
     // report and every database table with nothing in it, which is worse than either honest answer.
 
-    private var myLinkOccupancy: Map<Link, TWResponse> = emptyMap()
+    private var myLinkCoverage: Map<Link, TWResponse> = emptyMap()
     private var myLinkUtilization: Map<Link, Response> = emptyMap()
-    private var myIntersectionOccupancy: Map<GuidedPathNetwork.Intersection, TWResponse> = emptyMap()
-    private var myZoneOccupancy: Map<Zone, TWResponse> = emptyMap()
+    private var myIntersectionCoverage: Map<GuidedPathNetwork.Intersection, TWResponse> = emptyMap()
+    private var myZoneCoverage: Map<Zone, TWResponse> = emptyMap()
 
     /**
-     * Whether occupancy is collected for each link and each intersection.
+     * Whether coverage is collected for each link and each intersection.
      *
      * Settable until the model runs. Setting it registers or removes the responses there and then,
      * so the flag and the report always agree.
@@ -387,8 +387,8 @@ open class GuidedPathSpace @JvmOverloads constructor(
             }
             if (value == field) return
             if (value) {
-                myLinkOccupancy = network.links.associateWith {
-                    TWResponse(this, name = "${this.name}:${it.name}:NumZonesOccupied")
+                myLinkCoverage = network.links.associateWith {
+                    TWResponse(this, name = "${this.name}:${it.name}:NumZonesCovered")
                 }
                 myLinkUtilization = network.links.associateWith {
                     Response(this, name = "${this.name}:${it.name}:Utilization")
@@ -397,22 +397,22 @@ open class GuidedPathSpace @JvmOverloads constructor(
                 // so with both flags on it would otherwise be registered twice under one name and
                 // the model would refuse to build -- which is exactly what happened the first time
                 // the two tiers were switched on together.
-                myIntersectionOccupancy = network.intersections.associateWith {
-                    TWResponse(this, name = "${this.name}:${it.name}:IntersectionOccupied")
+                myIntersectionCoverage = network.intersections.associateWith {
+                    TWResponse(this, name = "${this.name}:${it.name}:IntersectionCovered")
                 }
             } else {
-                discard(myLinkOccupancy.values)
+                discard(myLinkCoverage.values)
                 discard(myLinkUtilization.values)
-                discard(myIntersectionOccupancy.values)
-                myLinkOccupancy = emptyMap()
+                discard(myIntersectionCoverage.values)
+                myLinkCoverage = emptyMap()
                 myLinkUtilization = emptyMap()
-                myIntersectionOccupancy = emptyMap()
+                myIntersectionCoverage = emptyMap()
             }
             field = value
         }
 
     /**
-     * Whether occupancy is collected for every individual zone.
+     * Whether coverage is collected for every individual zone.
      *
      * The finest tier and the most expensive: one response per zone. Settable until the model runs,
      * in either direction, as [collectLinkStatistics] is.
@@ -425,12 +425,12 @@ open class GuidedPathSpace @JvmOverloads constructor(
             }
             if (value == field) return
             if (value) {
-                myZoneOccupancy = network.zones.associateWith {
-                    TWResponse(this, name = "${this.name}:${it.name}:ZoneOccupied")
+                myZoneCoverage = network.zones.associateWith {
+                    TWResponse(this, name = "${this.name}:${it.name}:ZoneCovered")
                 }
             } else {
-                discard(myZoneOccupancy.values)
-                myZoneOccupancy = emptyMap()
+                discard(myZoneCoverage.values)
+                myZoneCoverage = emptyMap()
             }
             field = value
         }
@@ -454,8 +454,8 @@ open class GuidedPathSpace @JvmOverloads constructor(
     }
 
     /** Zones of each link covered by a transporter, when link statistics were asked for. */
-    val linkOccupancy: Map<Link, TWResponseCIfc>
-        get() = myLinkOccupancy
+    val linkCoverage: Map<Link, TWResponseCIfc>
+        get() = myLinkCoverage
 
     /**
      * The fraction of each link's zones covered over the replication, computed when the replication
@@ -465,12 +465,12 @@ open class GuidedPathSpace @JvmOverloads constructor(
         get() = myLinkUtilization
 
     /** Whether each intersection was covered, when link statistics were asked for. */
-    val intersectionOccupancy: Map<GuidedPathNetwork.Intersection, TWResponseCIfc>
-        get() = myIntersectionOccupancy
+    val intersectionCoverage: Map<GuidedPathNetwork.Intersection, TWResponseCIfc>
+        get() = myIntersectionCoverage
 
     /** Whether each individual zone was covered, when zone statistics were asked for. */
-    val zoneOccupancy: Map<Zone, TWResponseCIfc>
-        get() = myZoneOccupancy
+    val zoneCoverage: Map<Zone, TWResponseCIfc>
+        get() = myZoneCoverage
 
     // ---- what each completed transport cost ----------------------------------------------------
     //
@@ -855,7 +855,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * It does not walk the zones. How many zones are covered is the number this needs, and it is
      * asked of the transporters rather than of the network -- a loop over a fleet of twenty instead
      * of a loop over four hundred zones, folded into the loop that was being run anyway. The two
-     * are the same number, and not by coincidence: `checkOccupancyIsConserved` exists to assert
+     * are the same number, and not by coincidence: `checkCoverageIsConserved` exists to assert
      * exactly that equality, continuously under the test suite and once per replication everywhere
      * else. This is that invariant being spent rather than merely checked.
      *
@@ -874,7 +874,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
                 t.isMoving -> moving++
                 else -> idle++
             }
-            covered += t.occupiedZones.size
+            covered += t.coveredZones.size
         }
         myNumMoving.value = moving.toDouble()
         myNumBlocked.value = blocked.toDouble()
@@ -886,7 +886,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
     }
 
     /**
-     * Writes the per-zone, per-intersection and per-link occupancy responses.
+     * Writes the per-zone, per-intersection and per-link coverage responses.
      *
      * Separate from [refreshFleetCounts] so that the walk it needs is paid for only by the models
      * that asked for the detail. One walk serves all three, so having asked for any of them costs
@@ -895,19 +895,19 @@ open class GuidedPathSpace @JvmOverloads constructor(
     private fun refreshZoneDetail() {
         val perLink = if (collectLinkStatistics) HashMap<Link, Int>(network.links.size) else null
         for (z in network.zones) {
-            val isOccupied = z.isOccupied
-            myZoneOccupancy[z]?.value = if (isOccupied) 1.0 else 0.0
+            val isCovered = z.isCovered
+            myZoneCoverage[z]?.value = if (isCovered) 1.0 else 0.0
             when (z) {
-                is LinkZone -> if (perLink != null && isOccupied) {
+                is LinkZone -> if (perLink != null && isCovered) {
                     perLink[z.link] = (perLink[z.link] ?: 0) + 1
                 }
 
                 is IntersectionZone ->
-                    myIntersectionOccupancy[z.intersection]?.value = if (isOccupied) 1.0 else 0.0
+                    myIntersectionCoverage[z.intersection]?.value = if (isCovered) 1.0 else 0.0
             }
         }
         if (perLink != null) {
-            for ((link, response) in myLinkOccupancy) {
+            for ((link, response) in myLinkCoverage) {
                 response.value = (perLink[link] ?: 0).toDouble()
             }
         }
@@ -1033,9 +1033,9 @@ open class GuidedPathSpace @JvmOverloads constructor(
         }
         // The same derivation a conveyor uses for cell utilization: the time-weighted average
         // number of zones covered, over how many zones the link has.
-        for ((link, occupancy) in myLinkOccupancy) {
+        for ((link, coverage) in myLinkCoverage) {
             myLinkUtilization[link]?.value =
-                occupancy.withinReplicationStatistic.weightedAverage / link.numZones
+                coverage.withinReplicationStatistic.weightedAverage / link.numZones
         }
         val stuck = blockedTransporters
         if (stuck.isEmpty()) return

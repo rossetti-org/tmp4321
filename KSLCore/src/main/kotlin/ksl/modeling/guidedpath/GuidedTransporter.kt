@@ -293,14 +293,14 @@ class GuidedTransporter @JvmOverloads constructor(
             mySpatialElement.currentLocation = value
         }
 
-    private val myOccupiedZones = mutableListOf<Zone>()
+    private val myCoveredZones = mutableListOf<Zone>()
 
     /**
      * The zones the transporter covers, from the rear of the vehicle to its front. Contiguous along
      * its direction of travel, and no longer than its length once it is fully on the guide path.
      */
-    val occupiedZones: List<Zone>
-        get() = myOccupiedZones
+    val coveredZones: List<Zone>
+        get() = myCoveredZones
 
     /**
      * The zone the transporter has reserved and is travelling into, or null when it is not moving.
@@ -315,15 +315,15 @@ class GuidedTransporter @JvmOverloads constructor(
 
     /** Every zone the transporter denies to others: the ones it covers, plus the one it is entering. */
     val heldZones: List<Zone>
-        get() = claimedZone?.let { myOccupiedZones + it } ?: myOccupiedZones
+        get() = claimedZone?.let { myCoveredZones + it } ?: myCoveredZones
 
     /** The zone at the leading edge, or null before the transporter has been placed. */
     val frontZone: Zone?
-        get() = myOccupiedZones.lastOrNull()
+        get() = myCoveredZones.lastOrNull()
 
     /** The zone at the trailing edge, or null before the transporter has been placed. */
     val rearZone: Zone?
-        get() = myOccupiedZones.firstOrNull()
+        get() = myCoveredZones.firstOrNull()
 
     /**
      * What the transporter is doing. Named apart from the resource state it inherits, which says
@@ -921,7 +921,7 @@ class GuidedTransporter @JvmOverloads constructor(
      * Called for every transporter at the start of every replication.
      */
     internal fun placeAtInitialPosition() {
-        myOccupiedZones.clear()
+        myCoveredZones.clear()
         currentRoute = null
         claimedZone = null
         pendingDestination = null
@@ -957,20 +957,20 @@ class GuidedTransporter @JvmOverloads constructor(
                     zone.holder?.name ?: "another transporter", this.name, zone.name
                 )
             }
-            zone.occupy(this)
-            myOccupiedZones.add(zone)
+            zone.cover(this)
+            myCoveredZones.add(zone)
         }
         currentLocation = system.locationOf(this)
     }
 
     /** Adds a zone at the leading edge. Called only by the movement engine. */
     internal fun addFrontZone(zone: Zone) {
-        myOccupiedZones.add(zone)
+        myCoveredZones.add(zone)
     }
 
     /** Removes the trailing zone. Called only by the movement engine. */
     internal fun removeRearZone(): Zone? =
-        if (myOccupiedZones.isEmpty()) null else myOccupiedZones.removeAt(0)
+        if (myCoveredZones.isEmpty()) null else myCoveredZones.removeAt(0)
 
     /**
      * True when the transporter covers more zones than it is long, so a zone at the rear is surplus
@@ -987,7 +987,7 @@ class GuidedTransporter @JvmOverloads constructor(
     internal var lengthCreditRemaining: Double = 0.0
 
     internal val hasSurplusZones: Boolean
-        get() = myOccupiedZones.size > lengthInZones
+        get() = myCoveredZones.size > lengthInZones
 
     /**
      * True when the transporter is fully on the guide path, so that giving up the zone behind
@@ -1000,7 +1000,7 @@ class GuidedTransporter @JvmOverloads constructor(
      * yet covered.
      */
     internal val isFullyOnPath: Boolean
-        get() = myOccupiedZones.size >= lengthInZones
+        get() = myCoveredZones.size >= lengthInZones
 
     /**
      * Sends an unallocated transporter to a destination, without an entity aboard.

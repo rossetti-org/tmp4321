@@ -24,39 +24,45 @@ import ksl.modeling.guidedpath.rules.ZoneContentionRuleIfc
  *
  * Three states rather than a pair of booleans, because the invariants this subsystem must hold are
  * statements about states and are far easier to assert when the state is a single value. The
- * distinction between being claimed and being occupied is the one that matters: a claimed zone is
- * already unavailable to everyone else, but is not yet covered by a transporter's body, so it
- * counts against availability and not against occupancy.
+ * distinction between being claimed and being covered is the one that matters: a claimed zone is
+ * already unavailable to everyone else, but nobody's body is in it yet, so it counts against
+ * availability and not against coverage.
+ *
+ * **Covered, not occupied**, and the word is chosen rather than inherited. Plain English calls a
+ * zone with three people standing in it occupied, so "occupied" is the wrong word for space a
+ * vehicle's body fills -- and it becomes actively misleading once a zone can hold a population that
+ * takes no exclusive claim at all. "Covers" is the word this subsystem's own prose has always used
+ * for a body spanning zones; the identifiers now agree with it.
  */
 enum class ZoneState {
 
-    /** No transporter holds the zone. */
+    /** Nothing holds the zone. */
     FREE,
 
     /**
-     * A transporter has reserved the zone and is travelling into it, but does not yet cover it.
+     * A holder has reserved the zone and is travelling into it, but does not yet cover it.
      * Reserving before entering is what prevents two transporters from both starting into the same
      * free zone and arriving together.
      */
     CLAIMED,
 
-    /** A transporter's body covers the zone. */
-    OCCUPIED
+    /** A holder's body covers the zone. */
+    COVERED
 }
 
 /**
- * The atom of contended space on a guide path: the unit that is claimed, occupied, and released.
+ * The atom of contended space on a guide path: the unit that is claimed, covered, and released.
  *
  * A zone is the single most important concept in the subsystem. Every claim, release, block, and
  * wake-up is expressed in zones; a transporter's position is the contiguous run of zones it
- * occupies; and every congestion statistic is a statistic about zones. Links and intersections are
+ * covers; and every congestion statistic is a statistic about zones. Links and intersections are
  * both made of zones, which is what lets a route be a flat sequence rather than an alternating
  * structure the movement engine would have to special-case.
  *
- * Zones are created by the network and are geometrically immutable. Their occupancy is
+ * Zones are created by the network and are geometrically immutable. What holds them is
  * per-replication state, mutated only by the movement engine, which is why every mutator is
  * internal to this package: exclusivity can only be guaranteed if nothing outside can claim,
- * occupy, or release a zone.
+ * cover, or release a zone.
  *
  * The type is sealed so that the engine handles every kind of zone exhaustively, and so that adding
  * a third kind later has to be a deliberate, reviewed change rather than a silent fall-through.
@@ -96,16 +102,16 @@ sealed class Zone {
         internal set
 
     /** True when nothing holds the zone. */
-    val isFree: Boolean
+    val isAvailable: Boolean
         get() = state == ZoneState.FREE
 
     /** True when something has claimed or is covering the zone. */
-    val isHeld: Boolean
+    val hasHolder: Boolean
         get() = state != ZoneState.FREE
 
     /** True when a holder covers the zone, as opposed to merely having reserved it. */
-    val isOccupied: Boolean
-        get() = state == ZoneState.OCCUPIED
+    val isCovered: Boolean
+        get() = state == ZoneState.COVERED
 
     /**
      * Reserves the zone for a holder about to take it.
@@ -127,12 +133,12 @@ sealed class Zone {
     }
 
     /** Records that the claimant now covers the zone rather than merely having reserved it. */
-    internal fun occupy(claimant: ZoneHolderIfc) {
+    internal fun cover(claimant: ZoneHolderIfc) {
         check(state == ZoneState.CLAIMED && holder === claimant) {
-            "Zone ($name) cannot be occupied by (${claimant.name}): it is $state held by " +
+            "Zone ($name) cannot be covered by (${claimant.name}): it is $state held by " +
                     "${holder?.name ?: "no one"}. A zone must be claimed before it is entered."
         }
-        state = ZoneState.OCCUPIED
+        state = ZoneState.COVERED
     }
 
     private val myWaiters = mutableListOf<GuidedTransporter>()

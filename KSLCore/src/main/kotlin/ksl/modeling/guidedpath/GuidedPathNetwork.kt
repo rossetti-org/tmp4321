@@ -138,7 +138,7 @@ class GuidedPathNetwork private constructor(
     /**
      * The runtime operating this network, or null when none has attached.
      *
-     * A network holds the zones whose occupancy a runtime owns, so two runtimes on one network
+     * A network holds the zones whose coverage a runtime owns, so two runtimes on one network
      * would share that state and corrupt each other. The name is recorded so the refusal can say
      * which system got there first.
      */

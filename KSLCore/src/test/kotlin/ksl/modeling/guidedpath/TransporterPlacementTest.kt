@@ -70,14 +70,14 @@ class TransporterPlacementTest {
     @Test
     fun `a transporter placed at a junction covers that junction's zone`() {
         val fleet = run(listOf("C1" to TransporterPlacement.At("I6")))
-        assertEquals(listOf("I6"), fleet.carts[0].occupiedZones.map { it.name })
+        assertEquals(listOf("I6"), fleet.carts[0].coveredZones.map { it.name })
         assertEquals("I6", fleet.carts[0].currentLocation.name)
     }
 
     @Test
     fun `a station alias may be used to place a transporter`() {
         val fleet = run(listOf("C1" to TransporterPlacement.At(SimpleAgvNetwork.ENTRY_STATION)))
-        assertEquals(listOf("I1"), fleet.carts[0].occupiedZones.map { it.name })
+        assertEquals(listOf("I1"), fleet.carts[0].coveredZones.map { it.name })
     }
 
     @Test
@@ -88,7 +88,7 @@ class TransporterPlacementTest {
         )
         assertEquals(
             listOf("Link2.Zone2", "Link2.Zone3", "Link2.Zone4"),
-            fleet.carts[0].occupiedZones.map { it.name }
+            fleet.carts[0].coveredZones.map { it.name }
         )
     }
 
@@ -100,12 +100,12 @@ class TransporterPlacementTest {
                 "AGV2" to TransporterPlacement.At(SimpleAgvNetwork.AGV2_HOME)
             )
         )
-        assertEquals(listOf("I6"), fleet.carts[0].occupiedZones.map { it.name })
-        assertEquals(listOf("I7"), fleet.carts[1].occupiedZones.map { it.name })
+        assertEquals(listOf("I6"), fleet.carts[0].coveredZones.map { it.name })
+        assertEquals(listOf("I7"), fleet.carts[1].coveredZones.map { it.name })
         // Nothing of the main loop is held, which is the point of a home spur.
         val loop = listOf("I1", "I2", "I3", "I4")
         for (n in loop) {
-            assertTrue(fleet.system.network.intersection(n)!!.zone.isFree, n)
+            assertTrue(fleet.system.network.intersection(n)!!.zone.isAvailable, n)
         }
     }
 
@@ -229,7 +229,7 @@ class TransporterPlacementTest {
         object : ModelElement(fleet, "Driver") {
             override fun initialize() {
                 schedule({ _: KSLEvent<Nothing> ->
-                    heldAtStart.add(fleet.system.network.zones.count { it.isHeld })
+                    heldAtStart.add(fleet.system.network.zones.count { it.hasHolder })
                 }, 0.5)
                 schedule({ _: KSLEvent<Nothing> -> fleet.carts[0].sendTo("I4") }, 1.0)
             }

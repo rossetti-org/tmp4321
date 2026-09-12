@@ -64,8 +64,8 @@ class ZoneStateTest {
     fun `a zone starts free and holds no one`() {
         val z = spareZone(bed())
         assertEquals(ZoneState.FREE, z.state)
-        assertTrue(z.isFree)
-        assertTrue(!z.isHeld)
+        assertTrue(z.isAvailable)
+        assertTrue(!z.hasHolder)
         assertNull(z.holder)
     }
 
@@ -76,9 +76,9 @@ class ZoneStateTest {
         assertTrue(z.claim(b.first))
         assertEquals(ZoneState.CLAIMED, z.state)
         assertSame(b.first, z.holder)
-        assertTrue(z.isHeld)
+        assertTrue(z.hasHolder)
         // Reserved is not covered: a claimed zone counts against availability, not against occupancy.
-        assertTrue(!z.isOccupied)
+        assertTrue(!z.isCovered)
     }
 
     @Test
@@ -104,9 +104,9 @@ class ZoneStateTest {
         val b = bed()
         val z = spareZone(b)
         z.claim(b.first)
-        z.occupy(b.first)
-        assertEquals(ZoneState.OCCUPIED, z.state)
-        assertTrue(z.isOccupied)
+        z.cover(b.first)
+        assertEquals(ZoneState.COVERED, z.state)
+        assertTrue(z.isCovered)
     }
 
     @Test
@@ -115,7 +115,7 @@ class ZoneStateTest {
         val z = spareZone(b)
         // Without the intermediate reservation, two transporters could each begin travelling into
         // the same free zone and both arrive in it.
-        assertFailsWith<IllegalStateException> { z.occupy(b.first) }
+        assertFailsWith<IllegalStateException> { z.cover(b.first) }
     }
 
     @Test
@@ -123,7 +123,7 @@ class ZoneStateTest {
         val b = bed()
         val z = spareZone(b)
         z.claim(b.first)
-        assertFailsWith<IllegalStateException> { z.occupy(b.second) }
+        assertFailsWith<IllegalStateException> { z.cover(b.second) }
     }
 
     @Test
@@ -131,7 +131,7 @@ class ZoneStateTest {
         val b = bed()
         val z = spareZone(b)
         z.claim(b.first)
-        z.occupy(b.first)
+        z.cover(b.first)
         z.release(b.first)
         assertEquals(ZoneState.FREE, z.state)
         assertNull(z.holder)
@@ -142,7 +142,7 @@ class ZoneStateTest {
         val b = bed()
         val z = spareZone(b)
         z.claim(b.first)
-        z.occupy(b.first)
+        z.cover(b.first)
         assertFailsWith<IllegalStateException> { z.release(b.second) }
     }
 
@@ -161,7 +161,7 @@ class ZoneStateTest {
         val b = bed()
         val z = spareZone(b)
         z.claim(b.first)
-        z.occupy(b.first)
+        z.cover(b.first)
         assertFailsWith<IllegalStateException> { z.abandonClaim(b.first) }
     }
 
@@ -170,7 +170,7 @@ class ZoneStateTest {
         val b = bed()
         val z = spareZone(b)
         z.claim(b.first)
-        z.occupy(b.first)
+        z.cover(b.first)
         z.resetZone()
         assertEquals(ZoneState.FREE, z.state)
         assertNull(z.holder)
@@ -215,7 +215,7 @@ class ZoneStateTest {
         assertEquals(listOf("L1.Zone1"), whereAtBoundary)
         // And then it went where it was redirected, the long way round the loop and down the spur.
         assertEquals("D", cart.frontZone?.name)
-        assertEquals(1, net.zones.count { it.isHeld })
+        assertEquals(1, net.zones.count { it.hasHolder })
         assertNull(cart.claimedZone)
     }
 

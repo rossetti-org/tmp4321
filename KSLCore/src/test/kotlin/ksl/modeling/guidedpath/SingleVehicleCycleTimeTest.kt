@@ -190,7 +190,7 @@ class SingleVehicleCycleTimeTest {
     @Test
     fun `a transporter longer than one zone covers exactly its own length once under way`() {
         val sub = run(listOf("I2", "I3"), lengthInZones = 3, startAt = onZone("Link4.Zone6"))
-        assertEquals(3, sub.cart.occupiedZones.size)
+        assertEquals(3, sub.cart.coveredZones.size)
         assertEquals(3, sub.cart.lengthInZones)
     }
 
@@ -199,7 +199,7 @@ class SingleVehicleCycleTimeTest {
         val sub = run(emptyList(), lengthInZones = 3, startAt = onZone("Link4.Zone6"))
         assertEquals(
             listOf("Link4.Zone4", "Link4.Zone5", "Link4.Zone6"),
-            sub.cart.occupiedZones.map { it.name }
+            sub.cart.coveredZones.map { it.name }
         )
     }
 

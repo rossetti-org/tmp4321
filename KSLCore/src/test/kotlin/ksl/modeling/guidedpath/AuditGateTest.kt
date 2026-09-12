@@ -65,7 +65,7 @@ class AuditGateTest {
                 // test, can.
                 schedule({ _: KSLEvent<Nothing> ->
                     val victim = network.zone("L2.Zone2")!!
-                    victim.state = ZoneState.OCCUPIED
+                    victim.state = ZoneState.COVERED
                     victim.holder = cart
                 }, corruptAt)
             }

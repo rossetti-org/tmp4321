@@ -79,12 +79,12 @@ import ksl.utilities.random.rvariable.ExponentialRV
  *  ## Study 1 -- it works, and one porter is in the shaft at a time
  *
  *  Three porters, a short run, and the shaft's single zone sampled through it. The sampling asks
- *  `isHeld`, not `isOccupied`, and the difference is worth understanding rather than copying. A
+ *  `hasHolder`, not `isCovered`, and the difference is worth understanding rather than copying. A
  *  transporter *reserves* the zone ahead before it enters -- that reservation is what stops two of
  *  them starting into the same free space -- and marks it OCCUPIED only once it comes to rest
  *  covering it. The last zone of a link is therefore never OCCUPIED, because arriving at its far end
  *  means arriving at the junction beyond. On a single-zone shaft that is the only zone there is, so
- *  `isOccupied` would report an idle lift throughout a run that plainly uses one. Exclusion lives on
+ *  `isCovered` would report an idle lift throughout a run that plainly uses one. Exclusion lives on
  *  the reservation, and so must any measurement of it.
  *
  *  ## Study 2 -- adding porters stops helping
@@ -312,8 +312,8 @@ object MultiFloorHospitalExample {
         @Suppress("UNUSED_PARAMETER")
         private fun sampleShaft(event: KSLEvent<Nothing>) {
             val shaft = network.link("ShaftUp")!!.zones
-            // `isHeld`, not `isOccupied` -- see the note in this file's header.
-            val inside = shaft.count { it.isHeld }
+            // `hasHolder`, not `isCovered` -- see the note in this file's header.
+            val inside = shaft.count { it.hasHolder }
             samples++
             if (inside > 0) samplesHeld++
             if (inside > maxInShaft) maxInShaft = inside

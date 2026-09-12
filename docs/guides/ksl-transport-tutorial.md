@@ -2698,8 +2698,8 @@ carries a half-width like any other response.
         @Suppress("UNUSED_PARAMETER")
         private fun sampleShaft(event: KSLEvent<Nothing>) {
             val shaft = network.link("ShaftUp")!!.zones
-            // `isHeld`, not `isOccupied` -- see the note in this file's header.
-            val inside = shaft.count { it.isHeld }
+            // `hasHolder`, not `isCovered` -- see the note in this file's header.
+            val inside = shaft.count { it.hasHolder }
             samples++
             if (inside > 0) samplesHeld++
             if (inside > maxInShaft) maxInShaft = inside
@@ -2720,7 +2720,7 @@ transition in this model lands on a whole number. An observer scheduled at those
 sees whichever side of them event priority happens to put it on — and this one, scheduled on
 the whole tick, once reported an unused lift in a model that was plainly using one.
 
-**`isHeld`, not `isOccupied`.** A zone is claimed from the moment it is *reserved*, not from
+**`hasHolder`, not `isCovered`.** A zone is claimed from the moment it is *reserved*, not from
 the moment a vehicle is inside it, and it is the reservation that does the excluding.
 
 `initialize()` resets all four accumulators, because a `ModelElement`'s state must not survive
