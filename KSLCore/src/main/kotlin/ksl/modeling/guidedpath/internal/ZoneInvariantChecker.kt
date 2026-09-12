@@ -24,7 +24,6 @@ import ksl.modeling.guidedpath.LinkZone
 import ksl.modeling.guidedpath.TransporterState
 import ksl.modeling.guidedpath.Zone
 import ksl.modeling.guidedpath.ZoneState
-import ksl.simulation.ConditionalAction
 
 /**
  * Raised when the guide path has reached a state that should be impossible.
@@ -36,9 +35,8 @@ import ksl.simulation.ConditionalAction
 class ZoneInvariantViolation(message: String) : IllegalStateException(message)
 
 /**
- * Checks, whenever the simulation clock advances, that no transporter shares space with another,
- * that each covers an unbroken run of zones no longer than itself, and that what the zones believe
- * agrees with what the transporters believe.
+ * Checks that no transporter shares space with another, that each covers an unbroken run of zones no
+ * longer than itself, and that what the zones believe agrees with what the transporters believe.
  *
  * These are the properties the whole subsystem exists to guarantee, and they are exactly the ones
  * that a plausible-looking run can violate without any visible symptom: a model whose transporters
@@ -46,39 +44,44 @@ class ZoneInvariantViolation(message: String) : IllegalStateException(message)
  * Asserting them continuously is what turns "we believe transporters never overlap" into something
  * the test suite demonstrates on every model it runs.
  *
- * The check runs at a **time advance** rather than after every event, which is the right moment
- * rather than merely a convenient one. Several events can execute at a single instant -- one
- * transporter releasing a zone and another claiming it, say -- and between two of them the state is
- * legitimately half-changed. What has to hold is that the state is sound whenever the clock is
- * about to move on, which is what this tests.
+ * **What it does not assert is a state part way through an instant**, and that is a real constraint
+ * rather than a convenience. Several events execute at one instant, and the hand-off that frees a
+ * zone spans two of them: the release takes the woken transporter off the zone's waiting list and
+ * schedules it a zero-delay retry, so between those two events it is blocked and waiting in no list
+ * at all. That is sound, and asserting over it would report a defect on a correct run. What has to
+ * hold is that the state is sound once an instant has finished, which is what [check] is given.
  *
- * The work is proportional to the size of the guide path and the fleet, so it is off unless a model
- * asks for it.
+ * The class holds no state and is driven entirely by its caller. [GuidedPathSpace] decides when an
+ * instant has finished -- it knows, because nothing can change a zone or a transporter except
+ * through the handful of places it owns -- and the audit does not go looking.
  */
 internal class ZoneInvariantChecker(
     private val mySystem: GuidedPathSpace
-) : ConditionalAction() {
+) {
 
     /**
-     * Performs the checks. Always answers false, so that the action below never runs: the executive
-     * evaluates a condition once per sweep, which is exactly the hook wanted, and a condition that
-     * answered true would be asked to act and then be swept again.
+     * The instant whose finished state is being asserted about, for the message. NaN while no audit
+     * is under way.
      */
-    override fun testCondition(): Boolean {
-        check()
-        return false
-    }
+    private var myAuditedTime: Double = Double.NaN
 
-    override fun action() {
-        // Never reached. See testCondition.
-    }
-
-    /** Runs every check, throwing on the first violation found. */
-    fun check() {
-        checkZonesAgreeWithTransporters()
-        checkTransportersCoverContiguousRuns()
-        checkOccupancyIsConserved()
-        checkWaitingIsConsistent()
+    /**
+     * Runs every check, throwing on the first violation found.
+     *
+     * @param atTime the instant whose finished state this is, which is generally earlier than the
+     *   clock now reads. A violation names both, because the instant that created it is the one a
+     *   reader needs and the instant it was found in is the one the trace will show.
+     */
+    fun check(atTime: Double) {
+        myAuditedTime = atTime
+        try {
+            checkZonesAgreeWithTransporters()
+            checkTransportersCoverContiguousRuns()
+            checkOccupancyIsConserved()
+            checkWaitingIsConsistent()
+        } finally {
+            myAuditedTime = Double.NaN
+        }
     }
 
     /**
@@ -92,9 +95,14 @@ internal class ZoneInvariantChecker(
      * against a transporter that is not blocked accumulates silently and is only visible as a number
      * that is wrong later, somewhere else.
      */
-    fun checkClosing() {
-        check()
-        checkBlockedClocks()
+    fun checkClosing(unauditedInstant: Double) {
+        check(if (unauditedInstant.isFinite()) unauditedInstant else mySystem.time)
+        myAuditedTime = mySystem.time
+        try {
+            checkBlockedClocks()
+        } finally {
+            myAuditedTime = Double.NaN
+        }
     }
 
     /**
@@ -306,7 +314,9 @@ internal class ZoneInvariantChecker(
     }
 
     private fun violate(what: String): Nothing = throw ZoneInvariantViolation(
-        "Guide path invariant violated in system (${mySystem.name}) at time " +
-                "${mySystem.time}: $what."
+        "Guide path invariant violated in system (${mySystem.name}) in the state left at the end " +
+                "of time $myAuditedTime" +
+                (if (myAuditedTime != mySystem.time) " (found at ${mySystem.time})" else "") +
+                ": $what."
     )
 }

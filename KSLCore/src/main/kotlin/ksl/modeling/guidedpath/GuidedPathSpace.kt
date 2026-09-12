@@ -121,7 +121,45 @@ open class GuidedPathSpace @JvmOverloads constructor(
     private val myInvariantChecker: ZoneInvariantChecker = ZoneInvariantChecker(this)
 
     /**
-     * Whether the space-exclusivity invariants are checked whenever the simulation clock advances.
+     * The instant whose finished state has not yet been audited, or NaN when nothing is owing.
+     *
+     * The guide path audits the instant *before* the one it is in, and it does so from inside its
+     * own work rather than by being swept for. That is the whole of the mechanism: at the top of any
+     * of the places [auditFinishedInstant] is called from, before that place has done anything, the
+     * state on view is precisely the state the previous instant left behind -- which is the only
+     * state worth asserting about, since within an instant a zero-delay hand-off legitimately
+     * leaves a woken transporter on no waiting list at all.
+     */
+    private var myUnauditedInstant: Double = Double.NaN
+
+    /**
+     * Audits the instant that has just finished, if one has and if auditing is on.
+     *
+     * Called first thing in every place the guide path can be made to change, which is a closed set
+     * and demonstrably so: every mutator on [Zone] and [GuidedTransporter] is internal to this
+     * package, every call to one is in `MovementEngine` or in `placeAtInitialPosition`, and every
+     * call into `MovementEngine` from outside the engine is one of the handful of sites below.
+     * `AuditGateTest` holds that list to the source, so another cannot be added without either
+     * gating it or failing.
+     *
+     * Not a scan, and deliberately not one. An audit that asked the executive to sweep it would pay
+     * for a hook it does not need, would be re-run whenever any unrelated model element's condition
+     * fired, and would walk the guide path at instants in which the guide path did nothing. This
+     * runs once per instant in which there was something to audit, and when checking is off it is
+     * one boolean test -- which is what lets it sit on paths that run millions of times.
+     */
+    private fun auditFinishedInstant() {
+        if (!checkInvariants) return
+        val owed = myUnauditedInstant
+        myUnauditedInstant = time
+        if (owed.isFinite() && time > owed) {
+            myInvariantChecker.check(owed)
+        }
+    }
+
+    /**
+     * Whether the space-exclusivity invariants are checked at the end of every instant in which the
+     * guide path did anything.
      *
      * Off by default, because the check walks every zone and every transporter and a model that is
      * correct pays for nothing. Tests turn it on: it is the standing proof that no transporter ever
@@ -145,8 +183,9 @@ open class GuidedPathSpace @JvmOverloads constructor(
      * Whether the guide path audits itself once, as each replication ends.
      *
      * On by default, and unlike [checkInvariants] it is meant to stay on. The two differ in cost by
-     * the whole length of a run: the continuous check walks every zone at every clock advance, while
-     * this walks them once per replication, which no model will notice. What it buys is that a
+     * the whole length of a run: the continuous check walks every zone at the end of every instant
+     * the guide path took part in, while this walks them once per replication, which no model will
+     * notice. What it buys is that a
      * corruption which produced plausible-looking output announces itself at the end of the
      * replication that caused it, rather than at some later replication or not at all.
      *
@@ -696,6 +735,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
         require(transporter.system === this) {
             "Transporter (${transporter.name}) is not on guide path (${this.name})."
         }
+        auditFinishedInstant()
         engine.resumeHalted(transporter)
     }
 
@@ -801,6 +841,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
         // Clearing it here rather than at each call site is what keeps the flag meaning one thing:
         // stopped at a boundary with nothing scheduled and nowhere it is going.
         transporter.clearHalt()
+        auditFinishedInstant()
         return engine.startMove(transporter, destination, purpose)
     }
 
@@ -853,6 +894,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
 
     private inner class TraversalAction : EventActionIfc<Pair<GuidedTransporter, Zone>> {
         override fun action(event: KSLEvent<Pair<GuidedTransporter, Zone>>) {
+            auditFinishedInstant()
             val (transporter, zone) = event.message!!
             engine.endZoneTraversal(transporter, zone)
         }
@@ -860,12 +902,14 @@ open class GuidedPathSpace @JvmOverloads constructor(
 
     private inner class ClaimRetryAction : EventActionIfc<GuidedTransporter> {
         override fun action(event: KSLEvent<GuidedTransporter>) {
+            auditFinishedInstant()
             engine.retryClaim(event.message!!)
         }
     }
 
     private inner class RearReleaseAction : EventActionIfc<GuidedTransporter> {
         override fun action(event: KSLEvent<GuidedTransporter>) {
+            auditFinishedInstant()
             engine.releaseRearAfterDistance(event.message!!)
         }
     }
@@ -912,6 +956,9 @@ open class GuidedPathSpace @JvmOverloads constructor(
     }
 
     override fun initialize() {
+        // Nothing is owed from the previous replication: its last instant was audited by
+        // checkClosing, and the state it left is about to be thrown away.
+        myUnauditedInstant = Double.NaN
         for (zone in network.zones) {
             zone.resetZone()
         }
@@ -920,6 +967,10 @@ open class GuidedPathSpace @JvmOverloads constructor(
         }
         for (transporter in myTransporters) {
             transporter.placeAtInitialPosition()
+            // Nothing is owed yet, so this audits nothing; what it does is record that placement
+            // happened in this instant, which makes the first instant there is anything to audit
+            // about. Going through the gate rather than setting the field keeps one mechanism.
+            auditFinishedInstant()
             engine.acquirePlacementHolds(transporter)
         }
         refreshFleetCounts()
@@ -947,7 +998,7 @@ open class GuidedPathSpace @JvmOverloads constructor(
      */
     override fun replicationEnded() {
         if (auditAtReplicationEnd) {
-            myInvariantChecker.checkClosing()
+            myInvariantChecker.checkClosing(myUnauditedInstant)
         }
         val traversals = myNumZoneTraversals.value
         if (traversals > 0.0) {
@@ -977,11 +1028,6 @@ open class GuidedPathSpace @JvmOverloads constructor(
                 }
             }
         }
-    }
-
-    override fun registerConditionalActions() {
-        if (!checkInvariants) return
-        executive.register(myInvariantChecker)
     }
 
     companion object {
