@@ -149,6 +149,17 @@ internal class ZoneInvariantChecker(
                             "holds itself"
                 )
             }
+            // Waiting for a zone with neither a holder nor occupants is the stall this check
+            // exists to find: nothing is in the way, so nothing will ever come through
+            // `becameAvailable` to offer it the zone. Being held or populated are both fine --
+            // whatever is in the way will offer the zone when it goes.
+            if (link == null && zone.holder == null && zone.numPresent == 0) {
+                violate(
+                    "transporter (${t.name}) is blocked waiting for zone (${zone.name}), which is " +
+                            "available -- nothing holds it and nothing is in it, so nothing will " +
+                            "ever wake the transporter"
+                )
+            }
         }
     }
 
@@ -184,6 +195,19 @@ internal class ZoneInvariantChecker(
     private fun checkZonesAgreeWithTransporters() {
         for (zone in mySystem.network.zones) {
             val holder = zone.holder
+            // The whole of the exclusion rule, asserted: a zone is held or it is populated, never
+            // both. Every other guarantee about vehicles and crowds staying out of each other's
+            // way is a consequence of this one, which is why it is worth stating directly rather
+            // than inferring from the claim and admission paths being right.
+            if (zone.numPresent < 0) {
+                violate("zone (${zone.name}) reports ${zone.numPresent} occupants")
+            }
+            if (holder != null && zone.numPresent > 0) {
+                violate(
+                    "zone (${zone.name}) is held by (${holder.name}) and also has " +
+                            "${zone.numPresent} occupant(s) present"
+                )
+            }
             if (zone.state == ZoneState.FREE) {
                 if (holder != null) {
                     violate("zone (${zone.name}) is free but is held by (${holder.name})")

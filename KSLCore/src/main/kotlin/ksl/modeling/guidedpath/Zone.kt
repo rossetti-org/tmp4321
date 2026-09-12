@@ -114,21 +114,63 @@ sealed class Zone {
         get() = state == ZoneState.COVERED
 
     /**
+     * How many things are present in this zone without taking exclusive possession of it.
+     *
+     * A plain `Int`, not a response and not a list. Not a response because a network has thousands
+     * of zones and almost none of them will ever see a population, so a statistic per zone would
+     * cost every model a great deal to report nothing; the statistics belong to whatever construct
+     * put the occupants there, of which there are a handful. Not a list because the zone does not
+     * need to know *who* is present -- whatever admitted them knows that -- and it does need the
+     * count to be free to read, since an admission policy asks "how crowded is that zone" and a
+     * claim asks "is anything in the way" on the hot path.
+     *
+     * Zero for every zone in every model that does not use the population, which is all of them
+     * today: nothing outside this package can put anything in a zone.
+     */
+    var numPresent: Int = 0
+        internal set
+
+    /** True when something is present without holding the zone. */
+    val hasOccupants: Boolean
+        get() = numPresent > 0
+
+    /**
      * Reserves the zone for a holder about to take it.
      *
      * Reserving before entering is what stops two transporters both starting into the same free
      * zone and arriving together. The claim fails, without side effect, when someone else already
-     * holds the zone.
+     * holds the zone **or anything at all is present in it** -- the second being what stops a
+     * vehicle driving into a crossing somebody is walking over.
      *
-     * @return true when the zone was free and is now claimed
+     * @return true when the zone was available and is now claimed
      */
     internal fun claim(claimant: ZoneHolderIfc): Boolean {
         check(holder !== claimant) {
             "Zone ($name) is already held by (${claimant.name}), which cannot claim it a second time."
         }
         if (state != ZoneState.FREE) return false
+        if (numPresent > 0) return false
         state = ZoneState.CLAIMED
         holder = claimant
+        return true
+    }
+
+    /**
+     * Admits one occupant, which succeeds only when nothing holds the zone.
+     *
+     * The mirror of [claim]'s second condition, and between them they are the whole exclusion
+     * mechanism: a vehicle cannot claim a zone with occupants, and an occupant cannot enter a zone
+     * with a holder. Nothing else is needed to keep vehicles and crowds out of each other's way.
+     *
+     * **The count never refuses entry.** How many is too many is a modelling statement, not a
+     * property of space, so it belongs to whatever admission policy governs the population; the
+     * zone reports the number and takes no view on it.
+     *
+     * @return true when the zone had no holder and the occupant is now present
+     */
+    internal fun admit(): Boolean {
+        if (state != ZoneState.FREE) return false
+        numPresent++
         return true
     }
 
@@ -203,6 +245,48 @@ sealed class Zone {
         }
         state = ZoneState.FREE
         holder = null
+        return becameAvailable(rule)
+    }
+
+    /**
+     * Releases one occupant, and hands the zone on if that was the last of them.
+     *
+     * The mirror of [release], and it has to be: a vehicle refused because somebody was present is
+     * waiting for the zone to *empty*, and nothing else will ever tell it that happened. No holder
+     * ever held that zone, so no release can fire for it. Without this the vehicle waits out the
+     * replication.
+     *
+     * @param rule chooses among the waiting transporters
+     * @return the transporter to wake, or null when the zone is not yet available or none waited
+     */
+    internal fun depart(rule: ZoneContentionRuleIfc? = null): GuidedTransporter? {
+        check(numPresent > 0) {
+            "Zone ($name) has no occupant to release."
+        }
+        numPresent--
+        return becameAvailable(rule)
+    }
+
+    /**
+     * Hands a zone that has just become claimable to at most one waiter, and answers which.
+     *
+     * **The single place a zone stops being unavailable**, and that is the point of it rather than
+     * tidiness. There are two ways it can happen -- a holder releasing, and the last occupant
+     * leaving -- and a waiting transporter has nothing scheduled, so a path that freed the zone
+     * without offering it would leave everyone waiting on it stuck for the rest of the replication,
+     * with the run simply ceasing to advance and nothing to say why. Routing both through one
+     * function is what makes "free the zone without offering it" not separately expressible, which
+     * is a better guarantee than any amount of checking afterwards.
+     *
+     * The chosen waiter is handed the zone by being *woken*, not by being given the claim: the zone
+     * genuinely becomes available in between. That matters because it is the only arrangement in
+     * which the state is sound at every moment the clock could be observed -- a direct hand-off
+     * would leave a window where the zone belonged to two transporters at once.
+     */
+    private fun becameAvailable(rule: ZoneContentionRuleIfc?): GuidedTransporter? {
+        // Still not claimable: an occupant remains, or a holder does. Nobody is woken, and nobody
+        // needs to be, because whatever is still in the way will come through here when it leaves.
+        if (state != ZoneState.FREE || numPresent > 0) return null
         if (myWaiters.isEmpty() || rule == null) return null
         val chosen = rule.selectWaiter(this, myWaiters)
         check(chosen in myWaiters) {
@@ -231,6 +315,7 @@ sealed class Zone {
     internal fun resetZone() {
         state = ZoneState.FREE
         holder = null
+        numPresent = 0
         myWaiters.clear()
     }
 

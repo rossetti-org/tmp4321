@@ -945,6 +945,43 @@ open class GuidedPathSpace @JvmOverloads constructor(
     private val myClaimRetryAction = ClaimRetryAction()
     private val myRearReleaseAction = RearReleaseAction()
 
+    /**
+     * Admits one occupant to a zone, or refuses because a vehicle holds it.
+     *
+     * The population's half of the exclusion rule of [Zone.admit]. Nothing decides *whether* to
+     * admit here -- how many is too many is a modelling statement and belongs to whatever governs
+     * the population -- this only reports whether the space is free of vehicles to be entered.
+     *
+     * @return true when the occupant is now present in the zone
+     */
+    internal fun admitToZone(zone: Zone): Boolean {
+        require(zone in network.zones) {
+            "Zone (${zone.name}) is not on guide path (${this.name})."
+        }
+        auditFinishedInstant()
+        return zone.admit()
+    }
+
+    /**
+     * Releases one occupant from a zone, and wakes a vehicle if that emptied it.
+     *
+     * Paired with the scheduling here rather than left to the zone, exactly as
+     * `MovementEngine.releaseZone` is: the zone decides *who* should be woken, and the space is
+     * what the executive accepts events from, so it does the waking. Keeping the two together in
+     * one call is what stops a departure from silently leaving a vehicle waiting for a zone that
+     * is now empty.
+     */
+    internal fun departFromZone(zone: Zone) {
+        require(zone in network.zones) {
+            "Zone (${zone.name}) is not on guide path (${this.name})."
+        }
+        auditFinishedInstant()
+        val woken = zone.depart(zoneContentionRule)
+        if (woken != null) {
+            scheduleClaimRetry(woken)
+        }
+    }
+
     /** Schedules a transporter's arrival in the zone it is travelling into. */
     internal fun scheduleTraversal(transporter: GuidedTransporter, zone: Zone, delay: Double) {
         myNumEventsScheduled.increment()
@@ -1051,7 +1088,23 @@ open class GuidedPathSpace @JvmOverloads constructor(
                     append(System.lineSeparator())
                     append("  (${t.name}) holds [${t.heldZones.joinToString { z -> z.name }}] ")
                     append("and waits for ")
-                    append(t.awaitedLink?.let { l -> "link (${l.name})" } ?: "zone (${t.awaitedZone?.name})")
+                    val link = t.awaitedLink
+                    if (link != null) {
+                        append("link (${link.name})")
+                    } else {
+                        val zone = t.awaitedZone
+                        append("zone (${zone?.name})")
+                        // Why the zone is unavailable, not merely which zone it is. A vehicle behind
+                        // another vehicle and a vehicle waiting for a crossing to clear are
+                        // different situations with different remedies, and the reader cannot tell
+                        // them apart from the zone's name.
+                        val holder = zone?.holder
+                        val occupants = zone?.numPresent ?: 0
+                        when {
+                            holder != null -> append(", which is held by (${holder.name})")
+                            occupants > 0 -> append(", which has $occupants occupant(s) in it")
+                        }
+                    }
                 }
             }
         }
