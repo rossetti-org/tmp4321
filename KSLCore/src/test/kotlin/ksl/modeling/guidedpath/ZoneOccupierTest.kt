@@ -289,4 +289,163 @@ class ZoneOccupierTest {
                     "hold was carried over"
         )
     }
+
+    // ---- being told, and holding for a while, which is what a model actually needs -------------
+
+    @Test
+    fun `a listener is told when the hold begins, and told the drain it waited through`() {
+        // The hook that made this reachable without declaring a subclass. Asked for at 2.5 while
+        // the cart is crossing Zone3, so the grant is at 4.0 and the listener must be told then
+        // rather than when the request was made.
+        val m = Model("Engagement")
+        val a = Aisle(m)
+        a.system.checkInvariants = true
+        val toldAt = mutableListOf<Double>()
+        val engagedAt = mutableListOf<Double>()
+        a.crew.attachEngagementListener { occupier, allocation ->
+            toldAt.add(occupier.time)
+            engagedAt.add(allocation.engagedAt)
+        }
+        object : ModelElement(a, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> a.crew.requestZone(a.closed) }, 2.5)
+            }
+        }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 40.0
+        m.simulate()
+
+        assertEquals(listOf(4.0), toldAt, "told at the grant, not at the request")
+        assertEquals(listOf(4.0), engagedAt, "and the allocation agrees about when the hold began")
+    }
+
+    @Test
+    fun `a subclass override and an attached listener are both told`() {
+        // Two ways to be told the same thing, because a subclass is right when the occupier *is*
+        // the construct and a listener is right when something else owns it. Neither may silence
+        // the other.
+        val m = Model("BothTold")
+        val a = Aisle(m)
+        a.system.checkInvariants = true
+        val overrideSaw = mutableListOf<Double>()
+        val listenerSaw = mutableListOf<Double>()
+        val crew = object : ZoneOccupier(a.system, "Watched") {
+            override fun onEngaged(allocation: ZoneAllocation) {
+                overrideSaw.add(allocation.engagedAt)
+            }
+        }
+        crew.attachEngagementListener { _, allocation -> listenerSaw.add(allocation.engagedAt) }
+        object : ModelElement(a, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> crew.requestZone(a.closed) }, 0.5)
+            }
+        }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 20.0
+        m.simulate()
+
+        assertEquals(listOf(0.5), overrideSaw)
+        assertEquals(listOf(0.5), listenerSaw)
+    }
+
+    @Test
+    fun `a listener may give the zone straight back inside the grant`() {
+        // Re-entrancy, and it is not hypothetical: a crew that finds nothing to do releases at
+        // once. The statistics must already be settled when a listener runs, or the hold would be
+        // recorded as ending before it was recorded as starting.
+        val m = Model("ImmediateRelease")
+        val a = Aisle(m)
+        a.system.checkInvariants = true
+        val arrived = mutableListOf<Double>()
+        a.cart.attachArrivalListener { arrived.add(a.time) }
+        a.crew.attachEngagementListener { occupier, _ -> occupier.releaseZone() }
+        object : ModelElement(a, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> a.crew.requestZone(a.closed) }, 0.5)
+            }
+        }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 20.0
+        m.simulate()
+
+        assertFalse(a.crew.isHoldingSpace, "the listener gave it back")
+        assertEquals(1.0, a.crew.numEngagements.value, 0.0, "and the hold was still counted")
+        // Taken and given back at 0.5, before the cart ever wanted Zone3, so nothing was held up.
+        assertEquals(listOf(4.0), arrived)
+        assertEquals(0.0, a.cart.numTimesBlocked.value, 0.0)
+    }
+
+    @Test
+    fun `holding for a duration measures it from the grant and not from the request`() {
+        // The trap this verb exists for. Asked for at 2.5 while the cart is crossing Zone3, so the
+        // zone drains until 4.0; a ten-minute closure must then run to 14.0, not to 12.5. Measuring
+        // from the request would shorten every closure by however long the drain took -- which
+        // depends on traffic, so it would differ between replications and never announce itself.
+        val m = Model("HoldForDuration")
+        val a = Aisle(m)
+        a.system.checkInvariants = true
+        val releasedAt = mutableListOf<Double>()
+        a.crew.attachEngagementListener { _, allocation ->
+            a.crew.attachEngagementListener { _, _ -> }   // no-op, to prove attach during notify is safe
+            releasedAt.add(allocation.engagedAt)
+        }
+        object : ModelElement(a, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> a.crew.holdZoneFor(a.closed, 10.0) }, 2.5)
+            }
+        }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 40.0
+        m.simulate()
+
+        assertEquals(listOf(4.0), releasedAt, "the hold began at 4.0, when the cart cleared the zone")
+        assertFalse(a.crew.isHoldingSpace, "and ended without being told to")
+        val held = a.crew.allocation
+        assertNull(held, "the allocation is given up with the hold")
+        // Ten minutes of hold, from 4.0 to 14.0, of a forty-minute run.
+        assertEquals(
+            10.0 / 40.0,
+            a.crew.fracTimeHoldingSpace.withinReplicationStatistic.weightedAverage, 1e-9,
+            "the hold must last the ten minutes asked for, not the 8.5 left after the drain"
+        )
+        assertEquals(
+            1.5 / 40.0,
+            a.crew.fracTimeWaitingForSpace.withinReplicationStatistic.weightedAverage, 1e-9,
+            "and the drain is reported separately, not folded into the hold"
+        )
+    }
+
+    @Test
+    fun `a zone held for a duration is given back to a waiting vehicle`() {
+        // The whole point, end to end: the closure runs its stated time and traffic resumes without
+        // anybody scheduling a release by hand.
+        val m = Model("HoldThenResume")
+        val a = Aisle(m)
+        a.system.checkInvariants = true
+        val arrived = mutableListOf<Double>()
+        a.cart.attachArrivalListener { arrived.add(a.time) }
+        object : ModelElement(a, "Driver") {
+            override fun initialize() {
+                schedule({ _: KSLEvent<Nothing> -> a.crew.holdZoneFor(a.closed, 6.0) }, 0.5)
+            }
+        }
+        m.numberOfReplications = 1
+        m.lengthOfReplication = 40.0
+        m.simulate()
+
+        // Granted at 0.5 with nothing to drain, released at 6.5; the cart blocked at 2.0 and then
+        // has Zone3 and Zone4 to cross.
+        assertEquals(listOf(8.5), arrived)
+        assertEquals(1.0, a.cart.numTimesBlocked.value, 0.0)
+    }
+
+    @Test
+    fun `a duration must be a duration`() {
+        val m = Model("BadDuration")
+        val a = Aisle(m)
+        val e = kotlin.test.assertFailsWith<IllegalArgumentException> {
+            a.crew.holdZoneFor(a.closed, 0.0)
+        }
+        assertTrue((e.message ?: "").contains("requestZone"), e.message ?: "")
+    }
 }

@@ -26,6 +26,24 @@ import ksl.modeling.variable.TWResponseCIfc
 import ksl.simulation.ModelElement
 
 /**
+ * Told when an occupier's hold on guide-path space begins.
+ *
+ * Attachable rather than only overridable, because the alternative is that finding out when a
+ * closure took effect requires declaring a class. A grant may be the instant it was asked for or
+ * much later, so a model that has anything to do once it has the space -- a cleaning time to
+ * schedule, a picker to start picking -- needs to be told, and needing a subclass for that is the
+ * wrong default. The transporter's arrival listener is the same shape for the same reason.
+ */
+fun interface ZoneEngagementListenerIfc {
+
+    /**
+     * @param occupier the occupier whose hold has just begun
+     * @param allocation the hold, which names the zone and when it started
+     */
+    fun engaged(occupier: ZoneOccupier, allocation: ZoneAllocation)
+}
+
+/**
  * Something that takes guide-path space without being a vehicle.
  *
  * A spill. An aisle closed for a safety walk. A picker at a rack face. A lift car out of service. A
@@ -54,17 +72,34 @@ import ksl.simulation.ModelElement
  *
  * ## Using one
  *
+ * The commonest case is a closure of known duration, and it has its own verb because the arithmetic
+ * is a trap otherwise -- the clock must start when the hold *begins*, not when it was asked for, or
+ * a two-minute drain silently eats two minutes out of a twenty-minute closure:
+ *
  * ```
  * val spill = ZoneOccupier(space, "Spill")
- * // when the spill happens
+ * spill.holdZoneFor(network.zone("Aisle3.Zone2")!!, cleanupTime.value)
+ * ```
+ *
+ * When the duration is not known in advance -- it depends on what is found, or on a crew arriving --
+ * ask for the zone and give it back when done, and be told when the hold began:
+ *
+ * ```
+ * spill.attachEngagementListener { occupier, allocation ->
+ *     // the space is ours from `allocation.engagedAt`; decide what happens next
+ * }
  * spill.requestZone(network.zone("Aisle3.Zone2")!!)   // the zone begins draining at once
- * // when it has been cleaned up
+ * // …later…
  * spill.releaseZone()
  * ```
  *
  * `requestZone` returns immediately whether or not the zone was free: the zone is closed to new
  * traffic from that instant, and the hold begins when whatever was already there has left.
- * [onEngaged] is the hook for a process that needs to know when that happened.
+ * [ZoneEngagementListenerIfc] and the [onEngaged] override are the two ways to be told which.
+ *
+ * **One zone at a time**, and that is a deliberate limit of this step rather than an oversight: a
+ * second request while one is outstanding is refused. Sets of zones, and the question of whether
+ * they must be taken atomically, are a separate piece of work with a rule of their own.
  *
  * ## Statistics
  *
@@ -157,11 +192,46 @@ open class ZoneOccupier(
      * @param zone the zone to take, which must be on this occupier's guide path
      * @return the request, whose [ZoneRequest.isGranted] says whether the hold began at once
      */
-    fun requestZone(zone: Zone): ZoneRequest {
+    fun requestZone(zone: Zone): ZoneRequest = ask(zone, Double.NaN)
+
+    /**
+     * Takes a zone for a stated duration, and gives it back without being asked again.
+     *
+     * The commonest case, and the one with the trap in it. The duration is measured **from the
+     * instant the hold begins**, not from the request -- so a closure of twenty minutes on an aisle
+     * that takes two minutes to drain occupies the zone for twenty minutes and is outstanding for
+     * twenty-two. Measuring from the request instead would silently shorten every closure by
+     * however long the drain happened to take, which depends on traffic and so varies between
+     * replications: a defect that shows up as a closure duration that is not the one the modeller
+     * asked for, and nowhere as an error.
+     *
+     * @param zone the zone to take, which must be on this occupier's guide path
+     * @param duration how long to hold it once the hold begins, strictly positive
+     * @return the request, whose [ZoneRequest.isGranted] says whether the hold began at once
+     */
+    fun holdZoneFor(zone: Zone, duration: Double): ZoneRequest {
+        require(duration > 0.0) {
+            "Occupier ($name) was asked to hold zone (${zone.name}) for $duration, which is not a " +
+                    "duration. To take a zone until told otherwise, use requestZone."
+        }
+        return ask(zone, duration)
+    }
+
+    /**
+     * The one way a request is made, so that the refusal below runs before anything is recorded.
+     *
+     * Both verbs come through here for a reason that is easy to get wrong: an immediate grant
+     * happens *inside* the call, so how long the hold is to last has to be known before the request
+     * is made rather than after it returns. Setting it in the two verbs separately left a refused
+     * call with a duration still recorded, which the next plain [requestZone] would then have
+     * inherited and released itself out of.
+     */
+    private fun ask(zone: Zone, duration: Double): ZoneRequest {
         check(myRequest == null && myAllocation == null) {
             "Occupier ($name) already ${if (isHoldingSpace) "holds" else "has asked for"} space. " +
                     "One zone at a time: give it back before asking for another."
         }
+        myHoldDuration = duration
         return space.requestZoneFor(this, zone)
     }
 
@@ -173,6 +243,7 @@ open class ZoneOccupier(
      * does.
      */
     fun releaseZone() {
+        myHoldDuration = Double.NaN
         space.releaseZoneFrom(this)
     }
 
@@ -180,10 +251,22 @@ open class ZoneOccupier(
      * Called when the hold begins, which may be the same instant the request was made or much
      * later. Does nothing by default.
      *
-     * Override it, or attach a listener through the model, for a process that has something to do
-     * with the space once it has it — a cleaning time to schedule, a picker to start picking.
+     * The hook for a subclass. [attachEngagementListener] is the same notification for a model that
+     * would rather not declare one, and both are told: this first, then the listeners.
      */
     protected open fun onEngaged(allocation: ZoneAllocation) {}
+
+    private val myEngagementListeners = mutableListOf<ZoneEngagementListenerIfc>()
+
+    /** Starts telling a listener when this occupier's holds begin. */
+    fun attachEngagementListener(listener: ZoneEngagementListenerIfc) {
+        myEngagementListeners.add(listener)
+    }
+
+    /** Stops telling a listener about holds. */
+    fun detachEngagementListener(listener: ZoneEngagementListenerIfc) {
+        myEngagementListeners.remove(listener)
+    }
 
     // ---- internals, driven by the space --------------------------------------------------------
 
@@ -200,7 +283,32 @@ open class ZoneOccupier(
         myFracTimeHolding.value = 1.0
         myTimeToEngage.value = allocation.engagedAt - asked
         myNumEngagements.increment()
+        // The statistics are settled before anybody is told, because a listener may give the zone
+        // straight back -- which is legitimate, and would otherwise be recorded against a hold that
+        // had not yet been counted as having started.
+        val duration = myHoldDuration
+        if (duration.isFinite()) {
+            myHoldDuration = Double.NaN
+            schedule(myReleaseAction, duration, allocation, name = "$name:releaseZone")
+        }
         onEngaged(allocation)
+        // Copied, so that a listener may detach itself, or attach another, while being told.
+        for (listener in myEngagementListeners.toList()) {
+            listener.engaged(this, allocation)
+        }
+    }
+
+    /** How long the current hold is to last, or NaN when it lasts until told otherwise. */
+    private var myHoldDuration: Double = Double.NaN
+
+    private val myReleaseAction = EventActionIfc<ZoneAllocation> { event ->
+        // Tied to the allocation it was scheduled for, not merely to this occupier. A hold may
+        // already have been given back by hand or by a listener, and a *second* hold may since have
+        // begun -- in which case a release guarded only on "still holding something" would end the
+        // wrong one, early, and silently.
+        if (myAllocation === event.message) {
+            space.releaseZoneFrom(this)
+        }
     }
 
     internal fun recordRelease() {
@@ -222,6 +330,7 @@ open class ZoneOccupier(
     override fun initialize() {
         myRequest = null
         myAllocation = null
+        myHoldDuration = Double.NaN
     }
 
     override fun toString(): String = buildString {
