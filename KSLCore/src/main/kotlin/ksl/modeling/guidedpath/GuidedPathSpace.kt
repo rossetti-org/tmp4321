@@ -845,29 +845,57 @@ open class GuidedPathSpace @JvmOverloads constructor(
         return engine.startMove(transporter, destination, purpose)
     }
 
-    /** Keeps the fleet-level counts current. Called whenever a transporter changes what it is doing. */
+    /**
+     * Keeps the fleet-level counts current. Called whenever a transporter changes what it is doing.
+     *
+     * On the hot path, and by a wide margin the hottest thing in the subsystem: the movement engine
+     * calls it at seven points, among them the completion of every zone traversal. So what it does
+     * *not* do matters as much as what it does.
+     *
+     * It does not walk the zones. How many zones are covered is the number this needs, and it is
+     * asked of the transporters rather than of the network -- a loop over a fleet of twenty instead
+     * of a loop over four hundred zones, folded into the loop that was being run anyway. The two
+     * are the same number, and not by coincidence: `checkOccupancyIsConserved` exists to assert
+     * exactly that equality, continuously under the test suite and once per replication everywhere
+     * else. This is that invariant being spent rather than merely checked.
+     *
+     * The zones are walked only when somebody asked for per-zone, per-intersection or per-link
+     * detail, which is off by default. Walking them unconditionally to maintain one ratio cost
+     * roughly half of the reference benchmark's entire runtime.
+     */
     internal fun refreshFleetCounts() {
         var moving = 0
         var blocked = 0
         var idle = 0
+        var covered = 0
         for (t in myTransporters) {
             when {
                 t.transporterState == TransporterState.BLOCKED -> blocked++
                 t.isMoving -> moving++
                 else -> idle++
             }
+            covered += t.occupiedZones.size
         }
         myNumMoving.value = moving.toDouble()
         myNumBlocked.value = blocked.toDouble()
         myNumIdle.value = idle.toDouble()
-        // One walk over the zones serves the aggregate and, when they were asked for, the details.
-        // The walk happens either way, so collecting the detail costs the map lookups and nothing
-        // more -- and when the flags are off the maps are empty and there are no lookups at all.
-        var occupied = 0
+        myZoneUtilization.value = covered.toDouble() / network.zones.size
+        if (collectZoneStatistics || collectLinkStatistics) {
+            refreshZoneDetail()
+        }
+    }
+
+    /**
+     * Writes the per-zone, per-intersection and per-link occupancy responses.
+     *
+     * Separate from [refreshFleetCounts] so that the walk it needs is paid for only by the models
+     * that asked for the detail. One walk serves all three, so having asked for any of them costs
+     * the map lookups and nothing more.
+     */
+    private fun refreshZoneDetail() {
         val perLink = if (collectLinkStatistics) HashMap<Link, Int>(network.links.size) else null
         for (z in network.zones) {
             val isOccupied = z.isOccupied
-            if (isOccupied) occupied++
             myZoneOccupancy[z]?.value = if (isOccupied) 1.0 else 0.0
             when (z) {
                 is LinkZone -> if (perLink != null && isOccupied) {
@@ -883,7 +911,6 @@ open class GuidedPathSpace @JvmOverloads constructor(
                 response.value = (perLink[link] ?: 0).toDouble()
             }
         }
-        myZoneUtilization.value = occupied.toDouble() / network.zones.size
     }
 
     // ---- event scheduling ---------------------------------------------------------------------
